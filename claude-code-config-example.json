@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "lc-custom": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-p", "8080:8080", "lc-mcp-server"],
+      "env": {
+        "GOOGLE_API_KEY": "<YOUR_GOOGLE_API_KEY>",
+        "PUBLIC_MODE": "true",
+        "GCS_BUCKET_NAME": "<OPTIONAL_YOUR_GCS_BUCKET>",
+        "GCS_SIGNER_SERVICE_ACCOUNT": "<OPTIONAL_YOUR_GCS_SERVICE_ACCOUNT>"
+      },
+      "transportType": "sse",
+      "transportOptions": {
+        "url": "http://localhost:8080/sse",
+        "headers": {
+          "Authorization": "Bearer <YOUR_LIMACHARLIE_JWT_TOKEN>",
+          "x-lc-oid": "<YOUR_ORGANIZATION_ID>"
+        }
+      }
+    }
+  }
+}

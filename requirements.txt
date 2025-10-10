@@ -1,0 +1,14 @@
+uvicorn
+starlette
+limacharlie
+fastapi
+contextvars
+
+# For Gemini
+google-genai
+
+# For LLM
+openai
+
+# For GCS storage of large results
+google-cloud-storage
