@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "limacharlie": {
+      "command": "python3",
+      "args": ["/path/to/lc-mcp-server/server.py"],
+      "env": {
+        "PUBLIC_MODE": "false",
+        "GOOGLE_API_KEY": "your-google-api-key-here",
+        "LC_OID": "your-limacharlie-org-id",
+        "LC_API_KEY": "your-limacharlie-api-key",
+        "GCS_BUCKET_NAME": "optional-gcs-bucket-name",
+        "GCS_SIGNER_SERVICE_ACCOUNT": "optional-gcs-signer@project.iam.gserviceaccount.com"
+      }
+    }
+  }
+}
