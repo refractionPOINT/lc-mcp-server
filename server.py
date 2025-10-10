@@ -51,11 +51,12 @@ sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
     "lc_sdk", default=None
 )
 
-mcp = FastMCP(
-    "LC Server",
-    json_response=True,      # Enable JSON responses instead of SSE
-    stateless_http=True      # Enable stateless HTTP mode
-)
+# Global registry for all tool functions (before registration)
+# Maps tool_name -> (func, is_async)
+TOOL_REGISTRY: dict[str, tuple[Any, bool]] = {}
+
+# Main MCP instance will be created after tool registration based on profile
+mcp = None
 
 # GCS Configuration
 GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")  # No default - use temp files if not set
@@ -64,8 +65,213 @@ GCS_TOKEN_THRESHOLD = int(os.getenv("GCS_TOKEN_THRESHOLD", "1000"))  # Default: 
 GCS_SIGNER_SERVICE_ACCOUNT = os.getenv("GCS_SIGNER_SERVICE_ACCOUNT", "mcp-server@lc-api.iam.gserviceaccount.com")
 # PUBLIC_MODE determines whether to use HTTP header auth (true) or local SDK auth (false)
 PUBLIC_MODE = os.getenv("PUBLIC_MODE", "false").lower() == "true"
+# Profile selection for filtering tools (default: "all" for backward compatibility)
+MCP_PROFILE = os.getenv("MCP_PROFILE", "all").lower()
 # LLM retry configuration
 LLM_YAML_RETRY_COUNT = int(os.getenv("LLM_YAML_RETRY_COUNT", "10"))  # Default: 10 retries for YAML parsing
+
+# Profile Definitions - maps profile names to sets of tool names
+# "core" tools are included in all profiles
+PROFILES = {
+    "core": {
+        "test_tool",
+        "get_sensor_info",
+        "list_sensors",
+        "get_online_sensors",
+        "is_online",
+        "search_hosts",
+    },
+    "historical_data": {
+        # Historical telemetry and analysis
+        "get_historic_events",
+        "get_historic_detections",
+        "get_time_when_sensor_has_data",
+        # LCQL queries
+        "run_lcql_query",
+        "list_saved_queries",
+        "get_saved_query",
+        "run_saved_query",
+        "set_saved_query",
+        "delete_saved_query",
+        # Artifacts
+        "list_artifacts",
+        "get_artifact",
+        # IOC search
+        "search_iocs",
+        "batch_search_iocs",
+        # Event schemas
+        "get_event_schema",
+        "get_event_schemas_batch",
+        "get_event_types_with_schemas",
+        "get_event_types_with_schemas_for_platform",
+        # Platform info
+        "get_platform_names",
+        "list_with_platform",
+    },
+    "live_investigation": {
+        # Process inspection
+        "get_processes",
+        "get_process_modules",
+        "get_process_strings",
+        "find_strings",
+        # System information
+        "get_packages",
+        "get_services",
+        "get_autoruns",
+        "get_drivers",
+        "get_users",
+        "get_network_connections",
+        "get_os_version",
+        "get_registry_keys",
+        # YARA scanning
+        "yara_scan_process",
+        "yara_scan_file",
+        "yara_scan_directory",
+        "yara_scan_memory",
+        # Status and tasking
+        "is_isolated",
+        "reliable_tasking",
+        "list_reliable_tasks",
+    },
+    "threat_response": {
+        # Network isolation
+        "isolate_network",
+        "rejoin_network",
+        "is_isolated",
+        # Sensor management
+        "add_tag",
+        "remove_tag",
+        "delete_sensor",
+        # Reliable tasking for response actions
+        "reliable_tasking",
+        "list_reliable_tasks",
+    },
+    "fleet_management": {
+        # Sensor management
+        "delete_sensor",
+        "add_tag",
+        "remove_tag",
+        # Platform information
+        "list_with_platform",
+        "get_platform_names",
+        # Installation keys
+        "list_installation_keys",
+        "create_installation_key",
+        "delete_installation_key",
+        # Cloud sensors
+        "list_cloud_sensors",
+        "get_cloud_sensor",
+        "set_cloud_sensor",
+        "delete_cloud_sensor",
+    },
+    "detection_engineering": {
+        # Detection rules
+        "get_detection_rules",
+        "get_historic_detections",
+        # D&R general rules
+        "list_dr_general_rules",
+        "get_dr_general_rule",
+        "set_dr_general_rule",
+        "delete_dr_general_rule",
+        # D&R managed rules
+        "list_dr_managed_rules",
+        "get_dr_managed_rule",
+        "set_dr_managed_rule",
+        "delete_dr_managed_rule",
+        # False positive rules
+        "get_fp_rules",
+        "get_fp_rule",
+        "set_fp_rule",
+        "delete_fp_rule",
+        # YARA rules
+        "list_yara_rules",
+        "get_yara_rule",
+        "set_yara_rule",
+        "delete_yara_rule",
+        "validate_yara_rule",
+        # MITRE ATT&CK
+        "get_mitre_report",
+        # Event schemas for rule development
+        "get_event_schema",
+        "get_event_schemas_batch",
+    },
+    "ai_powered": {
+        # AI-powered generation tools
+        "generate_lcql_query",
+        "generate_dr_rule_detection",
+        "generate_dr_rule_respond",
+        "generate_sensor_selector",
+        "generate_python_playbook",
+        "generate_detection_summary",
+    },
+    "platform_admin": {
+        # Outputs
+        "list_outputs",
+        "add_output",
+        "delete_output",
+        # Lookups
+        "list_lookups",
+        "get_lookup",
+        "set_lookup",
+        "delete_lookup",
+        "query_lookup",
+        # Secrets
+        "list_secrets",
+        "get_secret",
+        "set_secret",
+        "delete_secret",
+        # Playbooks
+        "list_playbooks",
+        "get_playbook",
+        "set_playbook",
+        "delete_playbook",
+        # External adapters
+        "list_external_adapters",
+        "get_external_adapter",
+        "set_external_adapter",
+        "delete_external_adapter",
+        # Extensions
+        "list_extension_configs",
+        "get_extension_config",
+        "set_extension_config",
+        "delete_extension_config",
+        # Hive rules
+        "list_rules",
+        "get_rule",
+        "set_rule",
+        "delete_rule",
+        # Saved queries
+        "list_saved_queries",
+        "get_saved_query",
+        "set_saved_query",
+        "delete_saved_query",
+        # API keys
+        "list_api_keys",
+        "create_api_key",
+        "delete_api_key",
+        # Organization
+        "get_org_info",
+        "get_usage_stats",
+    },
+}
+
+def get_profile_tools(profile_name: str) -> set[str]:
+    """
+    Get the set of tool names for a given profile.
+    All profiles include core tools. 'all' profile includes everything.
+    """
+    if profile_name == "all":
+        # Return all tools from all profiles
+        all_tools = set(PROFILES["core"])
+        for tools in PROFILES.values():
+            all_tools.update(tools)
+        return all_tools
+
+    if profile_name not in PROFILES:
+        raise ValueError(f"Unknown profile: {profile_name}. Available profiles: {list(PROFILES.keys()) + ['all']}")
+
+    # Return core tools + profile-specific tools
+    return PROFILES["core"] | PROFILES[profile_name]
 
 def estimate_token_count(data: Any) -> int:
     """Estimate token count from JSON data (roughly 4 chars per token)."""
@@ -148,29 +354,33 @@ def upload_to_gcs(data: dict[str, Any], tool_name: str) -> tuple[str, int]:
 def mcp_tool_with_gcs():
     """
     Decorator that wraps MCP tools to handle large results via GCS.
+    Instead of immediately registering with an MCP instance, this stores
+    the tool in TOOL_REGISTRY for later registration based on profile.
     """
     def decorator(func):
+        tool_name = func.__name__
+        is_async = asyncio.iscoroutinefunction(func)
+
         # Create wrapper for synchronous functions
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             # Execute the original function
             result = func(*args, **kwargs)
-            
+
             # Estimate token count
             token_count = estimate_token_count(result)
-            tool_name = func.__name__
-            
+
             # Log token count and decision
             if token_count > GCS_TOKEN_THRESHOLD:
                 logging.info(f"Tool {tool_name}: {token_count} tokens detected (threshold: {GCS_TOKEN_THRESHOLD}), uploading to GCS")
             else:
                 logging.info(f"Tool {tool_name}: {token_count} tokens detected (threshold: {GCS_TOKEN_THRESHOLD}), returning inline")
-            
+
             # If result is large (>threshold tokens), upload to GCS
             if token_count > GCS_TOKEN_THRESHOLD:
                 try:
                     signed_url, file_size = upload_to_gcs(result, tool_name)
-                    
+
                     # Return alternate response
                     return {
                         "resource_link": signed_url,
@@ -182,26 +392,25 @@ def mcp_tool_with_gcs():
                     logging.info(f"Failed to upload large result to GCS: {e}")
                     # Fall back to returning original result
                     return result
-            
+
             # Return original result if small enough
             return result
-            
+
         # Create wrapper for asynchronous functions
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             # Execute the original async function
             result = await func(*args, **kwargs)
-            
+
             # Estimate token count
             token_count = estimate_token_count(result)
-            tool_name = func.__name__
-            
+
             # Log token count and decision
             if token_count > GCS_TOKEN_THRESHOLD:
                 logging.info(f"Tool {tool_name}: {token_count} tokens detected (threshold: {GCS_TOKEN_THRESHOLD}), uploading to GCS")
             else:
                 logging.info(f"Tool {tool_name}: {token_count} tokens detected (threshold: {GCS_TOKEN_THRESHOLD}), returning inline")
-            
+
             # If result is large (>threshold tokens), upload to GCS
             if token_count > GCS_TOKEN_THRESHOLD:
                 try:
@@ -210,7 +419,7 @@ def mcp_tool_with_gcs():
                     signed_url, file_size = await loop.run_in_executor(
                         SDK_THREAD_POOL, upload_to_gcs, result, tool_name
                     )
-                    
+
                     # Return alternate response
                     return {
                         "resource_link": signed_url,
@@ -222,20 +431,58 @@ def mcp_tool_with_gcs():
                     logging.info(f"Failed to upload large result to GCS: {e}")
                     # Fall back to returning original result
                     return result
-            
+
             # Return original result if small enough
             return result
-        
+
         # Choose appropriate wrapper based on whether function is async
-        if asyncio.iscoroutinefunction(func):
+        if is_async:
             gcs_wrapped = async_wrapper
         else:
             gcs_wrapped = wrapper
-        
-        # Apply mcp.tool() decorator to the GCS wrapper (not the original function)
-        return mcp.tool()(gcs_wrapped)
-            
+
+        # Store in registry instead of immediately registering
+        TOOL_REGISTRY[tool_name] = (gcs_wrapped, is_async)
+
+        # Return the wrapped function (not registered yet)
+        return gcs_wrapped
+
     return decorator
+
+def create_mcp_for_profile(profile_name: str) -> FastMCP:
+    """
+    Create a FastMCP instance with tools registered for the specified profile.
+
+    Args:
+        profile_name: Name of the profile (e.g., 'historical_data', 'all')
+
+    Returns:
+        FastMCP instance with registered tools for the profile
+    """
+    # Create a new MCP instance
+    profile_mcp = FastMCP(
+        f"LC Server - {profile_name.replace('_', ' ').title()}",
+        json_response=True,
+        stateless_http=True
+    )
+
+    # Get tools for this profile
+    profile_tools = get_profile_tools(profile_name)
+
+    # Register tools from registry
+    registered_count = 0
+    for tool_name in profile_tools:
+        if tool_name in TOOL_REGISTRY:
+            tool_func, _ = TOOL_REGISTRY[tool_name]
+            # Register with MCP
+            profile_mcp.tool()(tool_func)
+            registered_count += 1
+        else:
+            logging.warning(f"Tool {tool_name} in profile {profile_name} not found in registry")
+
+    logging.info(f"Created MCP instance for profile '{profile_name}' with {registered_count} tools")
+
+    return profile_mcp
 
 # Test tool to verify MCP is working
 @mcp_tool_with_gcs()
@@ -4595,32 +4842,92 @@ def delete_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """
     return delete_rule("fp", rule_name, ctx)
 
-# Add a simple root endpoint for health checks
-# Only register HTTP routes when in PUBLIC_MODE
-if PUBLIC_MODE:
-    @mcp.custom_route("/", methods=["GET"])
-    async def root(request):
-        return JSONResponse({"status": "ok", "type": "mcp-server"})
-
-# Create the StreamableHTTP app with JSON responses only when in PUBLIC_MODE
-# In STDIO mode, the app is not needed as communication happens through stdin/stdout
-app = None
-if PUBLIC_MODE:
-    app = mcp.streamable_http_app()
-    # Add middleware to capture HTTP requests in contextvar
-    app.add_middleware(RequestContextMiddleware)
-
 # Ensure thread pool is properly shutdown on app termination
 def cleanup_thread_pool():
     logging.info("Shutting down SDK thread pool...")
     SDK_THREAD_POOL.shutdown(wait=True)
     logging.info("SDK thread pool shutdown complete")
 
+# Initialize MCP instances based on mode
+# In STDIO mode, create a single MCP for the selected profile
+# In HTTP mode, create multiple MCPs and mount at different paths
+app = None
+
+if PUBLIC_MODE:
+    # HTTP Mode: Create MCPs for all profiles and mount at different paths
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+
+    # Create MCP instances for each profile
+    profile_mcps = {}
+    available_profiles = ["all"] + [p for p in PROFILES.keys() if p != "core"]
+
+    for profile in available_profiles:
+        try:
+            profile_mcps[profile] = create_mcp_for_profile(profile)
+        except Exception as e:
+            logging.error(f"Failed to create MCP for profile {profile}: {e}")
+
+    # Create main Starlette app with profile-based routing
+    routes = []
+
+    # Add profile-specific endpoints
+    for profile, profile_mcp in profile_mcps.items():
+        if profile == "all":
+            # Mount "all" profile at both /mcp and / for backward compatibility
+            routes.append(Mount("/mcp", profile_mcp.streamable_http_app()))
+            logging.info(f"Mounted 'all' profile at /mcp")
+        else:
+            # Mount other profiles at /<profile_name>
+            routes.append(Mount(f"/{profile}", profile_mcp.streamable_http_app()))
+            logging.info(f"Mounted '{profile}' profile at /{profile}")
+
+    # Create root endpoint for health checks and profile listing
+    from starlette.routing import Route
+
+    async def root(request):
+        profiles_info = {}
+        for profile_name in available_profiles:
+            tool_count = len(get_profile_tools(profile_name))
+            if profile_name == "all":
+                profiles_info[profile_name] = {
+                    "path": "/mcp",
+                    "tools": tool_count,
+                    "description": "All available tools"
+                }
+            else:
+                profiles_info[profile_name] = {
+                    "path": f"/{profile_name}",
+                    "tools": tool_count,
+                    "description": f"Tools for {profile_name.replace('_', ' ')}"
+                }
+
+        return JSONResponse({
+            "status": "ok",
+            "type": "mcp-server",
+            "profiles": profiles_info
+        })
+
+    routes.insert(0, Route("/", root, methods=["GET"]))
+
+    # Create Starlette app with all routes
+    app = Starlette(routes=routes)
+
+    # Add middleware to capture HTTP requests in contextvar
+    app.add_middleware(RequestContextMiddleware)
+
+    logging.info(f"HTTP mode initialized with {len(profile_mcps)} profiles")
+
+else:
+    # STDIO Mode: Create a single MCP for the selected profile
+    # This will be used in the __main__ block below
+    pass
+
 # Main entry point for STDIO mode
 if __name__ == "__main__":
     import logging
     import sys
-    
+
     if not PUBLIC_MODE:
         # Configure logging for STDIO mode - all output must go to stderr
         logging.basicConfig(
@@ -4628,14 +4935,23 @@ if __name__ == "__main__":
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[logging.StreamHandler(sys.stderr)]
         )
-        
+
         # Important: In STDIO mode, stdout is reserved for JSON-RPC messages
         # All logging is configured to use stderr, and print statements have been
         # replaced with logging calls to avoid stdout contamination
-        
+
         logging.info("Starting LimaCharlie MCP Server in STDIO mode (local usage)")
+        logging.info(f"Selected profile: {MCP_PROFILE}")
         logging.info("PUBLIC_MODE is false - using local SDK authentication")
-        
+
+        # Create MCP instance for the selected profile
+        try:
+            mcp = create_mcp_for_profile(MCP_PROFILE)
+            logging.info(f"MCP instance created for profile: {MCP_PROFILE}")
+        except ValueError as e:
+            logging.error(f"Invalid profile: {e}")
+            sys.exit(1)
+
         # Run in STDIO mode for local usage (Claude Desktop/Code)
         mcp.run(transport="stdio")
     else:

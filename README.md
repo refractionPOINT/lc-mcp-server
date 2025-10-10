@@ -34,6 +34,136 @@ Used when deploying as a public service (e.g., at mcp.limacharlie.io):
 - Supports multiple organizations concurrently
 - Run with: `uvicorn server:app`
 
+## Profile System
+
+The MCP server supports **profiles** to reduce cognitive load on AI agents by providing focused tool subsets. With over 100 tools available, profiles allow you to expose only relevant capabilities for specific workflows.
+
+### Available Profiles
+
+#### **all** (Default)
+All 100+ tools available. Best for general-purpose usage.
+- **STDIO**: No `MCP_PROFILE` variable needed (default behavior)
+- **HTTP**: `https://mcp.limacharlie.io/mcp`
+
+#### **historical_data**
+Historical telemetry analysis and LCQL queries (18 tools).
+Perfect for threat hunting and historical investigations.
+- LCQL queries, historic events, historic detections
+- Artifact management, IOC searches
+- Event schemas and platform information
+- **STDIO**: `MCP_PROFILE=historical_data`
+- **HTTP**: `https://mcp.limacharlie.io/historical_data`
+
+#### **live_investigation**
+Real-time endpoint investigation (24 tools).
+For active IR and live forensics.
+- Process inspection (modules, strings, memory)
+- System information (packages, services, users, network)
+- YARA scanning (process, file, directory, memory)
+- Reliable tasking for investigations
+- **STDIO**: `MCP_PROFILE=live_investigation`
+- **HTTP**: `https://mcp.limacharlie.io/live_investigation`
+
+#### **threat_response**
+Incident response actions (8 tools).
+For taking remediation actions on endpoints.
+- Network isolation (isolate, rejoin, check status)
+- Sensor tagging and deletion
+- Reliable tasking for response actions
+- **STDIO**: `MCP_PROFILE=threat_response`
+- **HTTP**: `https://mcp.limacharlie.io/threat_response`
+
+#### **fleet_management**
+Sensor and deployment management (13 tools).
+For managing your sensor fleet.
+- Sensor management (list, info, tags, deletion)
+- Installation keys (create, list, delete)
+- Cloud sensors (CSPM integration)
+- Platform information
+- **STDIO**: `MCP_PROFILE=fleet_management`
+- **HTTP**: `https://mcp.limacharlie.io/fleet_management`
+
+#### **detection_engineering**
+D&R rules and detection development (21 tools).
+For building and managing detections.
+- D&R rules (general and managed)
+- False positive rules
+- YARA rules and validation
+- MITRE ATT&CK coverage reports
+- Event schemas for rule development
+- **STDIO**: `MCP_PROFILE=detection_engineering`
+- **HTTP**: `https://mcp.limacharlie.io/detection_engineering`
+
+#### **ai_powered**
+AI-powered content generation (6 tools).
+For generating LCQL, rules, and playbooks with AI assistance.
+- Generate LCQL queries
+- Generate D&R rules (detection and response)
+- Generate sensor selectors
+- Generate Python playbooks
+- Generate detection summaries
+- **STDIO**: `MCP_PROFILE=ai_powered`
+- **HTTP**: `https://mcp.limacharlie.io/ai_powered`
+
+#### **platform_admin**
+Platform configuration and administration (31 tools).
+For configuring outputs, lookups, secrets, and more.
+- Outputs, lookups, secrets management
+- Playbooks, external adapters, extensions
+- Hive rules, saved queries
+- API keys and organization info
+- **STDIO**: `MCP_PROFILE=platform_admin`
+- **HTTP**: `https://mcp.limacharlie.io/platform_admin`
+
+### Core Tools
+
+All profiles include these 6 core tools:
+- `test_tool` - Verify MCP connectivity
+- `get_sensor_info` - Get detailed sensor information
+- `list_sensors` - List sensors in organization
+- `get_online_sensors` - List currently online sensors
+- `is_online` - Check if sensor is online
+- `search_hosts` - Search sensors by hostname
+
+### Profile Selection
+
+**STDIO Mode (Claude Desktop/Code):**
+Set the `MCP_PROFILE` environment variable in your configuration:
+```json
+{
+  "mcpServers": {
+    "limacharlie-historical": {
+      "command": "python3",
+      "args": ["/path/to/server.py"],
+      "env": {
+        "MCP_PROFILE": "historical_data",
+        "LC_OID": "your-org-id",
+        "LC_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+**HTTP Mode:**
+Use profile-specific URLs:
+```bash
+# Historical data profile
+claude mcp add limacharlie-historical https://mcp.limacharlie.io/historical_data \
+  --header "Authorization: Bearer API_KEY:OID"
+
+# Live investigation profile
+claude mcp add limacharlie-live https://mcp.limacharlie.io/live_investigation \
+  --header "Authorization: Bearer API_KEY:OID"
+```
+
+### Benefits
+
+- **Reduced Context**: Fewer tools mean less cognitive load for AI agents
+- **Focused Workflows**: Each profile is optimized for specific use cases
+- **Better Performance**: Smaller tool sets lead to faster tool selection
+- **Backward Compatible**: No profile specified = all tools (existing configs work unchanged)
+
 ## Requirements & Authentication
 
 ### For HTTP Mode
@@ -53,6 +183,7 @@ The server requires authentication headers:
 Set environment variables:
 - `LC_OID`: Your LimaCharlie Organization ID
 - `LC_API_KEY`: Your LimaCharlie API key
+- `MCP_PROFILE`: Profile to load (default: `all`). Options: `historical_data`, `live_investigation`, `threat_response`, `fleet_management`, `detection_engineering`, `ai_powered`, `platform_admin`
 - `GOOGLE_API_KEY`: For AI-powered generation features (optional)
 
 ## Quick Start
@@ -66,6 +197,7 @@ Set environment variables:
 2. Set environment variables:
    ```bash
    export PUBLIC_MODE=false
+   export MCP_PROFILE=all  # Or choose a specific profile
    export GOOGLE_API_KEY=your-api-key
    export LC_OID=your-org-id
    export LC_API_KEY=your-lc-api-key
@@ -87,9 +219,14 @@ Set environment variables:
 
 ### HTTP Service Usage
 ```bash
+# Default (all tools)
 claude mcp add --transport http limacharlie https://mcp.limacharlie.io/mcp \
   --header "Authorization: Bearer API_KEY:OID" \
   --header "x-lc-oid: OID"
+
+# Using a specific profile (e.g., historical_data)
+claude mcp add --transport http limacharlie-historical https://mcp.limacharlie.io/historical_data \
+  --header "Authorization: Bearer API_KEY:OID"
 ```
 
 ## Capabilities
@@ -162,6 +299,7 @@ The `run_lcql_query` tool supports:
 ## Environment Variables
 
 - `PUBLIC_MODE` - Set to `true` for HTTP mode, `false` for STDIO (default: `false`)
+- `MCP_PROFILE` - Profile to load (default: `all`). Options: `all`, `historical_data`, `live_investigation`, `threat_response`, `fleet_management`, `detection_engineering`, `ai_powered`, `platform_admin`
 - `GOOGLE_API_KEY` - API key for AI-powered features
 - `GCS_BUCKET_NAME` - Google Cloud Storage bucket for large results (optional)
 - `GCS_SIGNER_SERVICE_ACCOUNT` - Service account for GCS URL signing (optional)
