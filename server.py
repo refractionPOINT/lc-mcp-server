@@ -4874,7 +4874,28 @@ if PUBLIC_MODE:
             logging.error(f"Failed to create MCP for profile {profile}: {e}")
 
     # Create main Starlette app with profile-based routing
+    from starlette.routing import Route, Mount as StarletteMount
+    from starlette.datastructures import URL
     routes = []
+
+    # Helper to create a redirect-free mount that handles both with/without trailing slash
+    def create_profile_mount(profile_name, mcp_app):
+        """Create routes that handle profile paths with and without trailing slash"""
+
+        # Wrapper ASGI app that strips/adds trailing slash as needed for the underlying app
+        async def profile_wrapper(scope, receive, send):
+            # Normalize the path to have a trailing slash for the mounted app
+            path = scope["path"]
+            if path == f"/{profile_name}":
+                # Add trailing slash to the path so the mounted app sees it correctly
+                scope = dict(scope)
+                scope["path"] = f"/{profile_name}/"
+                scope["raw_path"] = f"/{profile_name}/".encode()
+
+            # Forward to the actual MCP app
+            await mcp_app(scope, receive, send)
+
+        return Mount(f"/{profile_name}", profile_wrapper, name=f"profile_{profile_name}")
 
     # Add profile-specific endpoints
     for profile, profile_mcp in profile_mcps.items():
@@ -4883,12 +4904,11 @@ if PUBLIC_MODE:
             routes.append(Mount("/mcp", profile_mcp.streamable_http_app()))
             logging.info(f"Mounted 'all' profile at /mcp")
         else:
-            # Mount other profiles at /<profile_name>
-            routes.append(Mount(f"/{profile}", profile_mcp.streamable_http_app()))
+            # Use custom mount that handles both with/without trailing slash
+            routes.append(create_profile_mount(profile, profile_mcp.streamable_http_app()))
             logging.info(f"Mounted '{profile}' profile at /{profile}")
 
     # Create root endpoint for health checks and profile listing
-    from starlette.routing import Route
 
     async def root(request):
         profiles_info = {}
