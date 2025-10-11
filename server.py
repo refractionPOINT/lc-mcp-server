@@ -482,6 +482,10 @@ def create_mcp_for_profile(profile_name: str) -> FastMCP:
 
     logging.info(f"Created MCP instance for profile '{profile_name}' with {registered_count} tools")
 
+    # Mount MCP endpoint at root of profile path instead of /mcp
+    # This allows /historical_data/ to work instead of /historical_data/mcp
+    profile_mcp.settings.streamable_http_path = "/"
+
     return profile_mcp
 
 # Test tool to verify MCP is working
