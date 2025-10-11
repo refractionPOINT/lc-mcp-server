@@ -4881,9 +4881,9 @@ if PUBLIC_MODE:
     # Add profile-specific endpoints (mount with trailing slash only)
     for profile, profile_mcp in profile_mcps.items():
         if profile == "all":
-            # Mount "all" profile at both /mcp and / for backward compatibility
-            routes.append(Mount("/mcp", profile_mcp.streamable_http_app()))
-            logging.info(f"Mounted 'all' profile at /mcp")
+            # Mount "all" profile at /mcp/ with trailing slash for backward compatibility
+            routes.append(Mount("/mcp/", profile_mcp.streamable_http_app()))
+            logging.info(f"Mounted 'all' profile at /mcp/")
         else:
             # Mount other profiles at /<profile_name>/ with trailing slash
             routes.append(Mount(f"/{profile}/", profile_mcp.streamable_http_app()))
@@ -4950,8 +4950,8 @@ if PUBLIC_MODE:
 
             await self.app(scope, receive, send)
 
-    # Create list of profile paths to check
-    profile_paths = [f"/{p}" for p in available_profiles if p != "all"]
+    # Create list of profile paths to check (include /mcp for backward compatibility)
+    profile_paths = ["/mcp"] + [f"/{p}" for p in available_profiles if p != "all"]
 
     # Wrap the base app with trailing slash middleware
     app = TrailingSlashMiddleware(base_app, profile_paths)
