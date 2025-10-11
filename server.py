@@ -4878,35 +4878,16 @@ if PUBLIC_MODE:
     from starlette.datastructures import URL
     routes = []
 
-    # Helper to create a redirect-free mount that handles both with/without trailing slash
-    def create_profile_mount(profile_name, mcp_app):
-        """Create routes that handle profile paths with and without trailing slash"""
-
-        # Wrapper ASGI app that strips/adds trailing slash as needed for the underlying app
-        async def profile_wrapper(scope, receive, send):
-            # Normalize the path to have a trailing slash for the mounted app
-            path = scope["path"]
-            if path == f"/{profile_name}":
-                # Add trailing slash to the path so the mounted app sees it correctly
-                scope = dict(scope)
-                scope["path"] = f"/{profile_name}/"
-                scope["raw_path"] = f"/{profile_name}/".encode()
-
-            # Forward to the actual MCP app
-            await mcp_app(scope, receive, send)
-
-        return Mount(f"/{profile_name}", profile_wrapper, name=f"profile_{profile_name}")
-
-    # Add profile-specific endpoints
+    # Add profile-specific endpoints (mount with trailing slash only)
     for profile, profile_mcp in profile_mcps.items():
         if profile == "all":
             # Mount "all" profile at both /mcp and / for backward compatibility
             routes.append(Mount("/mcp", profile_mcp.streamable_http_app()))
             logging.info(f"Mounted 'all' profile at /mcp")
         else:
-            # Use custom mount that handles both with/without trailing slash
-            routes.append(create_profile_mount(profile, profile_mcp.streamable_http_app()))
-            logging.info(f"Mounted '{profile}' profile at /{profile}")
+            # Mount other profiles at /<profile_name>/ with trailing slash
+            routes.append(Mount(f"/{profile}/", profile_mcp.streamable_http_app()))
+            logging.info(f"Mounted '{profile}' profile at /{profile}/")
 
     # Create root endpoint for health checks and profile listing
 
@@ -4945,10 +4926,35 @@ if PUBLIC_MODE:
             yield
 
     # Create Starlette app with all routes
-    app = Starlette(routes=routes, lifespan=combined_lifespan)
+    base_app = Starlette(routes=routes, lifespan=combined_lifespan)
 
     # Add middleware to capture HTTP requests in contextvar
-    app.add_middleware(RequestContextMiddleware)
+    base_app.add_middleware(RequestContextMiddleware)
+
+    # Wrap the app with ASGI middleware that rewrites paths BEFORE routing
+    # This prevents 307 redirects that break MCP connections
+    class TrailingSlashMiddleware:
+        def __init__(self, app, profile_paths):
+            self.app = app
+            self.profile_paths = profile_paths
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                path = scope["path"]
+                # Check if this is a profile path without trailing slash
+                if path in self.profile_paths:
+                    # Rewrite the path to include trailing slash
+                    scope = dict(scope)
+                    scope["path"] = path + "/"
+                    scope["raw_path"] = (path + "/").encode()
+
+            await self.app(scope, receive, send)
+
+    # Create list of profile paths to check
+    profile_paths = [f"/{p}" for p in available_profiles if p != "all"]
+
+    # Wrap the base app with trailing slash middleware
+    app = TrailingSlashMiddleware(base_app, profile_paths)
 
     logging.info(f"HTTP mode initialized with {len(profile_mcps)} profiles")
 
