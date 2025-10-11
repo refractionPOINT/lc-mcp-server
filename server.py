@@ -21,6 +21,7 @@ import atexit
 import logging
 import sys
 import contextvars
+import contextlib
 from starlette.types import ASGIApp, Receive, Scope, Send
 import shlex
 from datetime import datetime, timedelta
@@ -4914,8 +4915,17 @@ if PUBLIC_MODE:
 
     routes.insert(0, Route("/", root, methods=["GET"]))
 
+    # Create combined lifespan to manage all profile MCP session managers
+    @contextlib.asynccontextmanager
+    async def combined_lifespan(app):
+        async with contextlib.AsyncExitStack() as stack:
+            # Initialize all profile MCP session managers
+            for profile, profile_mcp in profile_mcps.items():
+                await stack.enter_async_context(profile_mcp.session_manager.run())
+            yield
+
     # Create Starlette app with all routes
-    app = Starlette(routes=routes)
+    app = Starlette(routes=routes, lifespan=combined_lifespan)
 
     # Add middleware to capture HTTP requests in contextvar
     app.add_middleware(RequestContextMiddleware)
