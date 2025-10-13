@@ -12,3 +12,8 @@ openai
 
 # For GCS storage of large results
 google-cloud-storage
+
+# Testing
+pytest
+pytest-asyncio
+httpx
