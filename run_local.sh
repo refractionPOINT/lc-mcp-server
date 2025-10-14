@@ -14,27 +14,41 @@ PUBLIC_MODE=${PUBLIC_MODE:-false}
 echo "Current mode: PUBLIC_MODE=${PUBLIC_MODE}"
 echo ""
 
-# Check if virtual environment exists
-if [ ! -d "venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv venv
+# Check if Poetry is installed and if we should use it
+if command -v poetry &> /dev/null; then
+    echo "Poetry detected. Using Poetry for dependency management..."
+    USE_POETRY=true
+else
+    echo "Poetry not found. Using pip and venv..."
+    USE_POETRY=false
 fi
 
-# Activate virtual environment
-source venv/bin/activate
+if [ "$USE_POETRY" = true ]; then
+    # Install dependencies using Poetry
+    echo "Installing dependencies with Poetry..."
+    poetry install
+else
+    # Check if virtual environment exists
+    if [ ! -d "venv" ]; then
+        echo "Creating virtual environment..."
+        python3 -m venv venv
+    fi
 
-# Install dependencies
-echo "Installing dependencies..."
-pip install -r requirements.txt
+    # Activate virtual environment
+    source venv/bin/activate
 
-# Install MCP from the specific branch
-echo "Installing MCP SDK..."
-if [ ! -d "/tmp/python-sdk" ]; then
-    git clone --branch ylassoued/feat-request https://github.com/ylassoued/python-sdk.git /tmp/python-sdk
-    cd /tmp/python-sdk
-    git reset --hard a0d0ee5e2557b581a17261e032b89429876f6492
-    pip install .
-    cd -
+    # Install dependencies
+    echo "Installing dependencies with pip..."
+    pip install -r requirements.txt
+
+    # Install MCP from the specific branch (fallback for pip-based installs)
+    echo "Installing MCP SDK..."
+    if [ ! -d "/tmp/python-sdk" ]; then
+        git clone https://github.com/modelcontextprotocol/python-sdk.git /tmp/python-sdk
+        cd /tmp/python-sdk
+        pip install .
+        cd -
+    fi
 fi
 
 # Run the server based on PUBLIC_MODE
@@ -43,12 +57,20 @@ if [ "${PUBLIC_MODE}" = "true" ]; then
     echo "Starting in HTTP mode (PUBLIC_MODE=true)"
     echo "Server will be available at http://localhost:8000"
     echo "==================================="
-    uvicorn server:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    if [ "$USE_POETRY" = true ]; then
+        poetry run uvicorn server:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    else
+        uvicorn server:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    fi
 else
     echo "==================================="
     echo "Starting in STDIO mode (PUBLIC_MODE=false)"
     echo "This mode is for local MCP clients like Claude Desktop or Claude Code"
     echo "The server will communicate through stdin/stdout"
     echo "==================================="
-    python server.py
+    if [ "$USE_POETRY" = true ]; then
+        poetry run python server.py
+    else
+        python server.py
+    fi
 fi
