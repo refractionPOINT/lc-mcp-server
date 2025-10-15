@@ -1588,6 +1588,15 @@ def run_lcql_query(query: str, limit: int = 100, stream = "event", ctx: Context 
         sdk = get_sdk_from_context(ctx)
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
+
+        # Validate query first to catch syntax errors
+        validation_result = validate_lcql_query(sdk, query)
+        if "error" in validation_result:
+            return validation_result
+        if not validation_result.get("valid", False):
+            return {"error": validation_result.get("error", "Query validation failed")}
+
+        # If validation passed, proceed with execution
         replay = limacharlie.Replay.Replay(sdk)
         results = []
         hasMore = False
