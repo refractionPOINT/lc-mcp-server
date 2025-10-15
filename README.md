@@ -58,6 +58,34 @@ Set environment variables:
 ## Quick Start
 
 ### For Claude Desktop/Code (STDIO Mode)
+
+#### Option 1: Using Poetry (Recommended)
+1. Install Poetry (if not already installed):
+   ```bash
+   curl -sSL https://install.python-poetry.org | python3 -
+   ```
+
+2. Install dependencies:
+   ```bash
+   poetry install
+   ```
+
+3. Set environment variables:
+   ```bash
+   export PUBLIC_MODE=false
+   export GOOGLE_API_KEY=your-api-key
+   export LC_OID=your-org-id
+   export LC_API_KEY=your-lc-api-key
+   ```
+
+4. Run the server:
+   ```bash
+   poetry run python3 server.py
+   ```
+
+5. Configure Claude Desktop (see `claude-desktop-config.json` for example)
+
+#### Option 2: Using pip
 1. Install dependencies:
    ```bash
    pip install -r requirements.txt
@@ -158,6 +186,32 @@ The `run_lcql_query` tool supports:
 - Streaming results for real-time monitoring
 - Flexible time windows and limits
 - Output formatting options
+
+## Dependency Management
+
+This project uses Poetry for dependency management and locking to ensure reproducible builds:
+
+- **pyproject.toml** - Defines project metadata and dependency version constraints
+- **poetry.lock** - Contains exact versions of all dependencies and their sub-dependencies
+
+### Managing Dependencies
+
+```bash
+# Add a new dependency
+poetry add package-name
+
+# Add a development dependency
+poetry add --group dev package-name
+
+# Update dependencies to latest versions (within constraints)
+poetry update
+
+# Update the lock file after editing pyproject.toml
+poetry lock
+
+# Install dependencies from lock file
+poetry install
+```
 
 ## Environment Variables
 

@@ -3,6 +3,7 @@ starlette
 limacharlie
 fastapi
 contextvars
+mcp
 
 # For Gemini
 google-genai
