@@ -730,13 +730,15 @@ testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions", "requests"]
 
 [[package]]
 name = "mcp"
-version = "1.17.1.dev6+de894576"
+version = "1.17.0"
 description = "Model Context Protocol SDK"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
-files = []
-develop = false
+files = [
+    {file = "mcp-1.17.0-py3-none-any.whl", hash = "sha256:0660ef275cada7a545af154db3082f176cf1d2681d5e35ae63e014faf0a35d40"},
+    {file = "mcp-1.17.0.tar.gz", hash = "sha256:1b57fabf3203240ccc48e39859faf3ae1ccb0b571ff798bbedae800c73c6df90"},
+]
 
 [package.dependencies]
 anyio = ">=4.5"
@@ -755,12 +757,6 @@ uvicorn = {version = ">=0.31.1", markers = "sys_platform != \"emscripten\""}
 cli = ["python-dotenv (>=1.0.0)", "typer (>=0.16.0)"]
 rich = ["rich (>=13.9.4)"]
 ws = ["websockets (>=15.0.1)"]
-
-[package.source]
-type = "git"
-url = "https://github.com/modelcontextprotocol/python-sdk.git"
-reference = "HEAD"
-resolved_reference = "de894576838a8b13817742d8b548e1df95f43e90"
 
 [[package]]
 name = "mdurl"
@@ -1788,4 +1784,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "9ad06660e2f0804f8903c12390d535e8ece73c1a681696a78ff9c3e00614599e"
+content-hash = "3fcc6ccb7fa236fa04d56ea4e074718c020ac7a8a24141cf3d3e19674f26280c"

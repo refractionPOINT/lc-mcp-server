@@ -40,15 +40,6 @@ else
     # Install dependencies
     echo "Installing dependencies with pip..."
     pip install -r requirements.txt
-
-    # Install MCP from the specific branch (fallback for pip-based installs)
-    echo "Installing MCP SDK..."
-    if [ ! -d "/tmp/python-sdk" ]; then
-        git clone https://github.com/modelcontextprotocol/python-sdk.git /tmp/python-sdk
-        cd /tmp/python-sdk
-        pip install .
-        cd -
-    fi
 fi
 
 # Run the server based on PUBLIC_MODE

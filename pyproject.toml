@@ -28,7 +28,7 @@ fastapi = "^0.115.5"
 google-genai = "^1.0.0"
 openai = "^1.57.0"
 google-cloud-storage = "^2.18.2"
-mcp = {git = "https://github.com/modelcontextprotocol/python-sdk.git"}
+mcp = "^1.17.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
