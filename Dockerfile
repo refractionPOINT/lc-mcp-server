@@ -21,7 +21,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Poetry with pinned version for reproducibility and security
@@ -38,11 +37,10 @@ RUN curl -sSL https://install.python-poetry.org -o install-poetry.py && \
 COPY pyproject.toml poetry.lock ./
 
 # Install dependencies using Poetry (no dev dependencies)
-# Git is required to build the MCP package from the git repository
 RUN poetry install --without dev --no-root
 
 # Remove build dependencies to reduce image size
-RUN apt-get purge -y curl build-essential git && \
+RUN apt-get purge -y curl build-essential && \
     apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
