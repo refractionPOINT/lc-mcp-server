@@ -109,6 +109,31 @@ PROFILES = {
         "get_platform_names",
         "list_with_platform",
     },
+    "historical_data_readonly": {
+        # Historical telemetry and analysis (read-only)
+        "get_historic_events",
+        "get_historic_detections",
+        "get_time_when_sensor_has_data",
+        # LCQL queries (read-only - excludes set/delete saved queries)
+        "run_lcql_query",
+        "list_saved_queries",
+        "get_saved_query",
+        "run_saved_query",
+        # Artifacts (read-only)
+        "list_artifacts",
+        "get_artifact",
+        # IOC search (read-only)
+        "search_iocs",
+        "batch_search_iocs",
+        # Event schemas (read-only)
+        "get_event_schema",
+        "get_event_schemas_batch",
+        "get_event_types_with_schemas",
+        "get_event_types_with_schemas_for_platform",
+        # Platform info (read-only)
+        "get_platform_names",
+        "list_with_platform",
+    },
     "live_investigation": {
         # Process inspection
         "get_processes",
