@@ -719,8 +719,8 @@ def get_historic_events(sid: str, start_time: int, end_time: int, ctx: Context) 
 
     Args:
         sid (uuid str): The Sensor ID to query
-        start_time (int): Start timestamp in Unix second epoch format, maximum range of 1 minute
-        end_time (int): End timestamp in Unix second epoch format, maximum range of 1 minute
+        start_time (int): Start timestamp in Unix second epoch format
+        end_time (int): End timestamp in Unix second epoch format
 
     Returns:
         dict[str, Any]: A dictionary containing either:
@@ -1512,7 +1512,7 @@ def get_time_when_sensor_has_data(sid: str, start: int, end: int, ctx: Context) 
 
 @mcp_tool_with_gcs()
 def get_historic_detections(start: int, end: int, limit: int = None, cat: str = None, ctx: Context = None) -> dict[str, Any]:
-    """Get historic detections for the organization between two epoch second timestamps less than 10 minutes apart
+    """Get historic detections for the organization between two epoch second timestamps
 
     Args:
         start (int): Start timestamp in Unix second epoch format
