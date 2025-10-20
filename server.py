@@ -204,6 +204,8 @@ PROFILES = {
         "get_dr_managed_rule",
         "set_dr_managed_rule",
         "delete_dr_managed_rule",
+        # D&R validation
+        "validate_dr_rule_components",
         # False positive rules
         "get_fp_rules",
         "get_fp_rule",
@@ -1852,6 +1854,84 @@ def validate_dr_rule(sdk: limacharlie.Manager, rule: dict[str, Any]) -> dict[str
         return {"error": f"{e}"}
     finally:
         logging.info(f"validate_dr_rule time: {time.time() - start} seconds")
+
+@mcp_tool_with_gcs()
+def validate_dr_rule_components(detect: str | dict[str, Any], respond: str | dict[str, Any] | None = None, ctx: Context = None) -> dict[str, Any]:
+    """Validate a D&R rule by providing detect and respond components separately
+
+    Args:
+        detect (str | dict[str, Any]): The detection component as a YAML string or dict
+        respond (str | dict[str, Any] | None): Optional respond component as a YAML string or dict. Defaults to empty list if not provided.
+        ctx (Context): The MCP context
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "valid" (bool): True if the rule is valid
+            - "error" (str): On failure, an error message string describing the validation error
+
+    Examples:
+        Validate with both components as dicts:
+        >>> validate_dr_rule_components(
+        ...     detect={"op": "and", "rules": [{"op": "exists", "path": "event/FILE_PATH"}]},
+        ...     respond=[{"action": "report", "name": "test_detection"}]
+        ... )
+
+        Validate with YAML strings:
+        >>> validate_dr_rule_components(
+        ...     detect="op: exists\\npath: event/FILE_PATH",
+        ...     respond="- action: report\\n  name: test_detection"
+        ... )
+
+        Validate detect-only (respond is optional):
+        >>> validate_dr_rule_components(
+        ...     detect={"op": "exists", "path": "event/FILE_PATH"}
+        ... )
+    """
+    start = time.time()
+    logging.info(f"Tool called: validate_dr_rule_components(detect={json.dumps(detect) if isinstance(detect, dict) else detect[:100]}, respond={json.dumps(respond) if isinstance(respond, dict) else (respond[:100] if respond else None)})")
+
+    try:
+        # Get SDK from context
+        sdk = get_sdk_from_context(ctx)
+        if not sdk:
+            return {"error": "Authentication failed - no SDK available"}
+
+        # Parse detect if it's a string
+        if isinstance(detect, str):
+            try:
+                detect_parsed = yaml.safe_load(detect)
+            except yaml.YAMLError as e:
+                return {"valid": False, "error": f"Invalid YAML in detect parameter: {e}"}
+        else:
+            detect_parsed = detect
+
+        # Parse respond if provided and it's a string
+        if respond is None:
+            respond_parsed = []
+        elif isinstance(respond, str):
+            try:
+                respond_parsed = yaml.safe_load(respond)
+            except yaml.YAMLError as e:
+                return {"valid": False, "error": f"Invalid YAML in respond parameter: {e}"}
+        else:
+            respond_parsed = respond
+
+        # Construct complete D&R rule
+        rule = {
+            "detect": detect_parsed,
+            "respond": respond_parsed
+        }
+
+        # Validate using existing helper function
+        result = validate_dr_rule(sdk, rule)
+
+        return result
+
+    except Exception as e:
+        logging.error(f"Error in validate_dr_rule_components: {e}", exc_info=True)
+        return {"error": f"Validation error: {e}"}
+    finally:
+        logging.info(f"validate_dr_rule_components time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
 async def generate_lcql_query(query: str, ctx: Context) -> dict[str, Any]:
