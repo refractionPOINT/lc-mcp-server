@@ -3,6 +3,7 @@ starlette
 limacharlie
 fastapi
 contextvars
+mcp>=1.17.0
 
 # For Gemini
 google-genai
@@ -12,3 +13,8 @@ openai
 
 # For GCS storage of large results
 google-cloud-storage
+
+# Testing
+pytest
+pytest-asyncio
+httpx
