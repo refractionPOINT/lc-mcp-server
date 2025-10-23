@@ -168,6 +168,9 @@ sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
 uid_auth_context_var = contextvars.ContextVar[tuple[str, str | None, str] | None](
     "uid_auth", default=None  # Stores (uid, api_key, mode) when in UID mode. mode: "oauth" or "api_key"
 )
+current_oid_context_var = contextvars.ContextVar[str | None](
+    "current_oid", default=None  # Stores the current OID for nested calls in UID mode
+)
 
 # Global registry for all tool functions (before registration)
 # Maps tool_name -> (func, is_async)
@@ -558,8 +561,8 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
     if is_async:
         @functools.wraps(tool_func)
         async def async_wrapper(*args, **kwargs):
-            # Extract oid from kwargs
-            oid = kwargs.pop('oid', None)
+            # Extract oid from kwargs, or use current OID from context (for nested calls)
+            oid = kwargs.pop('oid', None) or current_oid_context_var.get()
 
             # Check if we're in UID mode
             uid_auth = uid_auth_context_var.get()
@@ -585,19 +588,21 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
                     logging.debug(f"API key mode: Creating SDK for oid={oid}")
                     sdk = limacharlie.Manager(oid, secret_api_key=api_key)
 
-                # Store in context for this tool execution
+                # Store SDK and OID in context for this tool execution and nested calls
                 sdk_token = sdk_context_var.set(sdk)
+                oid_token = current_oid_context_var.set(oid)
                 try:
                     # Execute tool
                     result = await tool_func(*args, **kwargs)
                     return result
                 finally:
-                    # Clean up SDK
+                    # Clean up SDK and context
                     try:
                         sdk.shutdown()
                     except Exception:
                         pass
                     sdk_context_var.reset(sdk_token)
+                    current_oid_context_var.reset(oid_token)
             else:
                 # Normal mode
                 if oid is not None:
@@ -614,8 +619,8 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
     else:
         @functools.wraps(tool_func)
         def sync_wrapper(*args, **kwargs):
-            # Extract oid from kwargs
-            oid = kwargs.pop('oid', None)
+            # Extract oid from kwargs, or use current OID from context (for nested calls)
+            oid = kwargs.pop('oid', None) or current_oid_context_var.get()
 
             # Check if we're in UID mode
             uid_auth = uid_auth_context_var.get()
@@ -641,19 +646,21 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
                     logging.debug(f"API key mode: Creating SDK for oid={oid}")
                     sdk = limacharlie.Manager(oid, secret_api_key=api_key)
 
-                # Store in context for this tool execution
+                # Store SDK and OID in context for this tool execution and nested calls
                 sdk_token = sdk_context_var.set(sdk)
+                oid_token = current_oid_context_var.set(oid)
                 try:
                     # Execute tool
                     result = tool_func(*args, **kwargs)
                     return result
                 finally:
-                    # Clean up SDK
+                    # Clean up SDK and context
                     try:
                         sdk.shutdown()
                     except Exception:
                         pass
                     sdk_context_var.reset(sdk_token)
+                    current_oid_context_var.reset(oid_token)
             else:
                 # Normal mode
                 if oid is not None:
@@ -3430,8 +3437,8 @@ def get_rule(hive_name: str, rule_name: str, ctx: Context) -> dict[str, Any]:
         
         # Get the specific rule
         rule = hive.get(rule_name)
-        
-        return {"rule": rule if rule else {}}
+
+        return {"rule": rule.toJSON() if rule else {}}
         
     except Exception as e:
         logging.info(f"Error in get_rule: {str(e)}")
