@@ -51,6 +51,9 @@ request_context_var = contextvars.ContextVar[Request | None](
 sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
     "lc_sdk", default=None
 )
+uid_auth_context_var = contextvars.ContextVar[tuple[str, str] | None](
+    "uid_auth", default=None  # Stores (uid, api_key) when in UID mode
+)
 
 # Global registry for all tool functions (before registration)
 # Maps tool_name -> (func, is_async)
@@ -374,10 +377,139 @@ def upload_to_gcs(data: dict[str, Any], tool_name: str) -> tuple[str, int]:
         
         logging.info(f"Uploaded large result to GCS: {filename}")
         return signed_url, len(json_bytes)
-        
+
     except Exception as e:
         logging.info(f"Error uploading to GCS: {e}")
         raise
+
+def wrap_tool_for_multi_mode(tool_func, is_async: bool):
+    """
+    Wraps a tool function to support both normal mode (OID-based) and UID mode (multi-org).
+
+    In normal mode:
+      - SDK created from context (API Key + OID from auth)
+      - oid parameter must NOT be provided
+
+    In UID mode:
+      - SDK created per-call with provided OID (API Key + UID + OID)
+      - oid parameter MUST be provided
+
+    Mode is detected from uid_auth_context_var:
+      - If set: UID mode
+      - If None: normal mode
+    """
+    import inspect
+
+    # Add oid parameter to the function signature
+    sig = inspect.signature(tool_func)
+    params = list(sig.parameters.values())
+
+    # Insert oid parameter before ctx (which is always the last parameter)
+    oid_param = inspect.Parameter(
+        'oid',
+        inspect.Parameter.KEYWORD_ONLY,
+        default=None,
+        annotation=str | None
+    )
+    params.insert(-1, oid_param)  # Insert before last parameter (ctx)
+    new_sig = sig.replace(parameters=params)
+
+    if is_async:
+        @functools.wraps(tool_func)
+        async def async_wrapper(*args, **kwargs):
+            # Extract oid from kwargs
+            oid = kwargs.pop('oid', None)
+
+            # Check if we're in UID mode
+            uid_auth = uid_auth_context_var.get()
+            is_uid_mode = uid_auth is not None
+
+            # Validate oid parameter based on mode
+            if is_uid_mode:
+                if oid is None:
+                    raise ValueError(
+                        f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
+                        f"Please specify the organization ID for this operation."
+                    )
+                # Create SDK with UID + OID + API Key
+                uid, api_key = uid_auth
+                logging.info(f"UID mode: Creating SDK for oid={oid}, uid={uid}")
+                sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+
+                # Store in context for this tool execution
+                sdk_token = sdk_context_var.set(sdk)
+                try:
+                    # Execute tool
+                    result = await tool_func(*args, **kwargs)
+                    return result
+                finally:
+                    # Clean up SDK
+                    try:
+                        sdk.shutdown()
+                    except Exception:
+                        pass
+                    sdk_context_var.reset(sdk_token)
+            else:
+                # Normal mode
+                if oid is not None:
+                    raise ValueError(
+                        f"Tool {tool_func.__name__}: 'oid' parameter is not allowed in normal mode. "
+                        f"In normal mode, the organization is specified via authentication headers."
+                    )
+                # Use existing SDK from context
+                result = await tool_func(*args, **kwargs)
+                return result
+
+        async_wrapper.__signature__ = new_sig
+        return async_wrapper
+    else:
+        @functools.wraps(tool_func)
+        def sync_wrapper(*args, **kwargs):
+            # Extract oid from kwargs
+            oid = kwargs.pop('oid', None)
+
+            # Check if we're in UID mode
+            uid_auth = uid_auth_context_var.get()
+            is_uid_mode = uid_auth is not None
+
+            # Validate oid parameter based on mode
+            if is_uid_mode:
+                if oid is None:
+                    raise ValueError(
+                        f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
+                        f"Please specify the organization ID for this operation."
+                    )
+                # Create SDK with UID + OID + API Key
+                uid, api_key = uid_auth
+                logging.info(f"UID mode: Creating SDK for oid={oid}, uid={uid}")
+                sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+
+                # Store in context for this tool execution
+                sdk_token = sdk_context_var.set(sdk)
+                try:
+                    # Execute tool
+                    result = tool_func(*args, **kwargs)
+                    return result
+                finally:
+                    # Clean up SDK
+                    try:
+                        sdk.shutdown()
+                    except Exception:
+                        pass
+                    sdk_context_var.reset(sdk_token)
+            else:
+                # Normal mode
+                if oid is not None:
+                    raise ValueError(
+                        f"Tool {tool_func.__name__}: 'oid' parameter is not allowed in normal mode. "
+                        f"In normal mode, the organization is specified via authentication headers."
+                    )
+                # Use existing SDK from context
+                result = tool_func(*args, **kwargs)
+                return result
+
+        sync_wrapper.__signature__ = new_sig
+        return sync_wrapper
 
 def mcp_tool_with_gcs():
     """
@@ -469,11 +601,14 @@ def mcp_tool_with_gcs():
         else:
             gcs_wrapped = wrapper
 
+        # Apply multi-mode wrapper to add oid parameter support
+        multi_mode_wrapped = wrap_tool_for_multi_mode(gcs_wrapped, is_async)
+
         # Store in registry instead of immediately registering
-        TOOL_REGISTRY[tool_name] = (gcs_wrapped, is_async)
+        TOOL_REGISTRY[tool_name] = (multi_mode_wrapped, is_async)
 
         # Return the wrapped function (not registered yet)
-        return gcs_wrapped
+        return multi_mode_wrapped
 
     return decorator
 
@@ -516,6 +651,72 @@ def create_mcp_for_profile(profile_name: str) -> FastMCP:
 
     return profile_mcp
 
+def get_uid_from_environment() -> str | None:
+    """
+    Get UID from environment variables or SDK defaults.
+
+    Checks in order:
+    1. LC_UID environment variable
+    2. SDK default UID (from limacharlie config)
+
+    Returns:
+        UID string if found, None otherwise
+    """
+    # Check environment variable first
+    uid = os.getenv("LC_UID")
+    if uid:
+        logging.info(f"UID mode: Using LC_UID from environment: {uid}")
+        return uid
+
+    # Try to get UID from SDK defaults
+    try:
+        # Create a temporary SDK instance to check for default UID
+        # This will use the SDK's default authentication config
+        temp_sdk = limacharlie.Manager()
+
+        # Check if SDK has a method to get default UID
+        # The SDK might store this in config or as an attribute
+        if hasattr(temp_sdk, '_uid') and temp_sdk._uid:
+            logging.info(f"UID mode: Using UID from SDK defaults: {temp_sdk._uid}")
+            return temp_sdk._uid
+
+        # Try to check the SDK's internal config
+        # Note: This is SDK-specific and may need adjustment based on actual SDK implementation
+        if hasattr(temp_sdk, 'getDefaultUserId'):
+            uid = temp_sdk.getDefaultUserId()
+            if uid:
+                logging.info(f"UID mode: Using UID from SDK getDefaultUserId: {uid}")
+                return uid
+    except Exception as e:
+        logging.debug(f"Could not get UID from SDK defaults: {e}")
+
+    return None
+
+def validate_oid_parameter(oid: Any, uid_mode: bool, tool_name: str) -> None:
+    """
+    Validate oid parameter based on mode.
+
+    Args:
+        oid: The oid parameter value
+        uid_mode: True if in UID mode, False otherwise
+        tool_name: Name of the tool (for error messages)
+
+    Raises:
+        ValueError: If oid parameter is invalid for the mode
+    """
+    if uid_mode:
+        if oid is None:
+            raise ValueError(
+                f"Tool {tool_name}: 'oid' parameter is required in UID mode. "
+                f"Please specify the organization ID for this operation."
+            )
+    else:
+        if oid is not None:
+            raise ValueError(
+                f"Tool {tool_name}: 'oid' parameter is not allowed in normal mode. "
+                f"In normal mode, the organization is specified via authentication headers."
+            )
+
 # Test tool to verify MCP is working
 @mcp_tool_with_gcs()
 def test_tool(ctx: Context) -> dict[str, Any]:
@@ -531,39 +732,64 @@ def test_tool(ctx: Context) -> dict[str, Any]:
     }
 
 # Dependency: Extract Bearer token from the request
-async def get_auth_info(request: Request) -> tuple[str | None, str | None, str | None]:
+async def get_auth_info(request: Request) -> tuple[str | None, str | None, str | None, str | None]:
+    """
+    Extract authentication info from request headers.
+
+    Returns: (jwt, api_key, oid, uid)
+
+    Two modes:
+    1. Normal mode (x-lc-oid present): Returns (jwt|None, api_key|None, oid, None)
+    2. UID mode (x-lc-uid present): Returns (None, api_key, None, uid)
+    """
     # In non-public mode, return None to indicate no auth from headers
     if not PUBLIC_MODE:
-        return None, None, None
-    
+        return None, None, None, None
+
     auth_header = request.headers.get("authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    # There are three flavors of the token determined by the UUID format
-    # # of the oid and api_key:
+    auth_header = auth_header.removeprefix("Bearer ").strip()
+
+    # Check for UID mode first (x-lc-uid header present)
+    uid = request.headers.get("x-lc-uid")
+    if uid:
+        # UID mode: Authorization should be just the API key (no :oid suffix)
+        # Validate it's a UUID (API key format)
+        try:
+            uuid.UUID(auth_header)
+            # Valid API key
+            return None, auth_header, None, uid
+        except Exception:
+            raise HTTPException(
+                status_code=401,
+                detail="In UID mode (x-lc-uid present), Authorization must be 'Bearer <api_key>' without :oid suffix"
+            )
+
+    # Normal mode: Check for x-lc-oid or :oid suffix
+    # There are three flavors of the token determined by the UUID format:
     # 1. Just a JWT, the OID is in x-lc-oid
     # 2. A jwt:oid
     # 3. A api_key:oid
-    auth_header = auth_header.removeprefix("Bearer ").strip()
-
     if ':' not in auth_header:
-        # Case 1
+        # Case 1: JWT only, OID must be in x-lc-oid header
         oid = request.headers.get("x-lc-oid")
         if not oid:
             raise HTTPException(status_code=401, detail=f"oid missing or invalid: {oid}")
-        return auth_header, None, oid
+        return auth_header, None, oid, None
 
+    # Cases 2 & 3: auth:oid format
     auth, oid = auth_header.split(':', 1)
 
-    # Check if the auth is a UUID, if it is, then it's an api_key.
+    # Check if the auth is a UUID, if it is, then it's an api_key
     try:
         uuid.UUID(auth)
-        # Case 3
-        return None, auth, oid
+        # Case 3: API key with OID
+        return None, auth, oid, None
     except Exception:
-        # Case 2
-        return auth, None, oid
+        # Case 2: JWT with OID
+        return auth, None, oid, None
 
 def make_sdk(oid: str | None = None, token: str | None = None, api_key: str | None = None) -> limacharlie.Manager:
     if PUBLIC_MODE:
@@ -579,29 +805,56 @@ def make_sdk(oid: str | None = None, token: str | None = None, api_key: str | No
 
 # Helper to get SDK from context headers
 def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
-    """Extract auth info from context and create SDK."""
+    """
+    Extract auth info from context and create SDK.
+
+    In UID mode (x-lc-uid header present):
+      - Sets uid_auth_context_var with (uid, api_key)
+      - Returns None (wrapper will create SDK per-tool with OID)
+
+    In normal mode:
+      - Creates SDK from auth headers
+      - Returns SDK instance
+    """
     try:
         # Check if SDK already exists in context
         sdk = sdk_context_var.get()
         if sdk:
             return sdk
-        
+
         if PUBLIC_MODE:
             # Get the HTTP request from the contextvar
             request = request_context_var.get()
-            
+
             if not request:
                 return None
-            
+
             # Now try to get headers
             auth_header = request.headers.get("authorization")
-            
+
             if not auth_header or not auth_header.startswith("Bearer "):
                 return None
-                
+
             auth_header = auth_header.removeprefix("Bearer ").strip()
-            
-            # Parse the auth header (same logic as get_auth_info)
+
+            # Check for UID mode first
+            uid = request.headers.get("x-lc-uid")
+            if uid:
+                # UID mode: Set context var for wrapper to use, don't create SDK here
+                try:
+                    uuid.UUID(auth_header)
+                    # Valid API key
+                    uid_auth_context_var.set((uid, auth_header))
+                    logging.info(f"UID mode detected: uid={uid}")
+                    return None  # Wrapper will create SDK per-tool with OID
+                except Exception:
+                    logging.error(f"Invalid API key format in UID mode")
+                    return None
+
+            # Normal mode: Parse the auth header and create SDK
+            # Clear UID context var in case it was set previously
+            uid_auth_context_var.set(None)
+
             if ':' not in auth_header:
                 oid = request.headers.get("x-lc-oid")
                 if not oid:
@@ -609,7 +862,7 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                 sdk = make_sdk(oid, token=auth_header)
             else:
                 auth, oid = auth_header.split(':', 1)
-                
+
                 try:
                     uuid.UUID(auth)
                     # It's an API key
@@ -619,12 +872,13 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                     sdk = make_sdk(oid, token=auth)
         else:
             # In local mode, create SDK with default auth
+            # UID mode in STDIO is handled separately (uid_auth_context_var set at startup)
             sdk = make_sdk()
-        
+
         # Store SDK in contextvar for this request
         if sdk:
             sdk_context_var.set(sdk)
-        
+
         return sdk
     except Exception as e:
         logging.info(f"Error getting SDK from context: {e}")
@@ -635,16 +889,17 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
 # These functions are no longer needed as we're using get_sdk_from_context instead
 
 class RequestContextMiddleware:
-    """Middleware that stores the HTTP request in a contextvar."""
-    
+    """Middleware that stores the HTTP request in a contextvar and manages SDK/UID auth lifecycle."""
+
     def __init__(self, app: ASGIApp):
         self.app = app
-    
+
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] == "http":
             request = Request(scope, receive)
             request_token = request_context_var.set(request)
             sdk_token = sdk_context_var.set(None)  # Reset SDK for each request
+            uid_token = uid_auth_context_var.set(None)  # Reset UID auth for each request
             try:
                 await self.app(scope, receive, send)
             finally:
@@ -655,10 +910,11 @@ class RequestContextMiddleware:
                         sdk.shutdown()
                     except Exception:
                         pass  # Ignore cleanup errors
-                
+
                 # Reset contextvars
                 request_context_var.reset(request_token)
                 sdk_context_var.reset(sdk_token)
+                uid_auth_context_var.reset(uid_token)
         else:
             await self.app(scope, receive, send)
 
@@ -5097,6 +5353,25 @@ if __name__ == "__main__":
         logging.info("Starting LimaCharlie MCP Server in STDIO mode (local usage)")
         logging.info(f"Selected profile: {MCP_PROFILE}")
         logging.info("PUBLIC_MODE is false - using local SDK authentication")
+
+        # Check for UID mode in STDIO
+        uid = get_uid_from_environment()
+        if uid:
+            # UID mode detected - set up multi-org authentication
+            api_key = os.getenv("LC_API_KEY")
+            if not api_key:
+                logging.error("UID mode requires LC_API_KEY environment variable")
+                sys.exit(1)
+
+            logging.info(f"UID mode enabled: uid={uid}")
+            logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
+
+            # Set the UID auth context globally for STDIO mode
+            # This will be checked by the wrapper for every tool call
+            uid_auth_context_var.set((uid, api_key))
+        else:
+            # Normal mode
+            logging.info("Normal mode: Using OID from LC_OID environment variable")
 
         # Create MCP instance for the selected profile
         try:
