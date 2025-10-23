@@ -119,7 +119,7 @@ class TestUIDModeValidation:
         wrapped = wrap_tool_for_multi_mode(test_tool, is_async=False)
 
         # Set UID mode
-        uid_auth_context_var.set(("test-uid", "test-api-key"))
+        uid_auth_context_var.set(("test-uid", "test-api-key", "api_key"))
 
         try:
             # Call without oid should fail
@@ -139,7 +139,7 @@ class TestUIDModeValidation:
         wrapped = wrap_tool_for_multi_mode(test_tool, is_async=True)
 
         # Set UID mode
-        uid_auth_context_var.set(("test-uid", "test-api-key"))
+        uid_auth_context_var.set(("test-uid", "test-api-key", "api_key"))
 
         try:
             # Call without oid should fail
@@ -188,7 +188,7 @@ class TestSDKCreation:
         wrapped = wrap_tool_for_multi_mode(test_tool, is_async=False)
 
         # Set UID mode
-        uid_auth_context_var.set(("my-uid", "my-api-key"))
+        uid_auth_context_var.set(("my-uid", "my-api-key", "api_key"))
 
         try:
             result = wrapped(oid="my-oid", ctx=Mock())
@@ -214,7 +214,7 @@ class TestSDKCreation:
 
         wrapped = wrap_tool_for_multi_mode(test_tool, is_async=True)
 
-        uid_auth_context_var.set(("uid-async", "api-key-async"))
+        uid_auth_context_var.set(("uid-async", "api-key-async", "api_key"))
 
         try:
             result = await wrapped(oid="oid-async", ctx=Mock())
@@ -268,7 +268,7 @@ class TestContextIsolation:
 
         wrapped = wrap_tool_for_multi_mode(test_tool, is_async=False)
 
-        uid_auth_context_var.set(("test-uid", "test-api-key"))
+        uid_auth_context_var.set(("test-uid", "test-api-key", "api_key"))
 
         try:
             # Call with first OID
@@ -322,6 +322,7 @@ class TestHelperFunctions:
 
         mock_sdk = Mock()
         del mock_sdk._uid  # No UID attribute
+        mock_sdk.getDefaultUserId.return_value = None  # Mock method returns None
         mock_manager.return_value = mock_sdk
 
         uid = get_uid_from_environment()
@@ -421,7 +422,7 @@ class TestToolExecution:
 
         wrapped = wrap_tool_for_multi_mode(get_sensors, is_async=False)
 
-        uid_auth_context_var.set(("test-uid", "test-api-key"))
+        uid_auth_context_var.set(("test-uid", "test-api-key", "api_key"))
 
         try:
             result = wrapped(oid="test-oid", ctx=Mock())
@@ -475,7 +476,7 @@ class TestErrorHandling:
 
         wrapped = wrap_tool_for_multi_mode(test_tool, is_async=False)
 
-        uid_auth_context_var.set(("test-uid", "test-api-key"))
+        uid_auth_context_var.set(("test-uid", "test-api-key", "api_key"))
 
         try:
             # Should raise the exception from SDK creation
@@ -498,7 +499,7 @@ class TestErrorHandling:
 
         wrapped = wrap_tool_for_multi_mode(test_tool, is_async=False)
 
-        uid_auth_context_var.set(("test-uid", "test-api-key"))
+        uid_auth_context_var.set(("test-uid", "test-api-key", "api_key"))
 
         try:
             # Should complete successfully despite shutdown failure

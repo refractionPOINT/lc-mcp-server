@@ -1,3 +1,113 @@
+"""
+LimaCharlie MCP Server
+
+This server provides MCP (Model Context Protocol) access to LimaCharlie security platform
+capabilities. It supports multiple authentication modes for different use cases.
+
+AUTHENTICATION MODES
+====================
+
+The server supports three authentication modes:
+
+1. NORMAL MODE (Single Organization)
+   - Environment Variables: LC_OID, LC_API_KEY
+   - Use Case: Working with a single LimaCharlie organization
+   - Tool Behavior: Tools operate on the configured organization
+   - Configuration:
+     export LC_OID="your-organization-id"
+     export LC_API_KEY="your-api-key"
+
+2. UID MODE with API Key (Multi-Organization)
+   - Environment Variables: LC_UID, LC_API_KEY
+   - Use Case: Working across multiple organizations with API key authentication
+   - Tool Behavior: Each tool call requires an 'oid' parameter to specify the target organization
+   - Configuration:
+     export LC_UID="your-user-id"
+     export LC_API_KEY="your-api-key"
+   - Example Tool Call:
+     list_sensors(oid="org-123-456")
+
+3. UID MODE with OAuth (Multi-Organization, Recommended)
+   - Environment Variables: LC_UID, LC_CURRENT_ENV (optional)
+   - Use Case: Working across multiple organizations with OAuth authentication
+   - Tool Behavior: Each tool call requires an 'oid' parameter to specify the target organization
+   - Benefits: Automatic JWT token renewal, no need to manage API keys
+   - Configuration:
+     a) Set up OAuth credentials in ~/.limacharlie (use 'limacharlie login' CLI command)
+     b) Export LC_UID:
+        export LC_UID="your-user-id"
+     c) Optionally specify environment (defaults to "default"):
+        export LC_CURRENT_ENV="production"
+   - OAuth File Format (~/.limacharlie):
+     {
+       "default": {
+         "oid": "optional-default-org-id",
+         "uid": "your-user-id",
+         "oauth": {
+           "refresh_token": "...",
+           "api_key": "...",
+           "id_token": "...",
+           ...
+         }
+       },
+       "production": {
+         "oid": "prod-org-id",
+         "uid": "your-user-id",
+         "oauth": { ... }
+       }
+     }
+   - Example Tool Call:
+     list_sensors(oid="org-123-456")
+
+AUTHENTICATION PRECEDENCE
+=========================
+
+When LC_UID is set (UID Mode), the server determines authentication method in this order:
+1. OAuth (if credentials found in ~/.limacharlie for LC_CURRENT_ENV)
+2. API Key (if LC_API_KEY is set)
+3. Error (if neither OAuth nor API key is available)
+
+DEPLOYMENT MODES
+================
+
+STDIO Mode (Default):
+- Used with Claude Desktop or other MCP clients
+- Requires: mcp, limacharlie packages
+- Optional: google-genai (for AI-powered features)
+
+HTTP Mode (PUBLIC_MODE=true):
+- Exposes HTTP endpoints for web-based access
+- Requires: starlette, sse-starlette (in addition to STDIO requirements)
+- Use Case: Web applications, API integrations
+
+ENVIRONMENT VARIABLES REFERENCE
+===============================
+
+Authentication:
+  LC_OID              - Organization ID (Normal Mode)
+  LC_API_KEY          - API key for authentication
+  LC_UID              - User ID (enables UID Mode for multi-org)
+  LC_CURRENT_ENV      - Environment name in ~/.limacharlie (default: "default")
+
+Deployment:
+  PUBLIC_MODE         - "true" for HTTP mode, "false" for STDIO (default: "false")
+  MCP_PROFILE         - Tool profile filter: "all", "core", "ai" (default: "all")
+
+AI Features:
+  GEMINI_API_KEY      - Google Gemini API key for AI-powered tools
+
+Storage:
+  GCS_BUCKET_NAME           - Google Cloud Storage bucket for large results
+  GCS_URL_EXPIRY_HOURS      - Signed URL expiration in hours (default: 24)
+  GCS_TOKEN_THRESHOLD       - Token count threshold for GCS upload (default: 1000)
+  GCS_SIGNER_SERVICE_ACCOUNT - Service account for signing URLs
+
+Logging:
+  LLM_YAML_RETRY_COUNT - Number of retries for LLM YAML parsing (default: 10)
+
+For more information, visit: https://limacharlie.io
+"""
+
 # Core imports (always needed)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Context
@@ -55,8 +165,8 @@ request_context_var: contextvars.ContextVar = contextvars.ContextVar(
 sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
     "lc_sdk", default=None
 )
-uid_auth_context_var = contextvars.ContextVar[tuple[str, str] | None](
-    "uid_auth", default=None  # Stores (uid, api_key) when in UID mode
+uid_auth_context_var = contextvars.ContextVar[tuple[str, str | None, str] | None](
+    "uid_auth", default=None  # Stores (uid, api_key, mode) when in UID mode. mode: "oauth" or "api_key"
 )
 
 # Global registry for all tool functions (before registration)
@@ -462,10 +572,18 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
                         f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
                         f"Please specify the organization ID for this operation."
                     )
-                # Create SDK with UID + OID + API Key
-                uid, api_key = uid_auth
-                logging.info(f"UID mode: Creating SDK for oid={oid}, uid={uid}")
-                sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+                # Unpack UID auth context (uid, api_key, mode)
+                uid, api_key, mode = uid_auth
+
+                # Create SDK based on authentication mode
+                if mode == "oauth":
+                    # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
+                    logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
+                    sdk = limacharlie.Manager(oid=oid)
+                else:
+                    # API key mode
+                    logging.debug(f"API key mode: Creating SDK for oid={oid}")
+                    sdk = limacharlie.Manager(oid, secret_api_key=api_key)
 
                 # Store in context for this tool execution
                 sdk_token = sdk_context_var.set(sdk)
@@ -510,10 +628,18 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
                         f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
                         f"Please specify the organization ID for this operation."
                     )
-                # Create SDK with UID + OID + API Key
-                uid, api_key = uid_auth
-                logging.info(f"UID mode: Creating SDK for oid={oid}, uid={uid}")
-                sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+                # Unpack UID auth context (uid, api_key, mode)
+                uid, api_key, mode = uid_auth
+
+                # Create SDK based on authentication mode
+                if mode == "oauth":
+                    # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
+                    logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
+                    sdk = limacharlie.Manager(oid=oid)
+                else:
+                    # API key mode
+                    logging.debug(f"API key mode: Creating SDK for oid={oid}")
+                    sdk = limacharlie.Manager(oid, secret_api_key=api_key)
 
                 # Store in context for this tool execution
                 sdk_token = sdk_context_var.set(sdk)
@@ -682,6 +808,48 @@ def create_mcp_for_profile(profile_name: str) -> FastMCP:
 
     return profile_mcp
 
+def get_auth_from_sdk_config() -> tuple[str | None, str | None, dict | None]:
+    """
+    Load authentication credentials from SDK config file (~/.limacharlie).
+
+    Returns:
+        tuple: (uid, api_key, oauth_creds)
+        - uid: User ID from config (if present)
+        - api_key: API key from config (if present)
+        - oauth_creds: OAuth credentials dict (if present)
+            {
+                'id_token': str,
+                'refresh_token': str,
+                'expires_at': int,
+                'provider': str
+            }
+
+    Uses LC_CURRENT_ENV environment variable to select environment (default: 'default').
+    Returns (None, None, None) if SDK config not found or cannot be loaded.
+    """
+    try:
+        from limacharlie import _getEnvironmentCreds
+        env_name = os.getenv("LC_CURRENT_ENV", "default")
+        logging.debug(f"Loading credentials from SDK config environment: {env_name}")
+
+        oid, uid, api_key, oauth_creds = _getEnvironmentCreds(env_name)
+
+        if oauth_creds:
+            logging.debug(f"Found OAuth credentials in SDK config (provider: {oauth_creds.get('provider', 'unknown')})")
+        elif api_key:
+            logging.debug("Found API key in SDK config")
+
+        return uid, api_key, oauth_creds
+    except FileNotFoundError:
+        logging.debug("SDK config file (~/.limacharlie) not found")
+        return None, None, None
+    except KeyError as e:
+        logging.debug(f"Environment '{os.getenv('LC_CURRENT_ENV', 'default')}' not found in SDK config: {e}")
+        return None, None, None
+    except Exception as e:
+        logging.debug(f"Could not load SDK config: {e}")
+        return None, None, None
+
 def get_uid_from_environment() -> str | None:
     """
     Get UID from environment variables or SDK defaults.
@@ -723,7 +891,7 @@ def get_uid_from_environment() -> str | None:
 
     return None
 
-def validate_oid_parameter(oid: Any, uid_mode: bool, tool_name: str) -> None:
+def validate_oid_parameter(oid: Any, uid_mode: bool, tool_name: str, mode: str | None = None) -> None:
     """
     Validate oid parameter based on mode.
 
@@ -731,14 +899,16 @@ def validate_oid_parameter(oid: Any, uid_mode: bool, tool_name: str) -> None:
         oid: The oid parameter value
         uid_mode: True if in UID mode, False otherwise
         tool_name: Name of the tool (for error messages)
+        mode: Authentication mode ("oauth" or "api_key") for better error messages
 
     Raises:
         ValueError: If oid parameter is invalid for the mode
     """
     if uid_mode:
         if oid is None:
+            mode_info = f" (auth mode: {mode})" if mode else ""
             raise ValueError(
-                f"Tool {tool_name}: 'oid' parameter is required in UID mode. "
+                f"Tool {tool_name}: 'oid' parameter is required in UID mode{mode_info}. "
                 f"Please specify the organization ID for this operation."
             )
     else:
@@ -5388,18 +5558,46 @@ if __name__ == "__main__":
         # Check for UID mode in STDIO
         uid = get_uid_from_environment()
         if uid:
-            # UID mode detected - set up multi-org authentication
-            api_key = os.getenv("LC_API_KEY")
-            if not api_key:
-                logging.error("UID mode requires LC_API_KEY environment variable")
+            # UID mode detected - check for OAuth or API key authentication
+            api_key_env = os.getenv("LC_API_KEY")
+
+            # Try to load credentials from SDK config (~/.limacharlie)
+            uid_sdk, api_key_sdk, oauth_creds = get_auth_from_sdk_config()
+
+            # OAuth takes precedence over API key (matches SDK behavior)
+            if oauth_creds:
+                logging.info(f"OAuth mode enabled: uid={uid}")
+                logging.info(f"Using OAuth environment: {os.getenv('LC_CURRENT_ENV', 'default')}")
+                logging.info(f"OAuth provider: {oauth_creds.get('provider', 'unknown')}")
+                logging.info("JWT will be automatically renewed by SDK")
+                logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
+
+                # Set OAuth as global for SDK to use
+                import limacharlie
+                limacharlie.GLOBAL_OAUTH = oauth_creds
+
+                # Store in context with mode indicator
+                uid_auth_context_var.set((uid, None, "oauth"))
+
+            elif api_key_env or api_key_sdk:
+                # API key mode (prefer explicit env var over config)
+                api_key = api_key_env or api_key_sdk
+                source = "environment variable" if api_key_env else "SDK config"
+                logging.info(f"UID mode with API key: uid={uid} (source: {source})")
+                logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
+
+                # Store in context with mode indicator
+                uid_auth_context_var.set((uid, api_key, "api_key"))
+
+            else:
+                logging.error("UID mode requires authentication credentials.")
+                logging.error("Please provide one of the following:")
+                logging.error("  1. OAuth credentials in ~/.limacharlie (recommended)")
+                logging.error("     Run: limacharlie login")
+                logging.error("  2. LC_API_KEY environment variable")
+                logging.error("")
+                logging.error(f"Current LC_CURRENT_ENV: {os.getenv('LC_CURRENT_ENV', 'default')}")
                 sys.exit(1)
-
-            logging.info(f"UID mode enabled: uid={uid}")
-            logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
-
-            # Set the UID auth context globally for STDIO mode
-            # This will be checked by the wrapper for every tool call
-            uid_auth_context_var.set((uid, api_key))
         else:
             # Normal mode
             logging.info("Normal mode: Using OID from LC_OID environment variable")
