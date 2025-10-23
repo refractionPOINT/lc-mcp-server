@@ -73,7 +73,7 @@ class TestToolWrapperSignature:
         # Check oid parameter details
         oid_param = sig.parameters['oid']
         assert oid_param.default is None
-        assert oid_param.kind == inspect.Parameter.KEYWORD_ONLY
+        assert oid_param.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
 
     def test_wrapper_adds_oid_parameter_async(self):
         """Test that oid parameter is added to async function signature"""

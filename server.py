@@ -1,9 +1,7 @@
-from starlette.exceptions import HTTPException
+# Core imports (always needed)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Context
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, RedirectResponse
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import limacharlie
 import limacharlie.Replay
 import json
@@ -22,11 +20,17 @@ import logging
 import sys
 import contextvars
 import contextlib
-from starlette.types import ASGIApp, Receive, Scope, Send
 import shlex
 from datetime import datetime, timedelta
 import functools
 import tempfile
+
+# Type hints only (for IDE/type checkers, not runtime)
+if TYPE_CHECKING:
+    from starlette.exceptions import HTTPException
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response, RedirectResponse
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 # Try to import GCS libraries if available
 try:
@@ -45,7 +49,7 @@ except ImportError:
 SDK_THREAD_POOL = ThreadPoolExecutor(max_workers=100, thread_name_prefix="sdk-worker")
 
 # Create contextvars to store the current HTTP request and SDK
-request_context_var = contextvars.ContextVar[Request | None](
+request_context_var: contextvars.ContextVar = contextvars.ContextVar(
     "http_request", default=None
 )
 sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
@@ -69,6 +73,26 @@ GCS_TOKEN_THRESHOLD = int(os.getenv("GCS_TOKEN_THRESHOLD", "1000"))  # Default: 
 GCS_SIGNER_SERVICE_ACCOUNT = os.getenv("GCS_SIGNER_SERVICE_ACCOUNT", "mcp-server@lc-api.iam.gserviceaccount.com")
 # PUBLIC_MODE determines whether to use HTTP header auth (true) or local SDK auth (false)
 PUBLIC_MODE = os.getenv("PUBLIC_MODE", "false").lower() == "true"
+
+# Conditional imports for HTTP mode (PUBLIC_MODE)
+# In STDIO mode, starlette is not needed and may not be installed
+if PUBLIC_MODE:
+    from starlette.exceptions import HTTPException
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response, RedirectResponse
+    from starlette.types import ASGIApp, Receive, Scope, Send
+else:
+    # Placeholders for STDIO mode (not used at runtime)
+    HTTPException = None  # type: ignore
+    Request = None  # type: ignore
+    JSONResponse = None  # type: ignore
+    Response = None  # type: ignore
+    RedirectResponse = None  # type: ignore
+    ASGIApp = None  # type: ignore
+    Receive = None  # type: ignore
+    Scope = None  # type: ignore
+    Send = None  # type: ignore
+
 # Profile selection for filtering tools (default: "all" for backward compatibility)
 MCP_PROFILE = os.getenv("MCP_PROFILE", "all").lower()
 # LLM retry configuration
@@ -405,13 +429,20 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
     params = list(sig.parameters.values())
 
     # Insert oid parameter before ctx (which is always the last parameter)
+    # Use POSITIONAL_OR_KEYWORD to maintain compatibility with parameter ordering
     oid_param = inspect.Parameter(
         'oid',
-        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
         default=None,
         annotation=str | None
     )
     params.insert(-1, oid_param)  # Insert before last parameter (ctx)
+
+    # Ensure ctx parameter has a default value to avoid "non-default after default" error
+    # FastMCP injects ctx automatically, so it's safe to give it a default
+    if params[-1].default == inspect.Parameter.empty:
+        params[-1] = params[-1].replace(default=None)
+
     new_sig = sig.replace(parameters=params)
 
     if is_async:
@@ -732,7 +763,7 @@ def test_tool(ctx: Context) -> dict[str, Any]:
     }
 
 # Dependency: Extract Bearer token from the request
-async def get_auth_info(request: Request) -> tuple[str | None, str | None, str | None, str | None]:
+async def get_auth_info(request: "Request") -> tuple[str | None, str | None, str | None, str | None]:
     """
     Extract authentication info from request headers.
 
@@ -891,12 +922,12 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
 class RequestContextMiddleware:
     """Middleware that stores the HTTP request in a contextvar and manages SDK/UID auth lifecycle."""
 
-    def __init__(self, app: ASGIApp):
+    def __init__(self, app: "ASGIApp"):
         self.app = app
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send"):
         if scope["type"] == "http":
-            request = Request(scope, receive)
+            request = Request(scope, receive)  # type: ignore
             request_token = request_context_var.set(request)
             sdk_token = sdk_context_var.set(None)  # Reset SDK for each request
             uid_token = uid_auth_context_var.set(None)  # Reset UID auth for each request
