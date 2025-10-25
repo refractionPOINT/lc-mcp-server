@@ -420,6 +420,8 @@ PROFILES = {
         # Organization
         "get_org_info",
         "get_usage_stats",
+        "get_org_errors",
+        "dismiss_org_error",
     },
 }
 
@@ -3782,6 +3784,72 @@ def get_org_info(ctx: Context) -> dict[str, Any]:
         return {"error": str(e)}
     finally:
         logging.info(f"get_org_info time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_org_errors(ctx: Context) -> dict[str, Any]:
+    """Get error logs for the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "errors" (list): List of error objects, each with component, error message, oid, and timestamp
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_org_errors()")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Make API call to get errors
+        result = sdk._apiCall('errors/%s' % sdk._oid, 'GET', {})
+        errors = result.get('errors', [])
+
+        return {"errors": errors}
+
+    except Exception as e:
+        logging.info(f"Error in get_org_errors: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_org_errors time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def dismiss_org_error(component: str, ctx: Context) -> dict[str, Any]:
+    """Dismiss a specific error for the organization
+
+    Args:
+        component (str): Component name of the error to dismiss
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "success" (bool): True if deletion was successful
+            - "message" (str): Status message
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: dismiss_org_error(component={json.dumps(component)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Make API call to dismiss error
+        sdk._apiCall('errors/%s/%s' % (sdk._oid, component), 'DELETE', {})
+
+        return {
+            "success": True,
+            "message": f"Error for component '{component}' dismissed successfully"
+        }
+
+    except Exception as e:
+        logging.info(f"Error in dismiss_org_error: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"dismiss_org_error time: {time.time() - start} seconds")
 
 
 @mcp_tool_with_gcs()
