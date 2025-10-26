@@ -12,6 +12,7 @@ Integrates with Firebase Auth for actual authentication.
 """
 
 import hashlib
+import hmac
 import base64
 import logging
 import urllib.parse
@@ -495,8 +496,9 @@ class OAuthEndpoints:
         # Base64-URL encode without padding
         computed_challenge = base64.urlsafe_b64encode(verifier_hash).decode('utf-8').rstrip('=')
 
-        # Compare with stored challenge
-        return computed_challenge == code_challenge
+        # SECURITY: Use constant-time comparison to prevent timing attacks
+        # This prevents attackers from using timing analysis to brute-force the code verifier
+        return hmac.compare_digest(computed_challenge, code_challenge)
 
     async def handle_token(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
