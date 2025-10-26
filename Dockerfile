@@ -35,7 +35,7 @@ COPY server.py .
 COPY prompts/ ./prompts/
 
 # Copy OAuth modules (optional, enabled via MCP_OAUTH_ENABLED env var)
-COPY oauth_*.py ./
+COPY oauth_*.py firebase_auth_bridge.py ./
 
 # Expose the application port
 EXPOSE 8080
