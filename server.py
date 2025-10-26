@@ -1169,7 +1169,13 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
 
                     logging.error(f"OAuth mode enabled via MCP OAuth token for UID: {uid}")
                     logging.error(f"Set GLOBAL_OAUTH with id_token: {token_info['firebase_id_token'][:50]}...")
-                    return None  # Wrapper will create SDK per-tool with OID
+
+                    # Create SDK immediately since wrapper isn't executing in FastMCP context
+                    # SDK will use GLOBAL_OAUTH tokens automatically
+                    sdk = limacharlie.Manager(uid=uid)
+                    sdk_context_var.set(sdk)
+                    logging.error(f"Created SDK for user-level OAuth operation: {sdk}")
+                    return sdk
 
             # Check for UID mode first
             uid = request.headers.get("x-lc-uid")
