@@ -3943,11 +3943,17 @@ def list_user_orgs(ctx: Context) -> dict[str, Any]:
             - "error" (str): On failure, an error message string
     """
     start = time.time()
-    logging.info(f"Tool called: list_user_orgs()")
+    logging.error(f"=== list_user_orgs called ===")
+    logging.error(f"Context: {ctx}")
+    logging.error(f"uid_auth_context_var.get(): {uid_auth_context_var.get()}")
+    logging.error(f"sdk_context_var.get(): {sdk_context_var.get()}")
+    logging.error(f"request_context_var.get(): {request_context_var.get()}")
 
     try:
         sdk = get_sdk_from_context(ctx)
+        logging.error(f"get_sdk_from_context returned: {sdk}")
         if sdk is None:
+            logging.error("SDK is None, returning error")
             return {"error": "No authentication provided"}
 
         # Call the user-level API to get all accessible orgs
