@@ -204,8 +204,10 @@ class OAuthEndpoints:
         )
 
         # Build OAuth callback URL (our server will receive this)
+        # NOTE: Firebase doesn't allow "state" as a query parameter in continueUri
+        # because it's a reserved OAuth parameter. We'll use session_id to track state instead.
         server_url = self.metadata_provider.server_url
-        oauth_callback_url = f"{server_url}/oauth/callback?state={auth_req.state}"
+        oauth_callback_url = f"{server_url}/oauth/callback"
 
         try:
             # Initiate Firebase auth flow
@@ -216,12 +218,18 @@ class OAuthEndpoints:
                 scopes=("openid", "email", "profile")
             )
 
-            # Store session_id with state for callback
-            # We'll use this to complete the Firebase auth
+            # Store bidirectional mapping between session_id and OAuth state
+            # We need this to reconnect the Firebase callback with the OAuth flow
             self.state_manager.redis_client.setex(
                 f"oauth:session:{auth_req.state}",
                 600,  # 10 minutes
                 session_id
+            )
+            # Also store reverse mapping (session_id -> state)
+            self.state_manager.redis_client.setex(
+                f"oauth:state:{session_id}",
+                600,  # 10 minutes
+                auth_req.state
             )
 
             logging.info(f"Created Firebase auth URI for state {auth_req.state[:20]}...")
@@ -248,7 +256,7 @@ class OAuthEndpoints:
         We exchange the callback for Firebase tokens, then redirect back to client.
 
         Args:
-            params: Callback parameters (includes code, state, etc.)
+            params: Callback parameters from Firebase (includes provider response data)
 
         Returns:
             Redirect URL to send user back to client application
@@ -256,23 +264,40 @@ class OAuthEndpoints:
         Raises:
             OAuthError: If callback is invalid
         """
-        state = params.get('state')
+        # Firebase doesn't pass state in callback since we didn't include it in continueUri
+        # Instead, we need to extract the session_id from the Firebase response and look up state
+
+        # The callback should contain Firebase's response which includes state or session info
+        # We'll look for sessionId in the params or extract it from the provider response
+
+        # Build callback path for Firebase
+        callback_path = "?" + urllib.parse.urlencode(params)
+
+        # Extract session info from Firebase callback
+        # Firebase includes this in the redirect URL or as a parameter
+        session_id = params.get('sessionId')
+        if not session_id:
+            # Try to extract from other Firebase parameters
+            logging.error(f"No sessionId in callback params: {list(params.keys())}")
+            raise OAuthError('invalid_request', 'Missing session information in callback')
+
+        # Look up OAuth state using session_id
+        state_key = f"oauth:state:{session_id}"
+        state = self.state_manager.redis_client.get(state_key)
         if not state:
-            raise OAuthError('invalid_request', 'Missing state parameter in callback')
+            raise OAuthError('invalid_request', 'Invalid or expired session')
+
+        if isinstance(state, bytes):
+            state = state.decode('utf-8')
 
         # Retrieve OAuth state
         oauth_state = self.state_manager.consume_oauth_state(state)
         if not oauth_state:
             raise OAuthError('invalid_request', 'Invalid or expired state parameter')
 
-        # Retrieve Firebase session ID
-        session_key = f"oauth:session:{state}"
-        session_id = self.state_manager.redis_client.get(session_key)
-        if not session_id:
-            raise OAuthError('server_error', 'Missing Firebase session data')
-
-        # Delete session ID (single-use)
-        self.state_manager.redis_client.delete(session_key)
+        # Clean up session mappings (single-use)
+        self.state_manager.redis_client.delete(f"oauth:session:{state}")
+        self.state_manager.redis_client.delete(state_key)
 
         try:
             # Build callback URL for Firebase
