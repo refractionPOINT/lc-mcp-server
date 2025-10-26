@@ -187,6 +187,8 @@ GCS_TOKEN_THRESHOLD = int(os.getenv("GCS_TOKEN_THRESHOLD", "1000"))  # Default: 
 GCS_SIGNER_SERVICE_ACCOUNT = os.getenv("GCS_SIGNER_SERVICE_ACCOUNT", "mcp-server@lc-api.iam.gserviceaccount.com")
 # PUBLIC_MODE determines whether to use HTTP header auth (true) or local SDK auth (false)
 PUBLIC_MODE = os.getenv("PUBLIC_MODE", "false").lower() == "true"
+# MCP_OAUTH_ENABLED determines whether to enable MCP OAuth 2.1 flow
+MCP_OAUTH_ENABLED = os.getenv("MCP_OAUTH_ENABLED", "false").lower() == "true"
 
 # Conditional imports for HTTP mode (PUBLIC_MODE)
 # In STDIO mode, starlette is not needed and may not be installed
@@ -206,6 +208,48 @@ else:
     Receive = None  # type: ignore
     Scope = None  # type: ignore
     Send = None  # type: ignore
+
+# Conditional imports for MCP OAuth (requires PUBLIC_MODE and MCP_OAUTH_ENABLED)
+if PUBLIC_MODE and MCP_OAUTH_ENABLED:
+    try:
+        from oauth_state_manager import OAuthStateManager
+        from oauth_token_manager import OAuthTokenManager, get_token_manager
+        from oauth_endpoints import OAuthEndpoints, OAuthError, get_oauth_endpoints
+        from oauth_metadata import OAuthMetadataProvider, get_metadata_provider
+        from firebase_auth_bridge import FirebaseAuthBridge, FirebaseAuthError
+
+        # Initialize OAuth components
+        oauth_state_manager = OAuthStateManager()
+        oauth_token_manager = get_token_manager()
+        oauth_endpoints = get_oauth_endpoints()
+        oauth_metadata_provider = get_metadata_provider()
+
+        logging.info("MCP OAuth 2.1 support enabled")
+        logging.info(f"OAuth server URL: {oauth_metadata_provider.server_url}")
+
+        # Test Redis connection
+        if not oauth_state_manager.ping():
+            logging.error("Redis connection failed! OAuth will not work properly.")
+            logging.error("Please ensure Redis is running and REDIS_URL is correct.")
+        else:
+            logging.info(f"Redis connection successful: {oauth_state_manager.redis_url}")
+
+    except ImportError as e:
+        logging.error(f"Failed to import OAuth modules: {e}")
+        logging.error("MCP OAuth requires: redis, hiredis")
+        logging.error("Install with: pip install redis hiredis")
+        MCP_OAUTH_ENABLED = False
+    except Exception as e:
+        logging.error(f"Failed to initialize OAuth components: {e}")
+        import traceback
+        traceback.print_exc()
+        MCP_OAUTH_ENABLED = False
+else:
+    # Placeholders
+    oauth_state_manager = None
+    oauth_token_manager = None
+    oauth_endpoints = None
+    oauth_metadata_provider = None
 
 # Profile selection for filtering tools (default: "all" for backward compatibility)
 MCP_PROFILE = os.getenv("MCP_PROFILE", "all").lower()
@@ -1096,6 +1140,29 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
 
             auth_header = auth_header.removeprefix("Bearer ").strip()
 
+            # Check if this is an MCP OAuth token
+            if MCP_OAUTH_ENABLED and oauth_token_manager:
+                # Try to validate as OAuth access token
+                token_info = oauth_token_manager.get_token_info_for_request(auth_header)
+                if token_info:
+                    # Valid OAuth token - set UID auth context
+                    uid = token_info['uid']
+                    logging.info(f"Valid OAuth access token for UID: {uid}")
+
+                    # Set UID auth context in OAuth mode
+                    uid_auth_context_var.set((uid, None, "oauth"))
+
+                    # Set Firebase tokens for SDK to use
+                    import limacharlie
+                    limacharlie.GLOBAL_OAUTH = {
+                        'id_token': token_info['firebase_id_token'],
+                        'refresh_token': token_info['firebase_refresh_token'],
+                        'provider': 'google'
+                    }
+
+                    logging.info("OAuth mode enabled via MCP OAuth token")
+                    return None  # Wrapper will create SDK per-tool with OID
+
             # Check for UID mode first
             uid = request.headers.get("x-lc-uid")
             if uid:
@@ -1152,6 +1219,26 @@ class RequestContextMiddleware:
 
     def __init__(self, app: "ASGIApp"):
         self.app = app
+
+    def _send_oauth_challenge(self, send, scope, error=None, error_description=None):
+        """Send 401 response with WWW-Authenticate header for OAuth"""
+        if MCP_OAUTH_ENABLED and oauth_metadata_provider:
+            www_authenticate = oauth_metadata_provider.generate_www_authenticate_header(
+                error=error,
+                error_description=error_description,
+                scope="limacharlie:read limacharlie:write"
+            )
+        else:
+            www_authenticate = 'Bearer realm="LimaCharlie MCP Server"'
+
+        # Send 401 response with WWW-Authenticate header
+        response = Response(
+            content=json.dumps({"error": error or "unauthorized", "error_description": error_description or "Authentication required"}),
+            status_code=401,
+            media_type="application/json",
+            headers={"WWW-Authenticate": www_authenticate}
+        )
+        return response(scope, receive, send)
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send"):
         if scope["type"] == "http":
@@ -5865,6 +5952,149 @@ if PUBLIC_MODE:
     from starlette.routing import Route, Mount as StarletteMount
     from starlette.datastructures import URL
     routes = []
+
+    # Add MCP OAuth endpoints if enabled
+    if MCP_OAUTH_ENABLED and oauth_endpoints and oauth_metadata_provider:
+        logging.info("Adding MCP OAuth 2.1 endpoints")
+
+        # OAuth 2.1 endpoints
+        async def handle_authorize_endpoint(request: Request):
+            """GET /authorize - Authorization endpoint"""
+            try:
+                params = dict(request.query_params)
+                result = await oauth_endpoints.handle_authorize(params)
+                # Redirect user to Firebase OAuth URL
+                return RedirectResponse(url=result['redirect_url'], status_code=302)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Authorization endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_oauth_callback_endpoint(request: Request):
+            """GET /oauth/callback - OAuth callback from Firebase"""
+            try:
+                params = dict(request.query_params)
+                redirect_url = await oauth_endpoints.handle_oauth_callback(params)
+                return RedirectResponse(url=redirect_url, status_code=302)
+            except OAuthError as e:
+                # Return error page or redirect with error
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"OAuth callback error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_token_endpoint(request: Request):
+            """POST /token - Token endpoint"""
+            try:
+                body = await request.body()
+                # Parse form data
+                import urllib.parse
+                params = dict(urllib.parse.parse_qsl(body.decode('utf-8')))
+                result = await oauth_endpoints.handle_token(params)
+                return JSONResponse(result)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Token endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_register_endpoint(request: Request):
+            """POST /register - Dynamic client registration"""
+            try:
+                params = await request.json()
+                result = await oauth_endpoints.handle_register(params)
+                return JSONResponse(result, status_code=201)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Registration endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_revoke_endpoint(request: Request):
+            """POST /revoke - Token revocation"""
+            try:
+                body = await request.body()
+                import urllib.parse
+                params = dict(urllib.parse.parse_qsl(body.decode('utf-8')))
+                await oauth_endpoints.handle_revoke(params)
+                return JSONResponse({})
+            except Exception as e:
+                logging.error(f"Revocation endpoint error: {e}")
+                # OAuth spec says revocation always returns 200
+                return JSONResponse({})
+
+        async def handle_introspect_endpoint(request: Request):
+            """POST /introspect - Token introspection"""
+            try:
+                body = await request.body()
+                import urllib.parse
+                params = dict(urllib.parse.parse_qsl(body.decode('utf-8')))
+                result = await oauth_endpoints.handle_introspect(params)
+                return JSONResponse(result)
+            except Exception as e:
+                logging.error(f"Introspection endpoint error: {e}")
+                return JSONResponse({"active": False})
+
+        async def handle_oauth_metadata_endpoint(request: Request):
+            """GET /.well-known/oauth-protected-resource - Protected resource metadata"""
+            try:
+                metadata = oauth_metadata_provider.get_protected_resource_metadata()
+                return JSONResponse(metadata)
+            except Exception as e:
+                logging.error(f"Metadata endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error"},
+                    status_code=500
+                )
+
+        async def handle_oauth_authz_metadata_endpoint(request: Request):
+            """GET /.well-known/oauth-authorization-server - Authorization server metadata"""
+            try:
+                metadata = oauth_metadata_provider.get_authorization_server_metadata()
+                return JSONResponse(metadata)
+            except Exception as e:
+                logging.error(f"Authorization server metadata endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error"},
+                    status_code=500
+                )
+
+        # Add OAuth routes
+        routes.append(Route("/authorize", handle_authorize_endpoint, methods=["GET"]))
+        routes.append(Route("/oauth/callback", handle_oauth_callback_endpoint, methods=["GET"]))
+        routes.append(Route("/token", handle_token_endpoint, methods=["POST"]))
+        routes.append(Route("/register", handle_register_endpoint, methods=["POST"]))
+        routes.append(Route("/revoke", handle_revoke_endpoint, methods=["POST"]))
+        routes.append(Route("/introspect", handle_introspect_endpoint, methods=["POST"]))
+        routes.append(Route("/.well-known/oauth-protected-resource", handle_oauth_metadata_endpoint, methods=["GET"]))
+        routes.append(Route("/.well-known/oauth-authorization-server", handle_oauth_authz_metadata_endpoint, methods=["GET"]))
+
+        logging.info("MCP OAuth endpoints registered")
 
     # Add profile-specific endpoints (mount with trailing slash only)
     for profile, profile_mcp in profile_mcps.items():

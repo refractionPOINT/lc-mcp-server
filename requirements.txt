@@ -14,6 +14,10 @@ openai
 # For GCS storage of large results
 google-cloud-storage
 
+# For MCP OAuth state management
+redis>=5.0.0
+hiredis>=2.0.0
+
 # Testing
 pytest
 pytest-asyncio
