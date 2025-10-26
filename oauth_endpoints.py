@@ -233,7 +233,9 @@ class OAuthEndpoints:
                 auth_req.state
             )
 
-            logging.info(f"Created Firebase auth URI for state {auth_req.state[:20]}...")
+            logging.info(f"Created Firebase auth URI for OAuth state: {auth_req.state[:20]}...")
+            logging.info(f"Firebase session_id: {session_id[:20]}...")
+            logging.info(f"Stored Redis key: oauth:state:{session_id[:20]}...")
 
             # Return the Firebase auth URL for user to visit
             return {
@@ -272,12 +274,21 @@ class OAuthEndpoints:
             raise OAuthError('invalid_request', 'Missing Firebase session in callback')
 
         session_id = firebase_state
+        logging.info(f"OAuth callback received with Firebase session_id: {session_id[:20]}...")
 
         # Look up our OAuth state using Firebase's session_id (reverse mapping)
         state_key = f"oauth:state:{session_id}"
+        logging.info(f"Looking up Redis key: {state_key[:40]}...")
+
         oauth_state_value = self.state_manager.redis_client.get(state_key)
         if not oauth_state_value:
+            # Debug: check what keys exist in Redis
+            all_keys = self.state_manager.redis_client.keys("oauth:state:*")
             logging.error(f"No OAuth state found for Firebase session: {session_id[:20]}...")
+            logging.error(f"Looking for key: {state_key[:60]}...")
+            logging.error(f"Found {len(all_keys)} oauth:state:* keys in Redis")
+            if all_keys:
+                logging.error(f"Sample keys: {[k.decode() if isinstance(k, bytes) else k for k in all_keys[:3]]}")
             logging.error(f"Available callback params: {list(params.keys())}")
             raise OAuthError('invalid_request', 'Invalid or expired session')
 
