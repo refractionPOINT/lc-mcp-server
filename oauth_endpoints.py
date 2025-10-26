@@ -15,11 +15,12 @@ import hashlib
 import base64
 import logging
 import urllib.parse
+import json
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
 from firebase_auth_bridge import FirebaseAuthBridge, FirebaseAuthError, get_firebase_bridge
-from oauth_state_manager import OAuthStateManager
+from oauth_state_manager import OAuthStateManager, OAuthState
 from oauth_token_manager import OAuthTokenManager, get_token_manager
 from oauth_metadata import get_metadata_provider, validate_scope, filter_scope_to_supported
 
@@ -312,12 +313,22 @@ class OAuthEndpoints:
 
         logging.error(f"OAuth callback received with Firebase state: {firebase_state[:50]}...")
 
-        # Look up our OAuth state using Firebase's state (reverse mapping)
+        # Build Redis keys for atomic lookup
         state_key = f"oauth:state:{firebase_state}"
-        logging.error(f"Looking up Redis key: {state_key[:60]}...")
+        session_key = f"oauth:fbsession:{firebase_state}"
+        # oauth_state_key will be built once we get the state value
 
-        oauth_state_value = self.state_manager.redis_client.get(state_key)
-        if not oauth_state_value:
+        logging.error(f"Looking up Redis keys atomically...")
+
+        # SECURITY: Atomically retrieve and delete state mappings to prevent TOCTOU race
+        # This ensures single-use of authorization state/session even under concurrent requests
+        oauth_state_value, session_id, _ = self.state_manager.atomic_consume_oauth_state_and_mappings(
+            state_key=state_key,
+            session_key=session_key,
+            oauth_state_key=f"oauth:state:{firebase_state}"  # Dummy for now, will get actual state below
+        )
+
+        if not oauth_state_value or not session_id:
             # Debug: check what keys exist in Redis
             all_keys = self.state_manager.redis_client.keys("oauth:state:*")
             logging.error(f"No OAuth state found for Firebase state: {firebase_state[:50]}...")
@@ -326,33 +337,29 @@ class OAuthEndpoints:
             if all_keys:
                 logging.error(f"Sample keys: {[k.decode() if isinstance(k, bytes) else k for k in all_keys[:3]]}")
             logging.error(f"Available callback params: {list(params.keys())}")
-            raise OAuthError('invalid_request', 'Invalid or expired session')
-
-        # Retrieve the actual session_id needed for signInWithIdp
-        session_key = f"oauth:fbsession:{firebase_state}"
-        session_id_bytes = self.state_manager.redis_client.get(session_key)
-        if not session_id_bytes:
-            logging.error(f"No session_id found for Firebase state: {firebase_state[:50]}...")
-            raise OAuthError('invalid_request', 'Invalid or expired Firebase session')
-
-        session_id = session_id_bytes.decode('utf-8') if isinstance(session_id_bytes, bytes) else session_id_bytes
-        logging.error(f"Retrieved session_id: {session_id}")
-
-        if isinstance(oauth_state_value, bytes):
-            oauth_state_value = oauth_state_value.decode('utf-8')
+            raise OAuthError('invalid_request', 'Invalid or expired session (possibly reused)')
 
         state = oauth_state_value
-        logging.info(f"Matched Firebase session to OAuth state: {state[:20]}...")
+        logging.info(f"Atomically consumed Firebase session for OAuth state: {state[:20]}...")
+        logging.error(f"Retrieved session_id: {session_id}")
 
-        # Retrieve and consume OAuth state
-        oauth_state = self.state_manager.consume_oauth_state(state)
-        if not oauth_state:
+        # Now atomically consume the actual OAuth state object
+        oauth_state_key = f"{self.state_manager.STATE_PREFIX}{state}"
+        oauth_state_data = self.state_manager.atomic_get_and_delete(keys=[oauth_state_key])
+
+        if not oauth_state_data or oauth_state_data[0] is None:
+            logging.error(f"OAuth state object not found: {state[:20]}...")
             raise OAuthError('invalid_request', 'Invalid or expired OAuth state')
 
-        # Clean up all three mappings (single-use)
-        self.state_manager.redis_client.delete(f"oauth:session:{state}")
-        self.state_manager.redis_client.delete(state_key)
-        self.state_manager.redis_client.delete(session_key)
+        # Deserialize OAuth state
+        try:
+            oauth_state_json = oauth_state_data[0]
+            if isinstance(oauth_state_json, bytes):
+                oauth_state_json = oauth_state_json.decode('utf-8')
+            oauth_state = OAuthState.from_dict(json.loads(oauth_state_json))
+        except Exception as e:
+            logging.error(f"Failed to deserialize OAuth state: {e}")
+            raise OAuthError('invalid_request', 'Invalid OAuth state format')
 
         try:
             # Build callback URL for Firebase

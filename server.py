@@ -166,8 +166,8 @@ request_context_var: contextvars.ContextVar = contextvars.ContextVar(
 sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
     "lc_sdk", default=None
 )
-uid_auth_context_var = contextvars.ContextVar[tuple[str, str | None, str] | None](
-    "uid_auth", default=None  # Stores (uid, api_key, mode) when in UID mode. mode: "oauth" or "api_key"
+uid_auth_context_var = contextvars.ContextVar[tuple[str, str | None, str, dict | None] | None](
+    "uid_auth", default=None  # Stores (uid, api_key, mode, oauth_creds) when in UID mode. mode: "oauth" or "api_key"
 )
 current_oid_context_var = contextvars.ContextVar[str | None](
     "current_oid", default=None  # Stores the current OID for nested calls in UID mode
@@ -633,8 +633,8 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                # Unpack UID auth context (uid, api_key, mode)
-                uid, api_key, mode = uid_auth
+                # Unpack UID auth context (uid, api_key, mode, oauth_creds)
+                uid, api_key, mode, oauth_creds = uid_auth
 
                 if requires_oid:
                     # Org-level tool: require OID and create SDK with OID
@@ -646,9 +646,9 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
                     # Create SDK based on authentication mode
                     if mode == "oauth":
-                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                        logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
-                        sdk = limacharlie.Manager(oid=oid)
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for oid={oid} with explicit credentials")
+                        sdk = limacharlie.Manager(oid=oid, oauth_creds=oauth_creds)
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for oid={oid}")
@@ -656,17 +656,15 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
                 else:
                     # User-level tool: create SDK with UID only (no OID)
                     if mode == "oauth":
-                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                        logging.error(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
-                        sdk = limacharlie.Manager(uid=uid)
-                        logging.error(f"Created SDK: {sdk}")
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid}) with explicit credentials")
+                        sdk = limacharlie.Manager(uid=uid, oauth_creds=oauth_creds)
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
                         sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
-                logging.error(f"Storing SDK in context: {sdk}")
                 sdk_token = sdk_context_var.set(sdk)
                 oid_token = current_oid_context_var.set(oid) if oid else None
                 try:
@@ -707,8 +705,8 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                # Unpack UID auth context (uid, api_key, mode)
-                uid, api_key, mode = uid_auth
+                # Unpack UID auth context (uid, api_key, mode, oauth_creds)
+                uid, api_key, mode, oauth_creds = uid_auth
 
                 if requires_oid:
                     # Org-level tool: require OID and create SDK with OID
@@ -720,9 +718,9 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
                     # Create SDK based on authentication mode
                     if mode == "oauth":
-                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                        logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
-                        sdk = limacharlie.Manager(oid=oid)
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for oid={oid} with explicit credentials")
+                        sdk = limacharlie.Manager(oid=oid, oauth_creds=oauth_creds)
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for oid={oid}")
@@ -730,17 +728,15 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
                 else:
                     # User-level tool: create SDK with UID only (no OID)
                     if mode == "oauth":
-                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                        logging.error(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
-                        sdk = limacharlie.Manager(uid=uid)
-                        logging.error(f"Created SDK: {sdk}")
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid}) with explicit credentials")
+                        sdk = limacharlie.Manager(uid=uid, oauth_creds=oauth_creds)
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
                         sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
-                logging.error(f"Storing SDK in context: {sdk}")
                 sdk_token = sdk_context_var.set(sdk)
                 oid_token = current_oid_context_var.set(oid) if oid else None
                 try:
@@ -1156,9 +1152,6 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                     uid = token_info['uid']
                     logging.info(f"Valid OAuth access token for UID: {uid}")
 
-                    # Set UID auth context in OAuth mode
-                    uid_auth_context_var.set((uid, None, "oauth"))
-
                     # Create OAuth credentials dict for SDK
                     oauth_creds = {
                         'id_token': token_info['firebase_id_token'],
@@ -1166,14 +1159,13 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                         'provider': 'google'
                     }
 
-                    logging.error(f"OAuth mode enabled via MCP OAuth token for UID: {uid}")
-                    logging.error(f"Created oauth_creds with id_token: {token_info['firebase_id_token'][:50]}...")
+                    # Set UID auth context in OAuth mode WITH credentials to avoid GLOBAL_OAUTH race
+                    uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
 
                     # Create SDK immediately since wrapper isn't executing in FastMCP context
                     # Pass OAuth credentials directly to avoid global variable race conditions
                     sdk = limacharlie.Manager(uid=uid, oauth_creds=oauth_creds)
                     sdk_context_var.set(sdk)
-                    logging.error(f"Created SDK for user-level OAuth operation: {sdk}")
                     return sdk
 
             # Check for UID mode first
@@ -1182,8 +1174,8 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                 # UID mode: Set context var for wrapper to use, don't create SDK here
                 try:
                     uuid.UUID(auth_header)
-                    # Valid API key
-                    uid_auth_context_var.set((uid, auth_header))
+                    # Valid API key - no OAuth credentials in API key mode
+                    uid_auth_context_var.set((uid, auth_header, "api_key", None))
                     logging.info(f"UID mode detected: uid={uid}")
                     return None  # Wrapper will create SDK per-tool with OID
                 except Exception:
@@ -3948,17 +3940,10 @@ def list_user_orgs(ctx: Context) -> dict[str, Any]:
             - "error" (str): On failure, an error message string
     """
     start = time.time()
-    logging.error(f"=== list_user_orgs called ===")
-    logging.error(f"Context: {ctx}")
-    logging.error(f"uid_auth_context_var.get(): {uid_auth_context_var.get()}")
-    logging.error(f"sdk_context_var.get(): {sdk_context_var.get()}")
-    logging.error(f"request_context_var.get(): {request_context_var.get()}")
 
     try:
         sdk = get_sdk_from_context(ctx)
-        logging.error(f"get_sdk_from_context returned: {sdk}")
         if sdk is None:
-            logging.error("SDK is None, returning error")
             return {"error": "No authentication provided"}
 
         # Call the user-level API to get all accessible orgs
@@ -6238,12 +6223,13 @@ if __name__ == "__main__":
                 logging.info("JWT will be automatically renewed by SDK")
                 logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
 
-                # Set OAuth as global for SDK to use
-                import limacharlie
-                limacharlie.GLOBAL_OAUTH = oauth_creds
+                # SECURITY: Do NOT set GLOBAL_OAUTH - pass credentials explicitly per-request
+                # to avoid race conditions in multi-user scenarios
+                # import limacharlie
+                # limacharlie.GLOBAL_OAUTH = oauth_creds  # REMOVED - security risk
 
-                # Store in context with mode indicator
-                uid_auth_context_var.set((uid, None, "oauth"))
+                # Store in context with mode indicator AND credentials
+                uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
 
             elif api_key_env or api_key_sdk:
                 # API key mode (prefer explicit env var over config)
@@ -6252,8 +6238,8 @@ if __name__ == "__main__":
                 logging.info(f"UID mode with API key: uid={uid} (source: {source})")
                 logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
 
-                # Store in context with mode indicator
-                uid_auth_context_var.set((uid, api_key, "api_key"))
+                # Store in context with mode indicator (no oauth_creds in API key mode)
+                uid_auth_context_var.set((uid, api_key, "api_key", None))
 
             else:
                 logging.error("UID mode requires authentication credentials.")

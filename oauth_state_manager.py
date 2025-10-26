@@ -14,6 +14,14 @@ import logging
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, asdict
 
+# Import token encryption for securing sensitive data in Redis
+try:
+    from token_encryption import get_token_encryption, is_encryption_enabled
+    ENCRYPTION_AVAILABLE = True
+except ImportError:
+    ENCRYPTION_AVAILABLE = False
+    logging.warning("Token encryption not available - install cryptography package")
+
 
 @dataclass
 class OAuthState:
@@ -131,7 +139,70 @@ class OAuthStateManager:
             socket_connect_timeout=5,
             socket_keepalive=True
         )
+
+        # Initialize token encryption if available and enabled
+        self.encryption_enabled = ENCRYPTION_AVAILABLE and is_encryption_enabled()
+        if self.encryption_enabled:
+            try:
+                self.encryptor = get_token_encryption()
+                logging.info("Token encryption ENABLED for Redis storage")
+            except Exception as e:
+                logging.error(f"Failed to initialize token encryption: {e}")
+                logging.warning("Falling back to UNENCRYPTED token storage - SECURITY RISK!")
+                self.encryption_enabled = False
+        else:
+            if not ENCRYPTION_AVAILABLE:
+                logging.warning("Token encryption module not available")
+            else:
+                logging.warning("Token encryption DISABLED - set REDIS_ENCRYPTION_KEY to enable")
+            logging.warning("Tokens will be stored UNENCRYPTED in Redis - SECURITY RISK!")
+
+        # Load atomic Redis scripts to prevent TOCTOU race conditions
+        self._load_lua_scripts()
+
         logging.info(f"OAuth State Manager initialized with Redis at {self.redis_url}")
+
+    def _load_lua_scripts(self):
+        """
+        Load Lua scripts for atomic Redis operations.
+
+        SECURITY: These scripts prevent TOCTOU (time-of-check-to-time-of-use) race conditions
+        by performing check-and-delete operations atomically on the Redis server.
+        """
+        # Atomic get-and-delete script (for single-use state/code consumption)
+        # Returns the value if found and deletes it, or nil if not found
+        self.atomic_get_and_delete = self.redis_client.register_script("""
+            local value = redis.call('GET', KEYS[1])
+            if value then
+                redis.call('DEL', KEYS[1])
+            end
+            return value
+        """)
+
+        # Atomic multi-key get-and-delete script for OAuth state cleanup
+        # Returns all values, then deletes all keys atomically
+        self.atomic_multi_get_and_delete = self.redis_client.register_script("""
+            local results = {}
+            for i, key in ipairs(KEYS) do
+                results[i] = redis.call('GET', key)
+            end
+            redis.call('DEL', unpack(KEYS))
+            return results
+        """)
+
+        logging.debug("Loaded atomic Redis Lua scripts for TOCTOU protection")
+
+    def _encrypt_token(self, token: str) -> str:
+        """Encrypt a token if encryption is enabled."""
+        if self.encryption_enabled:
+            return self.encryptor.encrypt(token)
+        return token
+
+    def _decrypt_token(self, encrypted_token: str) -> str:
+        """Decrypt a token if encryption is enabled."""
+        if self.encryption_enabled:
+            return self.encryptor.decrypt(encrypted_token)
+        return encrypted_token
 
     def ping(self) -> bool:
         """
@@ -223,6 +294,49 @@ class OAuthStateManager:
             logging.error(f"Failed to deserialize OAuth state: {e}")
             return None
 
+    def atomic_consume_oauth_state_and_mappings(
+        self,
+        state_key: str,
+        session_key: str,
+        oauth_state_key: str
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        """
+        Atomically retrieve and delete OAuth state and Firebase session mappings.
+
+        SECURITY: This prevents TOCTOU race conditions where multiple concurrent requests
+        could reuse the same OAuth state/session.
+
+        Args:
+            state_key: Redis key for state->oauth_state mapping
+            session_key: Redis key for session_id storage
+            oauth_state_key: Redis key for OAuthState object
+
+        Returns:
+            Tuple of (oauth_state_value, session_id, oauth_state_json) or (None, None, None)
+        """
+        try:
+            # Atomically get all three values and delete all three keys
+            results = self.atomic_multi_get_and_delete(keys=[state_key, session_key, oauth_state_key])
+
+            # Unpack results (in same order as keys)
+            oauth_state_value = results[0]
+            session_id = results[1]
+            oauth_state_json = results[2]
+
+            # Convert bytes to strings if needed
+            if oauth_state_value and isinstance(oauth_state_value, bytes):
+                oauth_state_value = oauth_state_value.decode('utf-8')
+            if session_id and isinstance(session_id, bytes):
+                session_id = session_id.decode('utf-8')
+            if oauth_state_json and isinstance(oauth_state_json, bytes):
+                oauth_state_json = oauth_state_json.decode('utf-8')
+
+            return oauth_state_value, session_id, oauth_state_json
+
+        except Exception as e:
+            logging.error(f"Atomic state consumption failed: {e}")
+            return None, None, None
+
     def consume_oauth_state(self, state: str) -> Optional[OAuthState]:
         """
         Retrieve and delete OAuth state (single-use).
@@ -263,6 +377,8 @@ class OAuthStateManager:
         """
         Store authorization code with Firebase token mapping.
 
+        SECURITY: Firebase tokens are encrypted before storage if encryption is enabled.
+
         Args:
             code: Authorization code
             state: Associated OAuth state
@@ -271,12 +387,16 @@ class OAuthStateManager:
             firebase_refresh_token: Firebase refresh token
             firebase_expires_at: Firebase token expiration timestamp
         """
+        # Encrypt sensitive Firebase tokens before storage
+        encrypted_id_token = self._encrypt_token(firebase_id_token)
+        encrypted_refresh_token = self._encrypt_token(firebase_refresh_token)
+
         auth_code = AuthorizationCode(
             code=code,
             state=state,
             uid=uid,
-            firebase_id_token=firebase_id_token,
-            firebase_refresh_token=firebase_refresh_token,
+            firebase_id_token=encrypted_id_token,
+            firebase_refresh_token=encrypted_refresh_token,
             firebase_expires_at=firebase_expires_at,
             created_at=int(time.time())
         )
@@ -287,33 +407,47 @@ class OAuthStateManager:
             self.CODE_TTL,
             json.dumps(auth_code.to_dict())
         )
-        logging.debug(f"Stored authorization code: {code[:10]}... for UID {uid}")
+        logging.debug(f"Stored authorization code: {code[:10]}... for UID {uid} (tokens encrypted: {self.encryption_enabled})")
 
     def consume_authorization_code(self, code: str) -> Optional[AuthorizationCode]:
         """
         Retrieve and delete authorization code (single-use).
 
+        SECURITY:
+        - Uses atomic get-and-delete to prevent TOCTOU race conditions
+        - Decrypts Firebase tokens after retrieval if encryption is enabled
+
         Args:
             code: Authorization code to consume
 
         Returns:
-            AuthorizationCode if found, None otherwise
+            AuthorizationCode if found (with decrypted tokens), None otherwise
         """
         key = f"{self.CODE_PREFIX}{code}"
-        data = self.redis_client.get(key)
+
+        # SECURITY: Atomic get-and-delete to prevent race conditions
+        data_list = self.atomic_get_and_delete(keys=[key])
+        data = data_list[0] if data_list else None
 
         if not data:
-            logging.warning(f"Authorization code not found: {code[:10]}...")
+            logging.warning(f"Authorization code not found or already consumed: {code[:10]}...")
             return None
 
         try:
+            # Convert bytes to string if needed
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+
             auth_code = AuthorizationCode.from_dict(json.loads(data))
-            # Delete immediately (single-use)
-            self.redis_client.delete(key)
-            logging.debug(f"Consumed authorization code: {code[:10]}...")
+
+            # Decrypt sensitive Firebase tokens
+            auth_code.firebase_id_token = self._decrypt_token(auth_code.firebase_id_token)
+            auth_code.firebase_refresh_token = self._decrypt_token(auth_code.firebase_refresh_token)
+
+            logging.debug(f"Atomically consumed authorization code: {code[:10]}... (tokens decrypted: {self.encryption_enabled})")
             return auth_code
         except Exception as e:
-            logging.error(f"Failed to deserialize authorization code: {e}")
+            logging.error(f"Failed to deserialize or decrypt authorization code: {e}")
             return None
 
     # ===== Access Token Management =====
@@ -349,6 +483,8 @@ class OAuthStateManager:
         """
         Store access token with Firebase token mapping.
 
+        SECURITY: Firebase tokens are encrypted before storage if encryption is enabled.
+
         Args:
             access_token: MCP access token
             uid: Firebase UID
@@ -358,11 +494,15 @@ class OAuthStateManager:
             scope: Granted scopes
             ttl: Access token TTL in seconds
         """
+        # Encrypt sensitive Firebase tokens before storage
+        encrypted_id_token = self._encrypt_token(firebase_id_token)
+        encrypted_refresh_token = self._encrypt_token(firebase_refresh_token)
+
         token_data = AccessTokenData(
             access_token=access_token,
             uid=uid,
-            firebase_id_token=firebase_id_token,
-            firebase_refresh_token=firebase_refresh_token,
+            firebase_id_token=encrypted_id_token,
+            firebase_refresh_token=encrypted_refresh_token,
             firebase_expires_at=firebase_expires_at,
             scope=scope,
             created_at=int(time.time()),
@@ -375,17 +515,19 @@ class OAuthStateManager:
             ttl,
             json.dumps(token_data.to_dict())
         )
-        logging.debug(f"Stored access token: {access_token[:10]}... for UID {uid}")
+        logging.debug(f"Stored access token: {access_token[:10]}... for UID {uid} (tokens encrypted: {self.encryption_enabled})")
 
     def get_access_token_data(self, access_token: str) -> Optional[AccessTokenData]:
         """
         Retrieve access token data.
 
+        SECURITY: Decrypts Firebase tokens after retrieval if encryption is enabled.
+
         Args:
             access_token: MCP access token
 
         Returns:
-            AccessTokenData if found and valid, None otherwise
+            AccessTokenData if found and valid (with decrypted tokens), None otherwise
         """
         key = f"{self.TOKEN_PREFIX}{access_token}"
         data = self.redis_client.get(key)
@@ -402,9 +544,13 @@ class OAuthStateManager:
                 logging.warning(f"Access token expired: {access_token[:10]}...")
                 return None
 
+            # Decrypt sensitive Firebase tokens
+            token_data.firebase_id_token = self._decrypt_token(token_data.firebase_id_token)
+            token_data.firebase_refresh_token = self._decrypt_token(token_data.firebase_refresh_token)
+
             return token_data
         except Exception as e:
-            logging.error(f"Failed to deserialize access token: {e}")
+            logging.error(f"Failed to deserialize or decrypt access token: {e}")
             return None
 
     def update_access_token_firebase_tokens(
@@ -416,9 +562,12 @@ class OAuthStateManager:
         """
         Update Firebase tokens for an existing access token (after refresh).
 
+        SECURITY: Encrypts new Firebase tokens before storage if encryption is enabled.
+        Note: get_access_token_data already decrypts, so we receive plaintext tokens.
+
         Args:
             access_token: MCP access token
-            firebase_id_token: New Firebase ID token
+            firebase_id_token: New Firebase ID token (plaintext)
             firebase_expires_at: New expiration timestamp
 
         Returns:
@@ -428,8 +577,8 @@ class OAuthStateManager:
         if not token_data:
             return False
 
-        # Update Firebase tokens
-        token_data.firebase_id_token = firebase_id_token
+        # Update Firebase tokens (encrypt before storing)
+        token_data.firebase_id_token = self._encrypt_token(firebase_id_token)
         token_data.firebase_expires_at = firebase_expires_at
 
         key = f"{self.TOKEN_PREFIX}{access_token}"
@@ -442,7 +591,7 @@ class OAuthStateManager:
             ttl,
             json.dumps(token_data.to_dict())
         )
-        logging.debug(f"Updated Firebase tokens for access token: {access_token[:10]}...")
+        logging.debug(f"Updated Firebase tokens for access token: {access_token[:10]}... (encrypted: {self.encryption_enabled})")
         return True
 
     def revoke_access_token(self, access_token: str) -> bool:
@@ -474,18 +623,23 @@ class OAuthStateManager:
         """
         Store refresh token mapping to access token and Firebase refresh token.
 
+        SECURITY: Firebase refresh token is encrypted before storage if encryption is enabled.
+
         Args:
             refresh_token: MCP refresh token
             access_token: Associated MCP access token
             uid: Firebase UID
-            firebase_refresh_token: Firebase refresh token
+            firebase_refresh_token: Firebase refresh token (plaintext)
             scope: Granted scopes
         """
+        # Encrypt sensitive Firebase refresh token before storage
+        encrypted_firebase_refresh_token = self._encrypt_token(firebase_refresh_token)
+
         refresh_data = {
             "refresh_token": refresh_token,
             "access_token": access_token,
             "uid": uid,
-            "firebase_refresh_token": firebase_refresh_token,
+            "firebase_refresh_token": encrypted_firebase_refresh_token,
             "scope": scope,
             "created_at": int(time.time())
         }
@@ -496,17 +650,19 @@ class OAuthStateManager:
             self.REFRESH_TTL,
             json.dumps(refresh_data)
         )
-        logging.debug(f"Stored refresh token: {refresh_token[:10]}... for UID {uid}")
+        logging.debug(f"Stored refresh token: {refresh_token[:10]}... for UID {uid} (encrypted: {self.encryption_enabled})")
 
     def get_refresh_token_data(self, refresh_token: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve refresh token data.
 
+        SECURITY: Decrypts Firebase refresh token after retrieval if encryption is enabled.
+
         Args:
             refresh_token: MCP refresh token
 
         Returns:
-            Refresh token data dict if found
+            Refresh token data dict if found (with decrypted Firebase token)
         """
         key = f"{self.REFRESH_PREFIX}{refresh_token}"
         data = self.redis_client.get(key)
@@ -516,9 +672,14 @@ class OAuthStateManager:
             return None
 
         try:
-            return json.loads(data)
+            refresh_data = json.loads(data)
+            # Decrypt sensitive Firebase refresh token
+            refresh_data['firebase_refresh_token'] = self._decrypt_token(
+                refresh_data['firebase_refresh_token']
+            )
+            return refresh_data
         except Exception as e:
-            logging.error(f"Failed to deserialize refresh token: {e}")
+            logging.error(f"Failed to deserialize or decrypt refresh token: {e}")
             return None
 
     def revoke_refresh_token(self, refresh_token: str) -> bool:
