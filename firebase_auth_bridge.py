@@ -85,7 +85,14 @@ class FirebaseAuthBridge:
 
         try:
             logging.debug(f"Creating Firebase auth URI for provider: {provider_id}")
+            logging.debug(f"Firebase request payload: {payload}")
             response = requests.post(url, json=payload, timeout=10)
+
+            # Log response details before raising error
+            if response.status_code != 200:
+                logging.error(f"Firebase createAuthUri failed with status {response.status_code}")
+                logging.error(f"Response body: {response.text}")
+
             response.raise_for_status()
 
             data = response.json()
