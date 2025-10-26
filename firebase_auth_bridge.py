@@ -98,13 +98,19 @@ class FirebaseAuthBridge:
             response.raise_for_status()
 
             data = response.json()
+
+            # Log the full response for debugging
+            logging.error(f"Firebase createAuthUri response: {data}")
+
             session_id = data.get("sessionId")
             auth_uri = data.get("authUri")
 
             if not session_id or not auth_uri:
+                logging.error(f"Missing fields in Firebase response. sessionId present: {bool(session_id)}, authUri present: {bool(auth_uri)}")
                 raise FirebaseAuthError("Missing sessionId or authUri in Firebase response")
 
-            logging.info(f"Created Firebase auth URI, session: {session_id[:20]}...")
+            logging.error(f"Created Firebase auth URI, session: {session_id[:20]}...")
+            logging.error(f"Full session_id: {session_id}")
             return session_id, auth_uri
 
         except requests.exceptions.RequestException as e:

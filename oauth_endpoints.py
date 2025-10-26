@@ -213,25 +213,35 @@ class OAuthEndpoints:
         try:
             # Initiate Firebase auth flow
             # This returns a Firebase-managed Google OAuth URL
+            logging.error(f"About to call Firebase createAuthUri for OAuth state: {auth_req.state}")
             session_id, firebase_auth_uri = self.firebase_bridge.create_auth_uri(
                 provider_id="google.com",
                 redirect_uri=oauth_callback_url,
                 scopes=("openid", "email", "profile")
             )
 
+            logging.error(f"Received session_id from Firebase: {session_id}")
+            logging.error(f"OAuth state value: {auth_req.state}")
+            logging.error(f"Are they equal? {session_id == auth_req.state}")
+
             # Store bi-directional mapping for OAuth state correlation
             # Forward: oauth_state -> session_id (for validation)
+            forward_key = f"oauth:session:{auth_req.state}"
             self.state_manager.redis_client.setex(
-                f"oauth:session:{auth_req.state}",
+                forward_key,
                 600,  # 10 minutes
                 session_id
             )
+            logging.error(f"Stored forward mapping: {forward_key} -> {session_id}")
+
             # Reverse: session_id -> oauth_state (for callback lookup)
+            reverse_key = f"oauth:state:{session_id}"
             self.state_manager.redis_client.setex(
-                f"oauth:state:{session_id}",
+                reverse_key,
                 600,  # 10 minutes
                 auth_req.state
             )
+            logging.error(f"Stored reverse mapping: {reverse_key} -> {auth_req.state}")
 
             logging.info(f"Created Firebase auth URI for OAuth state: {auth_req.state[:20]}...")
             logging.info(f"Firebase session_id: {session_id[:20]}...")
