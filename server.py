@@ -657,14 +657,16 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
                     # User-level tool: create SDK with UID only (no OID)
                     if mode == "oauth":
                         # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
+                        logging.error(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
                         sdk = limacharlie.Manager(uid=uid)
+                        logging.error(f"Created SDK: {sdk}")
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
                         sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
+                logging.error(f"Storing SDK in context: {sdk}")
                 sdk_token = sdk_context_var.set(sdk)
                 oid_token = current_oid_context_var.set(oid) if oid else None
                 try:
@@ -729,14 +731,16 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
                     # User-level tool: create SDK with UID only (no OID)
                     if mode == "oauth":
                         # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
+                        logging.error(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
                         sdk = limacharlie.Manager(uid=uid)
+                        logging.error(f"Created SDK: {sdk}")
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
                         sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
+                logging.error(f"Storing SDK in context: {sdk}")
                 sdk_token = sdk_context_var.set(sdk)
                 oid_token = current_oid_context_var.set(oid) if oid else None
                 try:
@@ -1123,7 +1127,10 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
         # Check if SDK already exists in context
         sdk = sdk_context_var.get()
         if sdk:
+            logging.debug(f"get_sdk_from_context: Returning SDK from context")
             return sdk
+
+        logging.debug(f"get_sdk_from_context: No SDK in context, checking auth headers")
 
         if PUBLIC_MODE:
             # Get the HTTP request from the contextvar
@@ -1160,7 +1167,8 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                         'provider': 'google'
                     }
 
-                    logging.info("OAuth mode enabled via MCP OAuth token")
+                    logging.error(f"OAuth mode enabled via MCP OAuth token for UID: {uid}")
+                    logging.error(f"Set GLOBAL_OAUTH with id_token: {token_info['firebase_id_token'][:50]}...")
                     return None  # Wrapper will create SDK per-tool with OID
 
             # Check for UID mode first
