@@ -34,6 +34,9 @@ RUN git clone https://github.com/modelcontextprotocol/python-sdk.git /tmp/python
 COPY server.py .
 COPY prompts/ ./prompts/
 
+# Copy OAuth modules (optional, enabled via MCP_OAUTH_ENABLED env var)
+COPY oauth_*.py ./
+
 # Expose the application port
 EXPOSE 8080
 ENV PORT=8080
