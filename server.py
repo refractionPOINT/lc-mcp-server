@@ -1159,20 +1159,19 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                     # Set UID auth context in OAuth mode
                     uid_auth_context_var.set((uid, None, "oauth"))
 
-                    # Set Firebase tokens for SDK to use
-                    import limacharlie
-                    limacharlie.GLOBAL_OAUTH = {
+                    # Create OAuth credentials dict for SDK
+                    oauth_creds = {
                         'id_token': token_info['firebase_id_token'],
                         'refresh_token': token_info['firebase_refresh_token'],
                         'provider': 'google'
                     }
 
                     logging.error(f"OAuth mode enabled via MCP OAuth token for UID: {uid}")
-                    logging.error(f"Set GLOBAL_OAUTH with id_token: {token_info['firebase_id_token'][:50]}...")
+                    logging.error(f"Created oauth_creds with id_token: {token_info['firebase_id_token'][:50]}...")
 
                     # Create SDK immediately since wrapper isn't executing in FastMCP context
-                    # SDK will use GLOBAL_OAUTH tokens automatically
-                    sdk = limacharlie.Manager(uid=uid)
+                    # Pass OAuth credentials directly to avoid global variable race conditions
+                    sdk = limacharlie.Manager(uid=uid, oauth_creds=oauth_creds)
                     sdk_context_var.set(sdk)
                     logging.error(f"Created SDK for user-level OAuth operation: {sdk}")
                     return sdk
