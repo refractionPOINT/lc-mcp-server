@@ -264,31 +264,28 @@ class OAuthEndpoints:
         Raises:
             OAuthError: If callback is invalid
         """
-        # Firebase doesn't pass state in callback since we didn't include it in continueUri
-        # Instead, we need to extract the session_id from the Firebase response and look up state
-
-        # The callback should contain Firebase's response which includes state or session info
-        # We'll look for sessionId in the params or extract it from the provider response
-
-        # Build callback path for Firebase
-        callback_path = "?" + urllib.parse.urlencode(params)
-
-        # Extract session info from Firebase callback
-        # Firebase includes this in the redirect URL or as a parameter
-        session_id = params.get('sessionId')
-        if not session_id:
-            # Try to extract from other Firebase parameters
-            logging.error(f"No sessionId in callback params: {list(params.keys())}")
+        # Firebase returns the session_id in the "state" parameter of the callback
+        # This is Firebase's session state, NOT our OAuth state - we need to map it
+        firebase_state = params.get('state')
+        if not firebase_state:
+            logging.error(f"No Firebase state in callback params: {list(params.keys())}")
             raise OAuthError('invalid_request', 'Missing session information in callback')
 
-        # Look up OAuth state using session_id
+        # The Firebase state is actually the session_id we got from createAuthUri
+        session_id = firebase_state
+
+        # Look up our OAuth state using the Firebase session_id
         state_key = f"oauth:state:{session_id}"
-        state = self.state_manager.redis_client.get(state_key)
-        if not state:
+        oauth_state_value = self.state_manager.redis_client.get(state_key)
+        if not oauth_state_value:
+            logging.error(f"No OAuth state found for session: {session_id[:20]}...")
             raise OAuthError('invalid_request', 'Invalid or expired session')
 
-        if isinstance(state, bytes):
-            state = state.decode('utf-8')
+        if isinstance(oauth_state_value, bytes):
+            oauth_state_value = oauth_state_value.decode('utf-8')
+
+        # oauth_state_value is our original OAuth state parameter
+        state = oauth_state_value
 
         # Retrieve OAuth state
         oauth_state = self.state_manager.consume_oauth_state(state)
