@@ -132,19 +132,23 @@ class OAuthTokenManager:
         """
         Issue a new access token using a refresh token.
 
-        This implements the OAuth 2.1 refresh token grant type.
+        This implements the OAuth 2.1 refresh token grant type with token rotation.
+
+        SECURITY: Implements refresh token rotation to detect token theft.
+        Each use of a refresh token generates a NEW refresh token and invalidates the old one.
+        If the old token is used again, it indicates potential theft.
 
         Args:
             refresh_token: MCP refresh token
 
         Returns:
-            Token response dict with new access_token, or None if invalid
+            Token response dict with new access_token and NEW refresh_token, or None if invalid
         """
         # Look up refresh token
         refresh_data = self.state_manager.get_refresh_token_data(refresh_token)
 
         if not refresh_data:
-            logging.warning(f"Refresh token not found: {refresh_token[:10]}...")
+            logging.warning("Refresh token not found or already used")
             return None
 
         uid = refresh_data.get('uid')
@@ -153,7 +157,7 @@ class OAuthTokenManager:
         old_access_token = refresh_data.get('access_token')
 
         if not uid or not firebase_refresh_token:
-            logging.error(f"Invalid refresh token data")
+            logging.error("Invalid refresh token data")
             return None
 
         try:
@@ -165,6 +169,9 @@ class OAuthTokenManager:
             # Generate new MCP access token
             new_access_token = self.state_manager.generate_access_token()
 
+            # SECURITY: Generate NEW refresh token (rotation for theft detection)
+            new_refresh_token = self.state_manager.generate_refresh_token()
+
             # Store new access token with refreshed Firebase tokens
             self.state_manager.store_access_token(
                 access_token=new_access_token,
@@ -175,6 +182,19 @@ class OAuthTokenManager:
                 scope=scope
             )
 
+            # SECURITY: Store new refresh token mapping
+            self.state_manager.store_refresh_token(
+                refresh_token=new_refresh_token,
+                access_token=new_access_token,
+                uid=uid,
+                firebase_refresh_token=firebase_refresh_token,
+                scope=scope
+            )
+
+            # SECURITY: Revoke old refresh token (critical for rotation)
+            # This ensures the old token can't be used again
+            self.state_manager.revoke_refresh_token(refresh_token)
+
             # Revoke old access token (optional - could keep for grace period)
             if old_access_token:
                 self.state_manager.revoke_access_token(old_access_token)
@@ -182,13 +202,13 @@ class OAuthTokenManager:
             # Calculate expires_in
             expires_in = OAuthStateManager.TOKEN_TTL
 
-            logging.info(f"Issued new access token via refresh for UID: {uid}")
+            logging.info(f"Issued new tokens via refresh for UID: {uid} (token rotated)")
 
             return {
                 "access_token": new_access_token,
                 "token_type": "Bearer",
                 "expires_in": expires_in,
-                "refresh_token": refresh_token,  # Can rotate this for extra security
+                "refresh_token": new_refresh_token,  # ✅ NEW TOKEN (rotated for security)
                 "scope": scope
             }
 

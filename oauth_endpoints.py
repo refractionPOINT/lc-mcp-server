@@ -217,15 +217,15 @@ class OAuthEndpoints:
         try:
             # Initiate Firebase auth flow
             # This returns a Firebase-managed Google OAuth URL
-            logging.error(f"About to call Firebase createAuthUri for OAuth state: {auth_req.state}")
+            logging.debug(f"Creating Firebase auth URI for OAuth state: {auth_req.state[:8]}...{auth_req.state[-4:]}")
             session_id, firebase_auth_uri = self.firebase_bridge.create_auth_uri(
                 provider_id="google.com",
                 redirect_uri=oauth_callback_url,
                 scopes=("openid", "email", "profile")
             )
 
-            logging.error(f"Received session_id from Firebase: {session_id}")
-            logging.error(f"OAuth state value: {auth_req.state}")
+            logging.debug(f"Received Firebase session_id: {session_id[:12]}...{session_id[-8:]}")
+            logging.debug(f"OAuth state correlation: {auth_req.state[:8]}...")
 
             # Extract the state parameter from Firebase's authUri
             # This is what Google OAuth will pass back to our callback
@@ -235,10 +235,10 @@ class OAuthEndpoints:
             firebase_state = query_params.get('state', [None])[0]
 
             if not firebase_state:
-                logging.error(f"No state parameter in Firebase authUri: {firebase_auth_uri}")
+                logging.error("Firebase authUri missing state parameter")
                 raise OAuthError('server_error', 'Firebase authUri missing state parameter')
 
-            logging.error(f"Firebase state from authUri: {firebase_state[:50]}...")
+            logging.debug(f"Firebase state extracted: {firebase_state[:12]}...{firebase_state[-8:]}")
 
             # Store three-way mapping for OAuth state correlation:
             # 1. oauth_state -> firebase_state (for validation)
@@ -252,7 +252,7 @@ class OAuthEndpoints:
                 600,  # 10 minutes
                 firebase_state
             )
-            logging.error(f"Stored forward mapping: {forward_key} -> {firebase_state[:50]}...")
+            logging.debug(f"Stored OAuth state mapping in Redis (key: {forward_key[:20]}...)")
 
             # Reverse: firebase_state -> oauth_state (critical - callback uses this)
             reverse_key = f"oauth:state:{firebase_state}"
@@ -261,7 +261,7 @@ class OAuthEndpoints:
                 600,  # 10 minutes
                 auth_req.state
             )
-            logging.error(f"Stored reverse mapping: oauth:state:{firebase_state[:50]}... -> {auth_req.state[:50]}...")
+            logging.debug(f"Stored reverse OAuth mapping in Redis (key: {reverse_key[:20]}...)")
 
             # Session mapping: firebase_state -> session_id (for signInWithIdp)
             session_key = f"oauth:fbsession:{firebase_state}"
@@ -270,7 +270,7 @@ class OAuthEndpoints:
                 600,  # 10 minutes
                 session_id
             )
-            logging.error(f"Stored session mapping: {session_key[:60]}... -> {session_id}")
+            logging.debug(f"Stored Firebase session mapping in Redis")
 
             logging.info(f"Created Firebase auth URI for OAuth state: {auth_req.state[:20]}...")
             logging.info(f"Firebase session_id: {session_id[:20]}...")
@@ -309,16 +309,16 @@ class OAuthEndpoints:
         # Extract Firebase's state parameter from callback
         firebase_state = params.get('state')
         if not firebase_state:
-            logging.error(f"No Firebase state in callback params: {list(params.keys())}")
+            logging.error(f"No Firebase state in callback params (received: {len(params)} params)")
             raise OAuthError('invalid_request', 'Missing Firebase state in callback')
 
-        logging.error(f"OAuth callback received with Firebase state: {firebase_state[:50]}...")
+        logging.debug(f"OAuth callback received with Firebase state: {firebase_state[:12]}...{firebase_state[-8:]}")
 
         # Build Redis keys for atomic lookup
         state_key = f"oauth:state:{firebase_state}"  # Firebase state -> MCP state mapping
         session_key = f"oauth:fbsession:{firebase_state}"  # Firebase state -> session ID
 
-        logging.error(f"Looking up Redis keys atomically...")
+        logging.debug("Performing atomic Redis lookup for OAuth session")
 
         # SECURITY: Atomically retrieve and delete the reverse mappings (Firebase -> MCP state + session)
         # We need to do this in two steps because we don't know the oauth_state_key until we get the MCP state
@@ -338,17 +338,16 @@ class OAuthEndpoints:
         if not oauth_state_value or not session_id:
             # Debug: check what keys exist in Redis
             all_keys = self.state_manager.redis_client.keys("oauth:state:*")
-            logging.error(f"No OAuth state found for Firebase state: {firebase_state[:50]}...")
-            logging.error(f"Looking for key: {state_key[:80]}...")
-            logging.error(f"Found {len(all_keys)} oauth:state:* keys in Redis")
+            logging.error(f"OAuth state lookup failed - possibly expired or already consumed")
+            logging.debug(f"Searched for key: {state_key[:30]}...")
+            logging.debug(f"Found {len(all_keys)} oauth:state:* keys in Redis")
             if all_keys:
-                logging.error(f"Sample keys: {[k.decode() if isinstance(k, bytes) else k for k in all_keys[:3]]}")
-            logging.error(f"Available callback params: {list(params.keys())}")
+                logging.debug(f"Sample keys exist in Redis: {len(all_keys[:3])} keys")
             raise OAuthError('invalid_request', 'Invalid or expired session (possibly reused)')
 
         state = oauth_state_value
-        logging.info(f"Atomically consumed Firebase session for OAuth state: {state[:20]}...")
-        logging.error(f"Retrieved session_id: {session_id}")
+        logging.info(f"Atomically consumed Firebase session for OAuth state")
+        logging.debug(f"Retrieved session_id: {session_id[:12]}...{session_id[-8:]}")
 
         # SECURITY: Now atomically consume the actual OAuth state object and forward mapping
         oauth_state_key = f"{self.state_manager.STATE_PREFIX}{state}"
@@ -358,7 +357,7 @@ class OAuthEndpoints:
         oauth_state_data = oauth_results[0]
 
         if not oauth_state_data:
-            logging.error(f"OAuth state object not found: {state[:20]}...")
+            logging.error("OAuth state object not found - expired or invalid")
             raise OAuthError('invalid_request', 'Invalid or expired OAuth state')
 
         # Deserialize OAuth state

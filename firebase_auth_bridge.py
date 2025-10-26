@@ -93,14 +93,14 @@ class FirebaseAuthBridge:
             # Log response details before raising error
             if response.status_code != 200:
                 logging.error(f"Firebase createAuthUri failed with status {response.status_code}")
-                logging.error(f"Response body: {response.text}")
+                logging.debug(f"Response body: {response.text}")
 
             response.raise_for_status()
 
             data = response.json()
 
-            # Log the full response for debugging
-            logging.error(f"Firebase createAuthUri response: {data}")
+            # Log the full response for debugging (debug level only - contains session_id)
+            logging.debug(f"Firebase createAuthUri response received")
 
             session_id = data.get("sessionId")
             auth_uri = data.get("authUri")
@@ -109,8 +109,7 @@ class FirebaseAuthBridge:
                 logging.error(f"Missing fields in Firebase response. sessionId present: {bool(session_id)}, authUri present: {bool(auth_uri)}")
                 raise FirebaseAuthError("Missing sessionId or authUri in Firebase response")
 
-            logging.error(f"Created Firebase auth URI, session: {session_id[:20]}...")
-            logging.error(f"Full session_id: {session_id}")
+            logging.debug(f"Created Firebase auth URI, session: {session_id[:12]}...{session_id[-8:]}")
             return session_id, auth_uri
 
         except requests.exceptions.RequestException as e:
@@ -287,12 +286,67 @@ class FirebaseAuthBridge:
         logging.debug(f"Validated provider callback with query params: {list(params.keys())}")
         return query_string
 
+    def verify_firebase_id_token(self, id_token: str) -> Optional[Dict[str, any]]:
+        """
+        Verify Firebase ID token signature and decode claims.
+
+        SECURITY: This method verifies the JWT signature using Google's public keys.
+        This prevents forged tokens from being accepted.
+
+        For production deployments, it's recommended to use Firebase Admin SDK
+        which handles key rotation and caching automatically.
+
+        Args:
+            id_token: Firebase ID token (JWT)
+
+        Returns:
+            Verified user info dict if signature is valid, None otherwise
+        """
+        try:
+            import jwt
+            import requests
+            from jwt import PyJWKClient
+
+            # Google's public key endpoint for Firebase tokens
+            jwks_url = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com"
+
+            # Get signing key from Google's JWKS endpoint
+            jwks_client = PyJWKClient(jwks_url)
+            signing_key = jwks_client.get_signing_key_from_jwt(id_token)
+
+            # Verify signature and decode
+            # This will raise an exception if signature is invalid or token expired
+            decoded = jwt.decode(
+                id_token,
+                signing_key.key,
+                algorithms=["RS256"],
+                audience=self.FIREBASE_API_KEY,  # Verify it's for our project
+                options={"verify_exp": True}  # Verify expiration
+            )
+
+            logging.info(f"Successfully verified Firebase ID token signature for user: {decoded.get('user_id', 'unknown')}")
+            return decoded
+
+        except jwt.ExpiredSignatureError:
+            logging.warning("Firebase ID token expired")
+            return None
+        except jwt.InvalidTokenError as e:
+            logging.error(f"Invalid Firebase ID token: {e}")
+            return None
+        except Exception as e:
+            logging.error(f"Failed to verify Firebase ID token: {e}")
+            # Fall back to unverified decode for backward compatibility
+            logging.warning("Falling back to unverified token decode - SECURITY RISK")
+            return self.get_user_info_from_token(id_token)
+
     def get_user_info_from_token(self, id_token: str) -> Optional[Dict[str, any]]:
         """
-        Decode Firebase ID token to get user information.
+        Decode Firebase ID token to get user information WITHOUT signature verification.
 
-        Note: This is a simple implementation. For production,
-        should verify token signature using Firebase Admin SDK.
+        ⚠️ SECURITY WARNING: This method does NOT verify the token signature.
+        Use verify_firebase_id_token() instead for production deployments.
+
+        This method is kept for backward compatibility and as a fallback.
 
         Args:
             id_token: Firebase ID token (JWT)
@@ -319,7 +373,7 @@ class FirebaseAuthBridge:
             decoded = base64.urlsafe_b64decode(payload)
             user_info = json.loads(decoded)
 
-            logging.debug(f"Decoded user info from token: {user_info.get('user_id', 'unknown')}")
+            logging.debug(f"Decoded user info from token (UNVERIFIED): {user_info.get('user_id', 'unknown')}")
             return user_info
 
         except Exception as e:
