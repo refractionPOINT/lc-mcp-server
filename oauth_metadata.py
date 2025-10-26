@@ -51,7 +51,8 @@ class OAuthMetadataProvider:
         """
         metadata = {
             # The resource identifier for this MCP server
-            "resource": self.server_url,
+            # Points to the actual MCP endpoint at /mcp
+            "resource": f"{self.server_url}/mcp",
 
             # Authorization servers that can issue tokens for this resource
             # For now, we are our own auth server

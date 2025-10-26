@@ -145,8 +145,10 @@ class OAuthEndpoints:
         resource = params.get('resource')
         if resource:
             server_url = self.metadata_provider.server_url
-            if resource != server_url:
-                logging.warning(f"Resource mismatch: requested={resource}, server={server_url}")
+            mcp_url = f"{server_url}/mcp"
+            # Accept either base URL or /mcp endpoint
+            if resource not in (server_url, mcp_url):
+                logging.warning(f"Resource mismatch: requested={resource}, expected={server_url} or {mcp_url}")
                 # Don't fail, but log for debugging
 
         # Get and validate scope
