@@ -204,11 +204,11 @@ class OAuthEndpoints:
         )
 
         # Build OAuth callback URL (our server will receive this)
-        # NOTE: Firebase doesn't allow "state" as a query parameter in continueUri
-        # because it's a reserved OAuth parameter. We use "session_state" instead to pass
-        # our OAuth state parameter through the Firebase flow.
+        # IMPORTANT: continueUri must be EXACTLY what's registered in Firebase Console
+        # Cannot include query parameters (causes redirect_uri_mismatch from Google)
+        # We use Redis bi-directional mapping to correlate Firebase session with OAuth state
         server_url = self.metadata_provider.server_url
-        oauth_callback_url = f"{server_url}/oauth/callback?session_state={auth_req.state}"
+        oauth_callback_url = f"{server_url}/oauth/callback"
 
         try:
             # Initiate Firebase auth flow
@@ -219,12 +219,18 @@ class OAuthEndpoints:
                 scopes=("openid", "email", "profile")
             )
 
-            # Store session_id for verification (optional, for debugging)
-            # The session_state parameter in continueUri carries our OAuth state through
+            # Store bi-directional mapping for OAuth state correlation
+            # Forward: oauth_state -> session_id (for validation)
             self.state_manager.redis_client.setex(
                 f"oauth:session:{auth_req.state}",
                 600,  # 10 minutes
                 session_id
+            )
+            # Reverse: session_id -> oauth_state (for callback lookup)
+            self.state_manager.redis_client.setex(
+                f"oauth:state:{session_id}",
+                600,  # 10 minutes
+                auth_req.state
             )
 
             logging.info(f"Created Firebase auth URI for state {auth_req.state[:20]}...")
@@ -259,35 +265,36 @@ class OAuthEndpoints:
         Raises:
             OAuthError: If callback is invalid
         """
-        # Extract our OAuth state from the session_state parameter we passed through
-        state = params.get('session_state')
-        if not state:
-            logging.error(f"No session_state in callback params: {list(params.keys())}")
-            raise OAuthError('invalid_request', 'Missing session state in callback')
-
-        # Retrieve OAuth state
-        oauth_state = self.state_manager.consume_oauth_state(state)
-        if not oauth_state:
-            raise OAuthError('invalid_request', 'Invalid or expired state parameter')
-
-        # Extract Firebase session_id (used for signInWithIdp)
+        # Extract Firebase's state parameter (this is their session identifier)
         firebase_state = params.get('state')
         if not firebase_state:
-            logging.error(f"No Firebase state in callback: {list(params.keys())}")
-            raise OAuthError('server_error', 'Missing Firebase session information')
+            logging.error(f"No Firebase state in callback params: {list(params.keys())}")
+            raise OAuthError('invalid_request', 'Missing Firebase session in callback')
 
         session_id = firebase_state
 
-        # Retrieve stored session_id to verify it matches
-        session_key = f"oauth:session:{state}"
-        stored_session_id = self.state_manager.redis_client.get(session_key)
-        if stored_session_id:
-            if isinstance(stored_session_id, bytes):
-                stored_session_id = stored_session_id.decode('utf-8')
-            logging.debug(f"Stored session_id: {stored_session_id[:20]}..., callback session_id: {session_id[:20]}...")
+        # Look up our OAuth state using Firebase's session_id (reverse mapping)
+        state_key = f"oauth:state:{session_id}"
+        oauth_state_value = self.state_manager.redis_client.get(state_key)
+        if not oauth_state_value:
+            logging.error(f"No OAuth state found for Firebase session: {session_id[:20]}...")
+            logging.error(f"Available callback params: {list(params.keys())}")
+            raise OAuthError('invalid_request', 'Invalid or expired session')
 
-        # Clean up session mapping
-        self.state_manager.redis_client.delete(session_key)
+        if isinstance(oauth_state_value, bytes):
+            oauth_state_value = oauth_state_value.decode('utf-8')
+
+        state = oauth_state_value
+        logging.info(f"Matched Firebase session to OAuth state: {state[:20]}...")
+
+        # Retrieve and consume OAuth state
+        oauth_state = self.state_manager.consume_oauth_state(state)
+        if not oauth_state:
+            raise OAuthError('invalid_request', 'Invalid or expired OAuth state')
+
+        # Clean up both mappings (single-use)
+        self.state_manager.redis_client.delete(f"oauth:session:{state}")
+        self.state_manager.redis_client.delete(state_key)
 
         try:
             # Build callback URL for Firebase
