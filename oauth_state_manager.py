@@ -426,8 +426,8 @@ class OAuthStateManager:
         key = f"{self.CODE_PREFIX}{code}"
 
         # SECURITY: Atomic get-and-delete to prevent race conditions
-        data_list = self.atomic_get_and_delete(keys=[key])
-        data = data_list[0] if data_list else None
+        # The Lua script returns the value directly (not a list)
+        data = self.atomic_get_and_delete(keys=[key])
 
         if not data:
             logging.warning(f"Authorization code not found or already consumed: {code[:10]}...")
