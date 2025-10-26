@@ -39,7 +39,7 @@ class FirebaseAuthBridge:
     # In production, this should come from LimaCharlie constants
     FIREBASE_API_KEY = os.getenv(
         "FIREBASE_API_KEY",
-        "AIzaSyDFV_-rUEBq5xPQwNqC0pBr_r5aS3UbpKQ"  # LimaCharlie's Firebase project
+        "AIzaSyDFV_-rUEBq5xPQwNqC0pBr_r5aS3UbpKQ"  # LimaCharlie's Firebase project, NOT A SECRET
     )
 
     # Firebase Auth API endpoints
