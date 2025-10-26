@@ -314,19 +314,25 @@ class OAuthEndpoints:
         logging.error(f"OAuth callback received with Firebase state: {firebase_state[:50]}...")
 
         # Build Redis keys for atomic lookup
-        state_key = f"oauth:state:{firebase_state}"
-        session_key = f"oauth:fbsession:{firebase_state}"
-        # oauth_state_key will be built once we get the state value
+        state_key = f"oauth:state:{firebase_state}"  # Firebase state -> MCP state mapping
+        session_key = f"oauth:fbsession:{firebase_state}"  # Firebase state -> session ID
 
         logging.error(f"Looking up Redis keys atomically...")
 
-        # SECURITY: Atomically retrieve and delete state mappings to prevent TOCTOU race
-        # This ensures single-use of authorization state/session even under concurrent requests
-        oauth_state_value, session_id, _ = self.state_manager.atomic_consume_oauth_state_and_mappings(
-            state_key=state_key,
-            session_key=session_key,
-            oauth_state_key=f"oauth:state:{firebase_state}"  # Dummy for now, will get actual state below
-        )
+        # SECURITY: Atomically retrieve and delete the reverse mappings (Firebase -> MCP state + session)
+        # We need to do this in two steps because we don't know the oauth_state_key until we get the MCP state
+        results = self.state_manager.atomic_multi_get_and_delete(keys=[state_key, session_key])
+
+        oauth_state_value = results[0]
+        session_id_bytes = results[1]
+
+        # Convert bytes to strings
+        if oauth_state_value and isinstance(oauth_state_value, bytes):
+            oauth_state_value = oauth_state_value.decode('utf-8')
+        if session_id_bytes and isinstance(session_id_bytes, bytes):
+            session_id = session_id_bytes.decode('utf-8')
+        else:
+            session_id = session_id_bytes
 
         if not oauth_state_value or not session_id:
             # Debug: check what keys exist in Redis
@@ -343,17 +349,20 @@ class OAuthEndpoints:
         logging.info(f"Atomically consumed Firebase session for OAuth state: {state[:20]}...")
         logging.error(f"Retrieved session_id: {session_id}")
 
-        # Now atomically consume the actual OAuth state object
+        # SECURITY: Now atomically consume the actual OAuth state object and forward mapping
         oauth_state_key = f"{self.state_manager.STATE_PREFIX}{state}"
-        oauth_state_data = self.state_manager.atomic_get_and_delete(keys=[oauth_state_key])
+        forward_mapping_key = f"oauth:session:{state}"
 
-        if not oauth_state_data or oauth_state_data[0] is None:
+        oauth_results = self.state_manager.atomic_multi_get_and_delete(keys=[oauth_state_key, forward_mapping_key])
+        oauth_state_data = oauth_results[0]
+
+        if not oauth_state_data:
             logging.error(f"OAuth state object not found: {state[:20]}...")
             raise OAuthError('invalid_request', 'Invalid or expired OAuth state')
 
         # Deserialize OAuth state
         try:
-            oauth_state_json = oauth_state_data[0]
+            oauth_state_json = oauth_state_data
             if isinstance(oauth_state_json, bytes):
                 oauth_state_json = oauth_state_json.decode('utf-8')
             oauth_state = OAuthState.from_dict(json.loads(oauth_state_json))
