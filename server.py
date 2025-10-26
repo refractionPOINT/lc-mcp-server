@@ -114,6 +114,7 @@ from mcp.server.fastmcp.server import Context
 from typing import Any, TYPE_CHECKING
 import limacharlie
 import limacharlie.Replay
+import limacharlie.Billing
 import json
 import uuid
 import time
@@ -403,6 +404,8 @@ PROFILES = {
         "get_extension_config",
         "set_extension_config",
         "delete_extension_config",
+        "subscribe_to_extension",
+        "unsubscribe_from_extension",
         # Hive rules
         "list_rules",
         "get_rule",
@@ -419,9 +422,14 @@ PROFILES = {
         "delete_api_key",
         # Organization
         "get_org_info",
+        "list_user_orgs",
+        "create_org",
         "get_usage_stats",
         "get_org_errors",
         "dismiss_org_error",
+        "get_billing_details",
+        "get_org_invoice_url",
+        "get_sku_definitions",
     },
 }
 
@@ -521,17 +529,25 @@ def upload_to_gcs(data: dict[str, Any], tool_name: str) -> tuple[str, int]:
         logging.info(f"Error uploading to GCS: {e}")
         raise
 
-def wrap_tool_for_multi_mode(tool_func, is_async: bool):
+def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = True):
     """
     Wraps a tool function to support both normal mode (OID-based) and UID mode (multi-org).
 
+    Args:
+        tool_func: The tool function to wrap
+        is_async: Whether the function is async
+        requires_oid: Whether this tool requires an OID parameter (defaults to True)
+                     Set to False for user-level tools that operate on UID only
+
     In normal mode:
       - SDK created from context (API Key + OID from auth)
-      - oid parameter must NOT be provided
+      - oid parameter must NOT be provided (if requires_oid=True)
 
     In UID mode:
-      - SDK created per-call with provided OID (API Key + UID + OID)
-      - oid parameter MUST be provided
+      - If requires_oid=True: SDK created per-call with provided OID (API Key + UID + OID)
+                             oid parameter MUST be provided
+      - If requires_oid=False: SDK created with UID only (API Key + UID)
+                              oid parameter NOT added to signature
 
     Mode is detected from uid_auth_context_var:
       - If set: UID mode
@@ -539,32 +555,33 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
     """
     import inspect
 
-    # Add oid parameter to the function signature
+    # Add oid parameter to the function signature only if required
     sig = inspect.signature(tool_func)
     params = list(sig.parameters.values())
 
-    # Insert oid parameter before ctx (which is always the last parameter)
-    # Use POSITIONAL_OR_KEYWORD to maintain compatibility with parameter ordering
-    oid_param = inspect.Parameter(
-        'oid',
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-        default=None,
-        annotation=str | None
-    )
-    params.insert(-1, oid_param)  # Insert before last parameter (ctx)
+    if requires_oid:
+        # Insert oid parameter before ctx (which is always the last parameter)
+        # Use POSITIONAL_OR_KEYWORD to maintain compatibility with parameter ordering
+        oid_param = inspect.Parameter(
+            'oid',
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=None,
+            annotation=str | None
+        )
+        params.insert(-1, oid_param)  # Insert before last parameter (ctx)
 
-    # Ensure ctx parameter has a default value to avoid "non-default after default" error
-    # FastMCP injects ctx automatically, so it's safe to give it a default
-    if params[-1].default == inspect.Parameter.empty:
-        params[-1] = params[-1].replace(default=None)
+        # Ensure ctx parameter has a default value to avoid "non-default after default" error
+        # FastMCP injects ctx automatically, so it's safe to give it a default
+        if params[-1].default == inspect.Parameter.empty:
+            params[-1] = params[-1].replace(default=None)
 
     new_sig = sig.replace(parameters=params)
 
     if is_async:
         @functools.wraps(tool_func)
         async def async_wrapper(*args, **kwargs):
-            # Extract oid from kwargs, or use current OID from context (for nested calls)
-            oid = kwargs.pop('oid', None) or current_oid_context_var.get()
+            # Extract oid from kwargs only if required, or use current OID from context (for nested calls)
+            oid = kwargs.pop('oid', None) or current_oid_context_var.get() if requires_oid else None
 
             # Check if we're in UID mode
             uid_auth = uid_auth_context_var.get()
@@ -572,27 +589,40 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                if oid is None:
-                    raise ValueError(
-                        f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
-                        f"Please specify the organization ID for this operation."
-                    )
                 # Unpack UID auth context (uid, api_key, mode)
                 uid, api_key, mode = uid_auth
 
-                # Create SDK based on authentication mode
-                if mode == "oauth":
-                    # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                    logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
-                    sdk = limacharlie.Manager(oid=oid)
+                if requires_oid:
+                    # Org-level tool: require OID and create SDK with OID
+                    if oid is None:
+                        raise ValueError(
+                            f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
+                            f"Please specify the organization ID for this operation."
+                        )
+
+                    # Create SDK based on authentication mode
+                    if mode == "oauth":
+                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
+                        logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
+                        sdk = limacharlie.Manager(oid=oid)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for oid={oid}")
+                        sdk = limacharlie.Manager(oid, secret_api_key=api_key)
                 else:
-                    # API key mode
-                    logging.debug(f"API key mode: Creating SDK for oid={oid}")
-                    sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+                    # User-level tool: create SDK with UID only (no OID)
+                    if mode == "oauth":
+                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
+                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
+                        sdk = limacharlie.Manager(uid=uid)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
+                        sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
                 sdk_token = sdk_context_var.set(sdk)
-                oid_token = current_oid_context_var.set(oid)
+                oid_token = current_oid_context_var.set(oid) if oid else None
                 try:
                     # Execute tool
                     result = await tool_func(*args, **kwargs)
@@ -604,10 +634,11 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
                     except Exception:
                         pass
                     sdk_context_var.reset(sdk_token)
-                    current_oid_context_var.reset(oid_token)
+                    if oid_token:
+                        current_oid_context_var.reset(oid_token)
             else:
                 # Normal mode
-                if oid is not None:
+                if requires_oid and oid is not None:
                     raise ValueError(
                         f"Tool {tool_func.__name__}: 'oid' parameter is not allowed in normal mode. "
                         f"In normal mode, the organization is specified via authentication headers."
@@ -621,8 +652,8 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
     else:
         @functools.wraps(tool_func)
         def sync_wrapper(*args, **kwargs):
-            # Extract oid from kwargs, or use current OID from context (for nested calls)
-            oid = kwargs.pop('oid', None) or current_oid_context_var.get()
+            # Extract oid from kwargs only if required, or use current OID from context (for nested calls)
+            oid = kwargs.pop('oid', None) or current_oid_context_var.get() if requires_oid else None
 
             # Check if we're in UID mode
             uid_auth = uid_auth_context_var.get()
@@ -630,27 +661,40 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                if oid is None:
-                    raise ValueError(
-                        f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
-                        f"Please specify the organization ID for this operation."
-                    )
                 # Unpack UID auth context (uid, api_key, mode)
                 uid, api_key, mode = uid_auth
 
-                # Create SDK based on authentication mode
-                if mode == "oauth":
-                    # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
-                    logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
-                    sdk = limacharlie.Manager(oid=oid)
+                if requires_oid:
+                    # Org-level tool: require OID and create SDK with OID
+                    if oid is None:
+                        raise ValueError(
+                            f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
+                            f"Please specify the organization ID for this operation."
+                        )
+
+                    # Create SDK based on authentication mode
+                    if mode == "oauth":
+                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
+                        logging.debug(f"OAuth mode: Creating SDK for oid={oid}")
+                        sdk = limacharlie.Manager(oid=oid)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for oid={oid}")
+                        sdk = limacharlie.Manager(oid, secret_api_key=api_key)
                 else:
-                    # API key mode
-                    logging.debug(f"API key mode: Creating SDK for oid={oid}")
-                    sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+                    # User-level tool: create SDK with UID only (no OID)
+                    if mode == "oauth":
+                        # OAuth mode - SDK will use GLOBAL_OAUTH and auto-refresh JWT
+                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid})")
+                        sdk = limacharlie.Manager(uid=uid)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
+                        sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
                 sdk_token = sdk_context_var.set(sdk)
-                oid_token = current_oid_context_var.set(oid)
+                oid_token = current_oid_context_var.set(oid) if oid else None
                 try:
                     # Execute tool
                     result = tool_func(*args, **kwargs)
@@ -662,10 +706,11 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
                     except Exception:
                         pass
                     sdk_context_var.reset(sdk_token)
-                    current_oid_context_var.reset(oid_token)
+                    if oid_token:
+                        current_oid_context_var.reset(oid_token)
             else:
                 # Normal mode
-                if oid is not None:
+                if requires_oid and oid is not None:
                     raise ValueError(
                         f"Tool {tool_func.__name__}: 'oid' parameter is not allowed in normal mode. "
                         f"In normal mode, the organization is specified via authentication headers."
@@ -677,11 +722,15 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool):
         sync_wrapper.__signature__ = new_sig
         return sync_wrapper
 
-def mcp_tool_with_gcs():
+def mcp_tool_with_gcs(requires_oid: bool = True):
     """
     Decorator that wraps MCP tools to handle large results via GCS.
     Instead of immediately registering with an MCP instance, this stores
     the tool in TOOL_REGISTRY for later registration based on profile.
+
+    Args:
+        requires_oid: Whether this tool requires an OID parameter in UID mode (defaults to True)
+                     Set to False for user-level tools that operate on UID only
     """
     def decorator(func):
         tool_name = func.__name__
@@ -767,8 +816,8 @@ def mcp_tool_with_gcs():
         else:
             gcs_wrapped = wrapper
 
-        # Apply multi-mode wrapper to add oid parameter support
-        multi_mode_wrapped = wrap_tool_for_multi_mode(gcs_wrapped, is_async)
+        # Apply multi-mode wrapper to add oid parameter support (or skip it for user-level tools)
+        multi_mode_wrapped = wrap_tool_for_multi_mode(gcs_wrapped, is_async, requires_oid=requires_oid)
 
         # Store in registry instead of immediately registering
         TOOL_REGISTRY[tool_name] = (multi_mode_wrapped, is_async)
@@ -2819,7 +2868,7 @@ def list_sensors(
                 if hasattr(sensor_obj, '__dict__'):
                     # It's a Sensor object
                     sensor_info = sensor_obj.getInfo()
-                    sensor_tags = sensor_obj.getTags()
+                    sensor_tags = list(sensor_obj.getTags())
                 else:
                     # It's already a dict
                     sensor_info = sensor_obj
@@ -2883,7 +2932,7 @@ def get_sensor_info(sid: str, ctx: Context) -> dict[str, Any]:
         # Add additional useful information
         sensor_info['is_online'] = sensor.isOnline()
         sensor_info['is_isolated'] = sensor.isIsolatedFromNetwork()
-        sensor_info['tags'] = sensor.getTags()
+        sensor_info['tags'] = list(sensor.getTags())
         sensor_info['platform_type'] = {
             'is_windows': sensor.isWindows(),
             'is_mac': sensor.isMac(),
@@ -3762,7 +3811,7 @@ def get_usage_stats(ctx: Context) -> dict[str, Any]:
 @mcp_tool_with_gcs()
 def get_org_info(ctx: Context) -> dict[str, Any]:
     """Get detailed organization information and configuration
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "org" (dict): Organization details and configuration
@@ -3770,20 +3819,145 @@ def get_org_info(ctx: Context) -> dict[str, Any]:
     """
     start = time.time()
     logging.info(f"Tool called: get_org_info()")
-    
+
     try:
         sdk = get_sdk_from_context(ctx)
         if sdk is None:
             return {"error": "No authentication provided"}
-        
+
         org_info = sdk.getOrgInfo()
         return {"org": org_info if org_info else {}}
-        
+
     except Exception as e:
         logging.info(f"Error in get_org_info: {str(e)}")
         return {"error": str(e)}
     finally:
         logging.info(f"get_org_info time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs(requires_oid=False)
+def list_user_orgs(ctx: Context) -> dict[str, Any]:
+    """List all organizations accessible to the authenticated user
+
+    This is a user-level operation that does not require an organization ID.
+    It returns all organizations the user has access to.
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "orgs" (dict): Dictionary mapping organization IDs to organization details
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: list_user_orgs()")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Call the user-level API to get all accessible orgs
+        orgs = sdk.userAccessibleOrgs()
+        return {"orgs": orgs if orgs else {}}
+
+    except Exception as e:
+        logging.info(f"Error in list_user_orgs: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"list_user_orgs time: {time.time() - start} seconds")
+
+
+def get_available_locations_from_plans(sdk) -> list[str]:
+    """
+    Fetch available locations dynamically from billing service.
+    Normalizes region names to location codes using a future-proof algorithm.
+
+    Args:
+        sdk: LimaCharlie SDK instance
+
+    Returns:
+        list[str]: Available location codes (e.g., ['canada', 'europe', 'usa'])
+    """
+    try:
+        from limacharlie import Billing
+        billing = Billing(sdk)
+        resp = billing.getAvailablePlans()
+        plans = resp.get('plans', [])
+
+        available_locs = set()
+        for plan in plans:
+            datacenter = plan.get('Datacenter')
+            if datacenter and datacenter.get('Region'):
+                region = datacenter['Region']
+
+                # Normalize region name to location code:
+                # - If contains '-': use as-is (private clusters like LCIO-NYC3-GENERAL)
+                # - Otherwise: lowercase and remove dots (U.S.A. -> usa, Japan -> japan)
+                if '-' in region:
+                    loc_code = region
+                else:
+                    loc_code = region.lower().replace('.', '')
+
+                available_locs.add(loc_code)
+
+        return sorted(list(available_locs))
+    except Exception as e:
+        logging.warning(f"Failed to fetch available plans: {e}")
+        # Fallback to common default locations
+        return ['canada', 'europe', 'exp', 'india', 'uk', 'usa']
+
+
+@mcp_tool_with_gcs(requires_oid=False)
+def create_org(name: str, location: str, template: str | None = None, ctx: Context = None) -> dict[str, Any]:
+    """Create a new organization
+
+    This is a user-level operation that does not require an organization ID.
+    Only users (not API keys) can create organizations.
+
+    Args:
+        name (str): Name for the new organization
+        location (str): Location where the organization will be created (e.g., 'usa', 'europe', 'canada', 'india', 'uk', 'exp')
+        template (str): Optional YAML Infrastructure-as-Code template to initialize the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "org" (dict): Created organization details including OID
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: create_org(name={name}, location={location})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Get available locations for this user
+        available_locs = get_available_locations_from_plans(sdk)
+
+        # Validate location (case-insensitive)
+        location_lower = location.lower()
+        if location_lower not in [loc.lower() for loc in available_locs]:
+            return {
+                "error": f"Invalid location '{location}'. Available locations: {', '.join(sorted(available_locs))}"
+            }
+
+        # Find the actual location code (preserving case for private clusters)
+        actual_location = None
+        for loc in available_locs:
+            if loc.lower() == location_lower:
+                actual_location = loc
+                break
+
+        # Create the organization using the SDK
+        result = sdk.createNewOrg(name, actual_location, template)
+
+        return {"org": result}
+
+    except Exception as e:
+        logging.info(f"Error in create_org: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"create_org time: {time.time() - start} seconds")
 
 
 @mcp_tool_with_gcs()
@@ -3850,6 +4024,98 @@ def dismiss_org_error(component: str, ctx: Context) -> dict[str, Any]:
         return {"error": str(e)}
     finally:
         logging.info(f"dismiss_org_error time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_billing_details(ctx: Context) -> dict[str, Any]:
+    """Get billing details for the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "details" (dict): Billing details for the organization
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_billing_details()")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Create Billing instance and get org details
+        billing = limacharlie.Billing(sdk)
+        details = billing.getOrgDetails()
+        return {"details": details if details else {}}
+
+    except Exception as e:
+        logging.info(f"Error in get_billing_details: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_billing_details time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_org_invoice_url(year: int, month: int, format: str = None, ctx: Context = None) -> dict[str, Any]:
+    """Get the URL to download an organization's invoice for a specific month
+
+    Args:
+        year (int): The year of the invoice
+        month (int): The month of the invoice (1-12)
+        format (str): Optional format parameter for the invoice
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "url" (str): URL to download the invoice
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_org_invoice_url(year={year}, month={month}, format={json.dumps(format)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Create Billing instance and get invoice URL
+        billing = limacharlie.Billing(sdk)
+        result = billing.getOrgInvoiceURL(year, month, format)
+        return {"url": result if result else ""}
+
+    except Exception as e:
+        logging.info(f"Error in get_org_invoice_url: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_org_invoice_url time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_sku_definitions(ctx: Context) -> dict[str, Any]:
+    """Get SKU definitions for the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "definitions" (dict): SKU definitions for the organization including pricing and quotas
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_sku_definitions()")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Create Billing instance and get SKU definitions
+        billing = limacharlie.Billing(sdk)
+        definitions = billing.getSkuDefinitions()
+        return {"definitions": definitions if definitions else {}}
+
+    except Exception as e:
+        logging.info(f"Error in get_sku_definitions: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_sku_definitions time: {time.time() - start} seconds")
 
 
 @mcp_tool_with_gcs()
@@ -5308,6 +5574,82 @@ def delete_extension_config(extension_name: str, ctx: Context) -> dict[str, Any]
         return {"error": str(e)}
     finally:
         logging.info(f"delete_extension_config time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def subscribe_to_extension(extension_name: str, ctx: Context) -> dict[str, Any]:
+    """Subscribe to an extension
+
+    Args:
+        extension_name (str): Name of the extension to subscribe to
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "success" (bool): True if subscription was successful
+            - "message" (str): Status message
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: subscribe_to_extension(extension_name={json.dumps(extension_name)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        from limacharlie import Extension
+        ext = Extension(sdk)
+        result = ext.subscribe(extension_name)
+
+        return {
+            "success": True,
+            "message": f"Successfully subscribed to extension '{extension_name}'",
+            "result": result
+        }
+
+    except Exception as e:
+        logging.info(f"Error in subscribe_to_extension: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"subscribe_to_extension time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def unsubscribe_from_extension(extension_name: str, ctx: Context) -> dict[str, Any]:
+    """Unsubscribe from an extension
+
+    Args:
+        extension_name (str): Name of the extension to unsubscribe from
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "success" (bool): True if unsubscription was successful
+            - "message" (str): Status message
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: unsubscribe_from_extension(extension_name={json.dumps(extension_name)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        from limacharlie import Extension
+        ext = Extension(sdk)
+        result = ext.unsubscribe(extension_name)
+
+        return {
+            "success": True,
+            "message": f"Successfully unsubscribed from extension '{extension_name}'",
+            "result": result
+        }
+
+    except Exception as e:
+        logging.info(f"Error in unsubscribe_from_extension: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"unsubscribe_from_extension time: {time.time() - start} seconds")
 
 
 # ---------- D&R Rules - Specific Hives ----------
