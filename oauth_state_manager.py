@@ -16,7 +16,7 @@ from dataclasses import dataclass, asdict
 
 
 @dataclass
-class OAuth State:
+class OAuthState:
     """OAuth authorization request state."""
     state: str
     code_challenge: str
