@@ -36,10 +36,12 @@ class FirebaseAuthBridge:
     """
 
     # Firebase API key from environment or default
-    # In production, this should come from LimaCharlie constants
+    # NOTE: This is a public Firebase Web API key, not a secret. It's designed to be
+    # exposed in client applications and is safe to include in public code. Firebase
+    # security is enforced through Firebase Security Rules, not API key secrecy.
     FIREBASE_API_KEY = os.getenv(
         "FIREBASE_API_KEY",
-        "AIzaSyDFV_-rUEBq5xPQwNqC0pBr_r5aS3UbpKQ"  # LimaCharlie's Firebase project, NOT A SECRET
+        "AIzaSyB5VyO6qS-XlnVD3zOIuEVNBD5JFn22_1w"  # LimaCharlie's Firebase Web API key
     )
 
     # Firebase Auth API endpoints
