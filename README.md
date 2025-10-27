@@ -308,6 +308,129 @@ The `run_lcql_query` tool supports:
 - `LC_OID` - Organization ID (STDIO mode only)
 - `LC_API_KEY` - API key (STDIO mode only)
 
+### Audit Logging
+
+- `AUDIT_LOG_ENABLED` - Enable/disable audit logging (default: `true`)
+- `AUDIT_LOG_LEVEL` - Minimum severity to log: CRITICAL, HIGH, MEDIUM, LOW (default: `MEDIUM`)
+- `AUDIT_LOG_INCLUDE_LOW` - Include LOW severity events (default: `false`)
+
+## Audit Logging
+
+The MCP server includes comprehensive audit logging for security and compliance. All security-relevant operations are automatically logged to stdout as structured JSON events.
+
+### What is Logged
+
+**CRITICAL Severity:**
+- Authentication and authorization events
+- Destructive operations (all delete operations)
+- Credential management (API keys, secrets)
+- Network isolation actions (isolate/rejoin endpoints)
+
+**HIGH Severity:**
+- Configuration changes (D&R rules, YARA rules, false positive rules)
+- Policy modifications (outputs, adapters, extensions)
+- Sensor management (tagging, installation keys)
+- Detection rule updates
+
+**MEDIUM Severity:**
+- Data access operations (LCQL queries, historical data retrieval)
+- IOC searches and threat intelligence queries
+- Detection retrieval
+- List and read operations
+
+**LOW Severity:**
+- Metadata operations
+- Health checks
+- Platform information queries
+
+### What is Never Logged
+
+For security, the following data is **never** logged:
+- Function parameters (may contain API keys, secrets, passwords)
+- Function responses (may contain sensitive data)
+- OAuth tokens or JWT contents
+- API keys or secrets values
+- Query contents or rule bodies
+
+Only metadata is logged:
+- Event type (function name)
+- User ID and organization ID
+- Timestamp and duration
+- Status (success/failure)
+- Source IP and user agent
+- Generic error types (without details)
+
+### Audit Event Format
+
+```json
+{
+  "timestamp": "2025-10-26T18:00:00.000Z",
+  "event_type": "delete_sensor",
+  "severity": "CRITICAL",
+  "action": "delete",
+  "status": "success",
+  "user_id": "uid-xxx",
+  "organization_id": "oid-yyy",
+  "status_code": 200,
+  "request_id": "uuid",
+  "source_ip": "1.2.3.4",
+  "user_agent": "client/1.0",
+  "duration_ms": 123
+}
+```
+
+### Configuration Examples
+
+**Development (verbose logging):**
+```bash
+export AUDIT_LOG_ENABLED=true
+export AUDIT_LOG_LEVEL=LOW
+export AUDIT_LOG_INCLUDE_LOW=true
+```
+
+**Production (default - balanced):**
+```bash
+export AUDIT_LOG_ENABLED=true
+export AUDIT_LOG_LEVEL=MEDIUM
+```
+
+**High security (only critical events):**
+```bash
+export AUDIT_LOG_ENABLED=true
+export AUDIT_LOG_LEVEL=CRITICAL
+```
+
+**Disable audit logging:**
+```bash
+export AUDIT_LOG_ENABLED=false
+```
+
+### Parsing Audit Logs
+
+Audit logs are written to stdout with the prefix `AUDIT:`. To extract and parse:
+
+```bash
+# Extract audit logs from server output
+grep "AUDIT:" server.log | sed 's/AUDIT: //' > audit.jsonl
+
+# Parse with jq
+cat audit.jsonl | jq 'select(.severity == "CRITICAL")'
+
+# Count events by type
+cat audit.jsonl | jq -r '.event_type' | sort | uniq -c
+
+# Find failed operations
+cat audit.jsonl | jq 'select(.status == "failure")'
+```
+
+### Performance
+
+Audit logging is designed for minimal overhead:
+- Non-blocking writes to stdout
+- Lazy JSON serialization
+- No parameter/response serialization
+- Average overhead: < 2ms per operation
+
 ## Notes
 
 - The server is stateless when running in HTTP mode

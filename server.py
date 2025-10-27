@@ -136,6 +136,10 @@ from datetime import datetime, timedelta
 import functools
 import tempfile
 
+# Audit logging imports
+from audit_logger import AuditSeverity, AuditAction
+from audit_decorator import audit_log, set_request_metadata, clear_request_metadata
+
 # Type hints only (for IDE/type checkers, not runtime)
 if TYPE_CHECKING:
     from starlette.exceptions import HTTPException
@@ -1337,6 +1341,7 @@ def get_processes(sid: str, ctx: Context) -> dict[str, Any]:
         logging.info(f"get_processes time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def get_historic_events(sid: str, start_time: int, end_time: int, ctx: Context) -> dict[str, Any]:
     """Get historic events for a given Sensor ID between timestamps
 
@@ -1707,6 +1712,7 @@ def yara_scan_memory(sid: str, rule: str, process_expr: str, ctx: Context) -> di
         logging.info(f"yara_scan_memory time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.EXECUTE)
 def isolate_network(sid: str, ctx: Context) -> dict[str, Any]:
     """Isolate a sensor from the network
 
@@ -1734,6 +1740,7 @@ def isolate_network(sid: str, ctx: Context) -> dict[str, Any]:
         logging.info(f"isolate_network time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.EXECUTE)
 def rejoin_network(sid: str, ctx: Context) -> dict[str, Any]:
     """Rejoin a sensor to the network
 
@@ -1815,6 +1822,7 @@ def is_online(sid: str, ctx: Context) -> dict[str, Any]:
         logging.info(f"is_online time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def add_tag(sid: str, tag: str, ttl: int, ctx: Context) -> dict[str, Any]:
     """Add a tag to a sensor
 
@@ -1844,6 +1852,7 @@ def add_tag(sid: str, tag: str, ttl: int, ctx: Context) -> dict[str, Any]:
         logging.info(f"add_tag time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def remove_tag(sid: str, tag: str, ctx: Context) -> dict[str, Any]:
     """Remove a tag from a sensor
 
@@ -2134,6 +2143,7 @@ def get_time_when_sensor_has_data(sid: str, start: int, end: int, ctx: Context) 
         logging.info(f"get_time_when_sensor_has_data time: {time.time() - start_time} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def get_historic_detections(start: int, end: int, limit: int = None, cat: str = None, ctx: Context = None) -> dict[str, Any]:
     """Get historic detections for the organization between two epoch second timestamps
 
@@ -2213,6 +2223,7 @@ def get_fp_rules(ctx: Context) -> dict[str, Any]:
         logging.info(f"get_fp_rules time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def run_lcql_query(query: str, limit: int = 100, stream = "event", ctx: Context = None) -> dict[str, Any]:
     """Run a LCQL query on the organization
 
@@ -3138,6 +3149,7 @@ def search_hosts(hostname_expr: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_sensor(sid: str, ctx: Context) -> dict[str, Any]:
     """Delete a sensor from the organization
     
@@ -3342,6 +3354,7 @@ def list_outputs(ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.CREATE)
 def add_output(
     name: str,
     module: str,
@@ -3388,6 +3401,7 @@ def add_output(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_output(name: str, ctx: Context) -> dict[str, Any]:
     """Delete an output configuration
     
@@ -3450,6 +3464,7 @@ def list_installation_keys(ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.CREATE)
 def create_installation_key(
     tags: list[str],
     description: str,
@@ -3493,6 +3508,7 @@ def create_installation_key(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_installation_key(iid: str, ctx: Context) -> dict[str, Any]:
     """Delete an installation key
     
@@ -3605,6 +3621,7 @@ def get_rule(hive_name: str, rule_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_rule(
     hive_name: str,
     rule_name: str,
@@ -3653,6 +3670,7 @@ def set_rule(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_rule(hive_name: str, rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a rule from a hive
     
@@ -3797,6 +3815,7 @@ def get_artifact(payload_id: str, ctx: Context) -> dict[str, Any]:
 # ============================================================================
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def search_iocs(
     ioc_type: str,
     ioc_value: str,
@@ -4251,6 +4270,7 @@ def list_api_keys(ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.CREATE)
 def create_api_key(
     key_name: str,
     permissions: list[str] = None,
@@ -4291,6 +4311,7 @@ def create_api_key(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_api_key(key_hash: str, ctx: Context) -> dict[str, Any]:
     """Delete an API key
     
@@ -4395,6 +4416,7 @@ def get_yara_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_yara_rule(
     rule_name: str,
     rule_content: str,
@@ -4452,6 +4474,7 @@ def set_yara_rule(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_yara_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a YARA rule
     
@@ -4605,6 +4628,7 @@ def get_lookup(lookup_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_lookup(
     lookup_name: str,
     lookup_data: dict[str, Any],
@@ -4649,6 +4673,7 @@ def set_lookup(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_lookup(lookup_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a lookup table
     
@@ -4806,6 +4831,7 @@ def get_saved_query(query_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_saved_query(
     query_name: str,
     lcql_query: str,
@@ -4858,6 +4884,7 @@ def set_saved_query(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_saved_query(query_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a saved query
     
@@ -5016,6 +5043,7 @@ def get_secret(secret_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.CREATE)
 def set_secret(
     secret_name: str,
     secret_value: str,
@@ -5065,6 +5093,7 @@ def set_secret(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_secret(secret_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a secret
     
@@ -5167,6 +5196,7 @@ def get_playbook(playbook_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_playbook(
     playbook_name: str,
     playbook_data: dict[str, Any],
@@ -5211,6 +5241,7 @@ def set_playbook(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_playbook(playbook_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a playbook
     
@@ -5313,6 +5344,7 @@ def get_cloud_sensor(sensor_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_cloud_sensor(
     sensor_name: str,
     sensor_config: dict[str, Any],
@@ -5357,6 +5389,7 @@ def set_cloud_sensor(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_cloud_sensor(sensor_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a cloud sensor configuration
     
@@ -5459,6 +5492,7 @@ def get_external_adapter(adapter_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_external_adapter(
     adapter_name: str,
     adapter_config: dict[str, Any],
@@ -5503,6 +5537,7 @@ def set_external_adapter(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_external_adapter(adapter_name: str, ctx: Context) -> dict[str, Any]:
     """Delete an external adapter configuration
     
@@ -5605,6 +5640,7 @@ def get_extension_config(extension_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_extension_config(
     extension_name: str,
     config_data: dict[str, Any],
@@ -5649,6 +5685,7 @@ def set_extension_config(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_extension_config(extension_name: str, ctx: Context) -> dict[str, Any]:
     """Delete an extension configuration
     
@@ -5795,6 +5832,7 @@ def get_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_dr_general_rule(
     rule_name: str,
     rule_content: dict[str, Any],
@@ -5818,6 +5856,7 @@ def set_dr_general_rule(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a general D&R rule
 
@@ -5867,6 +5906,7 @@ def get_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_dr_managed_rule(
     rule_name: str,
     rule_content: dict[str, Any],
@@ -5890,6 +5930,7 @@ def set_dr_managed_rule(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a managed D&R rule
 
@@ -5927,6 +5968,7 @@ def get_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_fp_rule(
     rule_name: str,
     rule_content: dict[str, Any],
@@ -5950,6 +5992,7 @@ def set_fp_rule(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a false positive rule
 
