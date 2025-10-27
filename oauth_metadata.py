@@ -139,6 +139,10 @@ class OAuthMetadataProvider:
             "token_endpoint_auth_signing_alg_values_supported": ["RS256"],
             "revocation_endpoint_auth_methods_supported": ["none"],
             "introspection_endpoint_auth_methods_supported": ["none"],
+
+            # Provider selection (non-standard extension for multi-provider support)
+            "supported_oauth_providers": ["google", "microsoft"],
+            "provider_selection_parameter": "provider",  # Query parameter name for provider selection
         }
 
         return metadata

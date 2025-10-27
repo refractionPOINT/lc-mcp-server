@@ -67,6 +67,12 @@ class OAuthEndpoints:
     Implements the authorization code flow with PKCE, bridging to Firebase Auth.
     """
 
+    # Supported OAuth providers (maps client-facing names to Firebase provider IDs)
+    SUPPORTED_PROVIDERS = {
+        "google": "google.com",
+        "microsoft": "microsoft.com",
+    }
+
     def __init__(
         self,
         state_manager: Optional[OAuthStateManager] = None,
@@ -86,6 +92,35 @@ class OAuthEndpoints:
         self.firebase_bridge = firebase_bridge or get_firebase_bridge()
         self.metadata_provider = get_metadata_provider()
         logging.info("OAuth endpoints initialized")
+
+    def _validate_and_normalize_provider(self, provider: str) -> str:
+        """
+        Validate and normalize provider parameter.
+
+        Args:
+            provider: Provider identifier ("google", "microsoft", "google.com", "microsoft.com")
+
+        Returns:
+            Normalized provider ID for Firebase ("google.com", "microsoft.com")
+
+        Raises:
+            OAuthError: If provider is unsupported
+        """
+        if not provider:
+            return "google.com"  # Default for backward compatibility
+
+        # Normalize: "google" -> "google.com", "microsoft" -> "microsoft.com"
+        if provider in self.SUPPORTED_PROVIDERS:
+            return self.SUPPORTED_PROVIDERS[provider]
+
+        # Accept already-normalized form
+        if provider in self.SUPPORTED_PROVIDERS.values():
+            return provider
+
+        raise OAuthError(
+            "invalid_request",
+            f"Unsupported provider: {provider}. Supported: {', '.join(self.SUPPORTED_PROVIDERS.keys())}"
+        )
 
     # ===== Authorization Endpoint =====
 
@@ -194,9 +229,13 @@ class OAuthEndpoints:
         # Validate request
         auth_req = self.validate_authorize_request(params)
 
-        logging.info(f"Authorization request from client {auth_req.client_id}, scope: {auth_req.scope}")
+        # Extract and validate provider (defaults to Google for backward compatibility)
+        provider_param = params.get('provider', 'google')
+        provider_id = self._validate_and_normalize_provider(provider_param)
 
-        # Store OAuth state for callback validation
+        logging.info(f"Authorization request from client {auth_req.client_id}, provider: {provider_id}, scope: {auth_req.scope}")
+
+        # Store OAuth state for callback validation (including provider)
         self.state_manager.store_oauth_state(
             state=auth_req.state,
             code_challenge=auth_req.code_challenge,
@@ -204,7 +243,8 @@ class OAuthEndpoints:
             redirect_uri=auth_req.redirect_uri,
             client_id=auth_req.client_id,
             scope=auth_req.scope,
-            resource=auth_req.resource
+            resource=auth_req.resource,
+            provider=provider_id
         )
 
         # Build OAuth callback URL (our server will receive this)
@@ -216,10 +256,10 @@ class OAuthEndpoints:
 
         try:
             # Initiate Firebase auth flow
-            # This returns a Firebase-managed Google OAuth URL
+            # This returns a Firebase-managed OAuth URL for the selected provider
             logging.debug(f"Creating Firebase auth URI for OAuth state: {auth_req.state[:8]}...{auth_req.state[-4:]}")
             session_id, firebase_auth_uri = self.firebase_bridge.create_auth_uri(
-                provider_id="google.com",
+                provider_id=provider_id,
                 redirect_uri=oauth_callback_url,
                 scopes=("openid", "email", "profile")
             )
@@ -370,6 +410,10 @@ class OAuthEndpoints:
             logging.error(f"Failed to deserialize OAuth state: {e}")
             raise OAuthError('invalid_request', 'Invalid OAuth state format')
 
+        # Get provider from stored OAuth state
+        provider_id = oauth_state.provider
+        logging.info(f"OAuth callback for provider: {provider_id}")
+
         try:
             # Build callback URL for Firebase
             callback_url = self.metadata_provider.server_url + "/oauth/callback"
@@ -378,12 +422,12 @@ class OAuthEndpoints:
             # Validate and extract query string
             query_string = self.firebase_bridge.validate_provider_callback(callback_path)
 
-            # Exchange with Firebase to get tokens
+            # Exchange with Firebase to get tokens using the stored provider
             firebase_tokens = self.firebase_bridge.sign_in_with_idp(
                 request_uri=callback_url,
                 query_string=query_string,
                 session_id=session_id,
-                provider_id="google.com"
+                provider_id=provider_id
             )
 
             # Generate authorization code

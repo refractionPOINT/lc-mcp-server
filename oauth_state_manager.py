@@ -33,6 +33,7 @@ class OAuthState:
     client_id: str
     scope: str
     resource: str
+    provider: str  # OAuth provider ID (e.g., "google.com", "microsoft.com")
     created_at: int
 
     def to_dict(self) -> Dict[str, Any]:
@@ -236,7 +237,8 @@ class OAuthStateManager:
         redirect_uri: str,
         client_id: str,
         scope: str,
-        resource: str
+        resource: str,
+        provider: str = "google.com"
     ) -> None:
         """
         Store OAuth authorization request state.
@@ -249,6 +251,7 @@ class OAuthStateManager:
             client_id: OAuth client ID
             scope: Requested scopes
             resource: Target resource URI
+            provider: OAuth provider ID (default: "google.com")
         """
         oauth_state = OAuthState(
             state=state,
@@ -258,6 +261,7 @@ class OAuthStateManager:
             client_id=client_id,
             scope=scope,
             resource=resource,
+            provider=provider,
             created_at=int(time.time())
         )
 
