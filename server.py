@@ -6438,13 +6438,15 @@ if PUBLIC_MODE:
     # Create Starlette app with all routes
     base_app = Starlette(routes=routes, lifespan=combined_lifespan)
 
-    # Add CORS middleware to allow OAuth clients (including localhost)
+    # Add CORS middleware to allow OAuth clients
     # OAuth security is provided by PKCE and state parameters, not CORS
+    # We allow all origins since OAuth flows involve redirects from external providers (Google)
+    # and we don't use credentials/cookies in OAuth endpoints
     from starlette.middleware.cors import CORSMiddleware
     base_app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",  # Allow localhost on any port
-        allow_credentials=True,
+        allow_origins=["*"],  # Allow all origins - OAuth security is via PKCE, not CORS
+        allow_credentials=False,  # OAuth endpoints don't use cookies
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
     )
