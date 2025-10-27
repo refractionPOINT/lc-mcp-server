@@ -3,7 +3,7 @@ starlette
 limacharlie
 fastapi
 contextvars
-mcp>=1.17.0
+mcp>=1.19.0
 
 # For Gemini
 google-genai
