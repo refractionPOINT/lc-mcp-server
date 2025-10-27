@@ -43,12 +43,61 @@ The LimaCharlie MCP server now supports full **OAuth 2.1 with PKCE** authenticat
 
 1. **Discovery**: Client fetches `/.well-known/oauth-protected-resource` to find authorization server
 2. **Authorization Request**: Client initiates OAuth flow at `/authorize` with PKCE challenge
-3. **Firebase OAuth**: Server redirects user to Firebase-managed Google OAuth
-4. **User Authentication**: User authenticates with Google via Firebase
+3. **Firebase OAuth**: Server redirects user to Firebase-managed OAuth (Google or Microsoft)
+4. **User Authentication**: User authenticates with selected provider via Firebase
 5. **Authorization Code**: Server receives Firebase tokens, generates OAuth authorization code
 6. **Token Exchange**: Client exchanges code for access token at `/token` with PKCE verifier
 7. **Access Granted**: Server returns MCP access token mapped to Firebase tokens
 8. **API Access**: Client uses access token in `Authorization: Bearer <token>` header
+
+## Provider Selection
+
+The server supports multiple OAuth providers concurrently. Users can select their preferred authentication provider when initiating the OAuth flow.
+
+### Supported Providers
+
+| Provider | Parameter Value | Description |
+|----------|----------------|-------------|
+| Google | `google` | Google accounts (default) |
+| Microsoft | `microsoft` | Microsoft/Azure AD accounts |
+
+### How to Specify Provider
+
+Add the `provider` query parameter to the authorization request:
+
+**Google OAuth (default)**:
+```
+GET /authorize?response_type=code&client_id=...&redirect_uri=...&state=...&code_challenge=...&code_challenge_method=S256
+```
+
+**Microsoft OAuth (explicit)**:
+```
+GET /authorize?provider=microsoft&response_type=code&client_id=...&redirect_uri=...&state=...&code_challenge=...&code_challenge_method=S256
+```
+
+**Using curl**:
+```bash
+# Google authentication (default)
+curl "http://localhost:8080/authorize?client_id=test&redirect_uri=http://localhost&state=xyz&code_challenge=abc&code_challenge_method=S256&response_type=code"
+
+# Microsoft authentication
+curl "http://localhost:8080/authorize?provider=microsoft&client_id=test&redirect_uri=http://localhost&state=xyz&code_challenge=abc&code_challenge_method=S256&response_type=code"
+```
+
+### Provider Persistence
+
+The selected provider is automatically stored with your OAuth session and used throughout the authentication flow. You don't need to specify it again in token exchange requests - the server remembers your choice.
+
+### Invalid Provider Handling
+
+If you specify an unsupported provider, the server returns a `400 Bad Request` error:
+
+```json
+{
+  "error": "invalid_request",
+  "error_description": "Unsupported provider: facebook. Supported: google, microsoft"
+}
+```
 
 ## Setup & Configuration
 
@@ -211,8 +260,9 @@ Initiates OAuth authorization flow.
 - `code_challenge`: PKCE challenge (S256)
 - `code_challenge_method`: Must be `S256`
 - `resource`: Target resource URI (optional)
+- `provider`: OAuth provider to use - `google` or `microsoft` (optional, default: `google`)
 
-**Response**: Redirects to Firebase OAuth URL
+**Response**: Redirects to Firebase OAuth URL for selected provider
 
 #### POST /token
 
