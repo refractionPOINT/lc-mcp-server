@@ -38,6 +38,9 @@ COPY prompts/ ./prompts/
 # SECURITY: Include rate_limiter.py and token_encryption.py for OAuth security features
 COPY oauth_*.py firebase_auth_bridge.py rate_limiter.py token_encryption.py ./
 
+# Copy audit logging modules
+COPY audit_logger.py audit_decorator.py ./
+
 # Expose the application port
 EXPOSE 8080
 ENV PORT=8080
