@@ -29,13 +29,16 @@ class MfaResponse:
     Multi-Factor Authentication response from Firebase.
 
     Returned when signInWithIdp detects that MFA is required.
+
+    Note: pending_token is optional - it's only used in some auth flows (e.g., phone auth).
+    For OAuth + TOTP MFA, only mfa_pending_credential and mfa_enrollment_id are needed.
     """
     mfa_pending_credential: str
     mfa_enrollment_id: str
-    pending_token: str
     display_name: str
     local_id: str
     email: str
+    pending_token: Optional[str] = None  # Optional - not needed for OAuth TOTP flows
 
 
 class FirebaseMfaRequiredError(Exception):
@@ -209,8 +212,7 @@ class FirebaseAuthBridge:
             if not id_token or not refresh_token:
                 if self._is_mfa_required(data):
                     logging.info(f"MFA required for user {data.get('email', 'unknown')}")
-                    # Log the full response to understand what Firebase is sending (ERROR level for Cloud Run visibility)
-                    logging.error(f"[DEBUG] Firebase MFA response data: {json.dumps(data, indent=2)}")
+                    logging.debug(f"Firebase MFA response data: {json.dumps(data, indent=2)}")
                     mfa_response = self._extract_mfa_response(data)
                     raise FirebaseMfaRequiredError(mfa_response)
                 # Check for account linking/confirmation required
@@ -346,19 +348,18 @@ class FirebaseAuthBridge:
         local_id = response.get('localId')
         email = response.get('email')
 
-        # Log what we actually received for debugging (ERROR level for Cloud Run visibility)
-        logging.error(f"[DEBUG] MFA extraction - mfaPendingCredential present: {bool(mfa_pending_credential)}")
-        logging.error(f"[DEBUG] MFA extraction - pendingToken present: {bool(pending_token)}")
-        logging.error(f"[DEBUG] MFA extraction - mfaEnrollmentId present: {bool(mfa_enrollment_id)}")
-        logging.error(f"[DEBUG] MFA extraction - localId present: {bool(local_id)}")
-        logging.error(f"[DEBUG] MFA extraction - email present: {bool(email)}")
+        # Log what we actually received for debugging
+        logging.debug(f"MFA extraction - mfaPendingCredential present: {bool(mfa_pending_credential)}")
+        logging.debug(f"MFA extraction - pendingToken present: {bool(pending_token)} (optional)")
+        logging.debug(f"MFA extraction - mfaEnrollmentId present: {bool(mfa_enrollment_id)}")
+        logging.debug(f"MFA extraction - localId present: {bool(local_id)}")
+        logging.debug(f"MFA extraction - email present: {bool(email)}")
 
-        if not all([mfa_pending_credential, pending_token, mfa_enrollment_id, local_id, email]):
+        # Check for required fields only (pendingToken is optional for OAuth TOTP flows)
+        if not all([mfa_pending_credential, mfa_enrollment_id, local_id, email]):
             missing = []
             if not mfa_pending_credential:
                 missing.append('mfaPendingCredential')
-            if not pending_token:
-                missing.append('pendingToken')
             if not mfa_enrollment_id:
                 missing.append('mfaEnrollmentId')
             if not local_id:
@@ -376,10 +377,10 @@ class FirebaseAuthBridge:
         return MfaResponse(
             mfa_pending_credential=mfa_pending_credential,
             mfa_enrollment_id=mfa_enrollment_id,
-            pending_token=pending_token,
             display_name=display_name,
             local_id=local_id,
-            email=email
+            email=email,
+            pending_token=pending_token  # Optional, will be None for OAuth TOTP flows
         )
 
     def finalize_mfa_signin(

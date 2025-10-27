@@ -594,12 +594,12 @@ class OAuthEndpoints:
             mfa_session = MfaSession(
                 mfa_pending_credential=e.mfa_response.mfa_pending_credential,
                 mfa_enrollment_id=e.mfa_response.mfa_enrollment_id,
-                pending_token=e.mfa_response.pending_token,
                 oauth_state=state,
                 display_name=e.mfa_response.display_name,
                 local_id=e.mfa_response.local_id,
                 email=e.mfa_response.email,
-                attempt_count=0
+                attempt_count=0,
+                pending_token=e.mfa_response.pending_token  # Optional, will be None for OAuth flows
             )
             self.state_manager.store_mfa_session(mfa_session_id, mfa_session)
 

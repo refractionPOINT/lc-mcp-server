@@ -107,12 +107,12 @@ class MfaSession:
     """MFA challenge session data."""
     mfa_pending_credential: str
     mfa_enrollment_id: str
-    pending_token: str
     oauth_state: str
     display_name: str
     local_id: str
     email: str
     attempt_count: int = 0
+    pending_token: Optional[str] = None  # Optional - not needed for OAuth TOTP flows
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
