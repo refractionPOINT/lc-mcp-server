@@ -59,13 +59,7 @@ def audit_log(severity: AuditSeverity, action: Optional[AuditAction] = None):
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs) -> Any:
-            import asyncio
-            # Use run_in_executor for sync functions to avoid blocking
-            loop = asyncio.get_event_loop()
-            return loop.run_in_executor(
-                None,
-                lambda: _execute_with_audit_sync(func, severity, action_type, args, kwargs)
-            )
+            return _execute_with_audit_sync(func, severity, action_type, args, kwargs)
 
         # Return the appropriate wrapper based on whether the function is async
         import inspect

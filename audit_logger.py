@@ -79,8 +79,8 @@ class AuditLogger:
             return False
 
         # Always exclude LOW unless explicitly enabled
-        if severity == AuditSeverity.LOW and not self.include_low:
-            return False
+        if severity == AuditSeverity.LOW:
+            return self.include_low
 
         # Check if severity meets minimum threshold
         return severity.value >= self.min_severity.value
