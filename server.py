@@ -6443,7 +6443,7 @@ if PUBLIC_MODE:
     from starlette.middleware.cors import CORSMiddleware
     base_app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Allow all origins for OAuth (security via PKCE)
+        allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",  # Allow localhost on any port
         allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
