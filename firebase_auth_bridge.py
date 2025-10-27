@@ -159,10 +159,12 @@ class FirebaseAuthBridge:
 
         try:
             logging.debug(f"Signing in with IdP, session: {session_id[:20]}...")
+            logging.debug(f"signInWithIdp payload: requestUri={request_uri}, postBody={query_string[:100]}..., sessionId={session_id[:20]}...")
             response = requests.post(url, json=payload, timeout=10)
             response.raise_for_status()
 
             data = response.json()
+            logging.debug(f"Firebase signInWithIdp response keys: {list(data.keys())}")
 
             # Extract tokens and user info
             id_token = data.get('idToken')
@@ -171,6 +173,7 @@ class FirebaseAuthBridge:
             firebase_uid = data.get('localId')
 
             if not id_token or not refresh_token:
+                logging.error(f"Firebase signInWithIdp response missing tokens. Full response: {json.dumps(data, indent=2)}")
                 raise FirebaseAuthError("Missing tokens in Firebase signIn response")
 
             # Calculate expiry timestamp
