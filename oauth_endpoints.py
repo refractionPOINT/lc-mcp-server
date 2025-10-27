@@ -456,6 +456,16 @@ class OAuthEndpoints:
         Raises:
             OAuthError: If callback is invalid
         """
+        # Log all callback parameters for debugging (mask sensitive values)
+        param_keys = list(params.keys())
+        logging.debug(f"OAuth callback received with {len(params)} parameters: {param_keys}")
+        for key in param_keys:
+            value = params[key]
+            if isinstance(value, str) and len(value) > 20:
+                logging.debug(f"  {key}: {value[:10]}...{value[-10:]} (length: {len(value)})")
+            else:
+                logging.debug(f"  {key}: {value}")
+
         # Extract Firebase's state parameter from callback
         firebase_state = params.get('state')
         if not firebase_state:
@@ -527,7 +537,17 @@ class OAuthEndpoints:
         try:
             # Build callback URL for Firebase
             callback_url = self.metadata_provider.server_url + "/oauth/callback"
-            callback_path = "?" + urllib.parse.urlencode(params)
+
+            # Use raw query string if available (preserves exact format from provider)
+            # This is important for 2FA flows where parameter encoding matters
+            raw_query = params.pop('_raw_query_string', None)
+            if raw_query:
+                logging.debug(f"Using raw query string from callback: {raw_query[:100]}...")
+                callback_path = "?" + raw_query
+            else:
+                # Fallback: re-encode params (might change encoding slightly)
+                logging.debug("No raw query string available, re-encoding params")
+                callback_path = "?" + urllib.parse.urlencode(params)
 
             # Validate and extract query string
             query_string = self.firebase_bridge.validate_provider_callback(callback_path)

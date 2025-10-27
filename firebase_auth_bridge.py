@@ -187,12 +187,17 @@ class FirebaseAuthBridge:
 
         try:
             logging.debug(f"Signing in with IdP, session: {session_id[:20]}...")
-            logging.debug(f"signInWithIdp payload: requestUri={request_uri}, postBody={query_string[:100]}..., sessionId={session_id[:20]}...")
+            logging.debug(f"signInWithIdp payload: requestUri={request_uri}, postBody={query_string[:100] if len(query_string) > 100 else query_string}, sessionId={session_id[:20]}...")
+            logging.debug(f"Full postBody length: {len(query_string)} chars")
             response = requests.post(url, json=payload, timeout=10)
+
+            # Log response status for debugging
+            logging.debug(f"Firebase signInWithIdp response status: {response.status_code}")
             response.raise_for_status()
 
             data = response.json()
             logging.debug(f"Firebase signInWithIdp response keys: {list(data.keys())}")
+            logging.debug(f"Response has idToken: {bool(data.get('idToken'))}, has refreshToken: {bool(data.get('refreshToken'))}")
 
             # Extract tokens and user info
             id_token = data.get('idToken')
@@ -206,9 +211,20 @@ class FirebaseAuthBridge:
                     logging.info(f"MFA required for user {data.get('email', 'unknown')}")
                     mfa_response = self._extract_mfa_response(data)
                     raise FirebaseMfaRequiredError(mfa_response)
+                # Check for account linking/confirmation required
+                elif data.get('needConfirmation'):
+                    logging.error(f"Firebase account needs confirmation/linking. Response: {json.dumps(data, indent=2)}")
+                    raise FirebaseAuthError("Account linking required. Please use an existing account or contact support.")
+                # Check for pending token (incomplete flow)
+                elif 'pendingToken' in data or 'oauthIdToken' in data:
+                    logging.error(f"Firebase returned pending token (incomplete flow). Response: {json.dumps(data, indent=2)}")
+                    raise FirebaseAuthError("Authentication flow incomplete. This may be due to provider-specific issues with 2FA.")
                 else:
                     logging.error(f"Firebase signInWithIdp response missing tokens. Full response: {json.dumps(data, indent=2)}")
-                    raise FirebaseAuthError("Missing tokens in Firebase signIn response")
+                    # Log specific fields present for debugging
+                    present_fields = [k for k in data.keys() if data[k]]
+                    logging.error(f"Present fields in response: {present_fields}")
+                    raise FirebaseAuthError(f"Missing tokens in Firebase signIn response. Present fields: {', '.join(present_fields)}")
 
             # Calculate expiry timestamp
             expires_at = int(time.time()) + expires_in

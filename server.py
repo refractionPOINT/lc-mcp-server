@@ -6094,7 +6094,10 @@ if PUBLIC_MODE:
                     return limiter.create_rate_limit_response()
 
             try:
+                # Pass both parsed params and raw query string for better Firebase compatibility
                 params = dict(request.query_params)
+                # Store raw query string in params for Firebase signInWithIdp
+                params['_raw_query_string'] = str(request.url.query)
                 redirect_url = await oauth_endpoints.handle_oauth_callback(params)
                 response = RedirectResponse(url=redirect_url, status_code=302)
 
