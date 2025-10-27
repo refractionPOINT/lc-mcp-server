@@ -14,12 +14,39 @@ import time
 import logging
 import json
 from typing import Dict, Tuple, Optional
+from dataclasses import dataclass
 import os
 
 
 class FirebaseAuthError(Exception):
     """Firebase authentication errors."""
     pass
+
+
+@dataclass
+class MfaResponse:
+    """
+    Multi-Factor Authentication response from Firebase.
+
+    Returned when signInWithIdp detects that MFA is required.
+    """
+    mfa_pending_credential: str
+    mfa_enrollment_id: str
+    pending_token: str
+    display_name: str
+    local_id: str
+    email: str
+
+
+class FirebaseMfaRequiredError(Exception):
+    """
+    Raised when Firebase signInWithIdp requires MFA verification.
+
+    Contains MFA challenge details needed to continue authentication.
+    """
+    def __init__(self, mfa_response: MfaResponse):
+        self.mfa_response = mfa_response
+        super().__init__(f"MFA required for user {mfa_response.email}")
 
 
 class FirebaseAuthBridge:
@@ -173,9 +200,15 @@ class FirebaseAuthBridge:
             expires_in = int(data.get('expiresIn', '3600'))
             firebase_uid = data.get('localId')
 
+            # Check if MFA is required
             if not id_token or not refresh_token:
-                logging.error(f"Firebase signInWithIdp response missing tokens. Full response: {json.dumps(data, indent=2)}")
-                raise FirebaseAuthError("Missing tokens in Firebase signIn response")
+                if self._is_mfa_required(data):
+                    logging.info(f"MFA required for user {data.get('email', 'unknown')}")
+                    mfa_response = self._extract_mfa_response(data)
+                    raise FirebaseMfaRequiredError(mfa_response)
+                else:
+                    logging.error(f"Firebase signInWithIdp response missing tokens. Full response: {json.dumps(data, indent=2)}")
+                    raise FirebaseAuthError("Missing tokens in Firebase signIn response")
 
             # Calculate expiry timestamp
             expires_at = int(time.time()) + expires_in
@@ -255,6 +288,155 @@ class FirebaseAuthBridge:
                 except:
                     pass
             raise FirebaseAuthError(f"Failed to refresh token: {str(e)}")
+
+    def _is_mfa_required(self, response: Dict) -> bool:
+        """
+        Check if Firebase response indicates MFA is required.
+
+        Args:
+            response: Firebase signInWithIdp response
+
+        Returns:
+            True if MFA challenge is required
+        """
+        return 'mfaInfo' in response and 'mfaPendingCredential' in response
+
+    def _extract_mfa_response(self, response: Dict) -> MfaResponse:
+        """
+        Extract MFA challenge details from Firebase response.
+
+        Args:
+            response: Firebase signInWithIdp response with MFA required
+
+        Returns:
+            MfaResponse with MFA challenge details
+
+        Raises:
+            FirebaseAuthError: If required MFA fields are missing
+        """
+        mfa_info_list = response.get('mfaInfo', [])
+        if not mfa_info_list:
+            raise FirebaseAuthError("No MFA methods available")
+
+        # Use the first MFA method (usually TOTP)
+        mfa_info = mfa_info_list[0]
+
+        mfa_pending_credential = response.get('mfaPendingCredential')
+        pending_token = response.get('pendingToken')
+        mfa_enrollment_id = mfa_info.get('mfaEnrollmentId')
+        display_name = mfa_info.get('displayName', 'Authenticator App')
+        local_id = response.get('localId')
+        email = response.get('email')
+
+        if not all([mfa_pending_credential, pending_token, mfa_enrollment_id, local_id, email]):
+            missing = []
+            if not mfa_pending_credential:
+                missing.append('mfaPendingCredential')
+            if not pending_token:
+                missing.append('pendingToken')
+            if not mfa_enrollment_id:
+                missing.append('mfaEnrollmentId')
+            if not local_id:
+                missing.append('localId')
+            if not email:
+                missing.append('email')
+            raise FirebaseAuthError(f"Incomplete MFA response, missing: {', '.join(missing)}")
+
+        return MfaResponse(
+            mfa_pending_credential=mfa_pending_credential,
+            mfa_enrollment_id=mfa_enrollment_id,
+            pending_token=pending_token,
+            display_name=display_name,
+            local_id=local_id,
+            email=email
+        )
+
+    def finalize_mfa_signin(
+        self,
+        mfa_pending_credential: str,
+        mfa_enrollment_id: str,
+        verification_code: str
+    ) -> Dict[str, any]:
+        """
+        Finalize MFA sign-in with TOTP verification code.
+
+        Calls Firebase Identity Toolkit v2 API to complete MFA challenge.
+
+        Args:
+            mfa_pending_credential: Pending credential from signInWithIdp
+            mfa_enrollment_id: MFA enrollment ID from user's MFA methods
+            verification_code: 6-digit TOTP code from authenticator app
+
+        Returns:
+            Dictionary with Firebase tokens:
+            {
+                'id_token': str,
+                'refresh_token': str,
+                'expires_at': int,
+                'uid': str
+            }
+
+        Raises:
+            FirebaseAuthError: If MFA verification fails
+        """
+        # Firebase Identity Toolkit v2 API for MFA finalization
+        url = f"https://identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize?key={self.FIREBASE_API_KEY}"
+        payload = {
+            "mfaPendingCredential": mfa_pending_credential,
+            "mfaEnrollmentId": mfa_enrollment_id,
+            "totpVerificationInfo": {
+                "verificationCode": verification_code
+            }
+        }
+
+        try:
+            logging.debug(f"Finalizing MFA sign-in with enrollment ID: {mfa_enrollment_id[:20]}...")
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+
+            data = response.json()
+            logging.debug(f"Firebase finalizeMfaSignIn response keys: {list(data.keys())}")
+
+            # Extract tokens
+            id_token = data.get('idToken')
+            refresh_token = data.get('refreshToken')
+            expires_in = int(data.get('expiresIn', '3600'))
+            firebase_uid = data.get('localId')
+
+            if not id_token or not refresh_token:
+                logging.error(f"Firebase MFA finalization missing tokens. Response: {json.dumps(data, indent=2)}")
+                raise FirebaseAuthError("Missing tokens in MFA finalization response")
+
+            # Calculate expiry timestamp
+            expires_at = int(time.time()) + expires_in
+
+            result = {
+                'id_token': id_token,
+                'refresh_token': refresh_token,
+                'expires_at': expires_at,
+                'uid': firebase_uid,
+                'api_key': self.FIREBASE_API_KEY
+            }
+
+            logging.info(f"Successfully completed MFA sign-in for UID: {firebase_uid}")
+            return result
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"MFA finalization failed: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    error_msg = error_data.get('error', {}).get('message', str(e))
+                    logging.error(f"Firebase MFA error: {error_msg}")
+                    # Invalid TOTP code returns specific error message
+                    if 'INVALID_MFA_PENDING_CREDENTIAL' in error_msg or 'INVALID_CODE' in error_msg:
+                        raise FirebaseAuthError("Invalid verification code")
+                    raise FirebaseAuthError(f"MFA verification failed: {error_msg}")
+                except FirebaseAuthError:
+                    raise
+                except:
+                    pass
+            raise FirebaseAuthError(f"Failed to finalize MFA: {str(e)}")
 
     def validate_provider_callback(self, callback_path: str) -> str:
         """

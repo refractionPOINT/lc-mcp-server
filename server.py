@@ -233,6 +233,7 @@ if PUBLIC_MODE and MCP_OAUTH_ENABLED:
         rate_limiters = {
             'authorize': create_rate_limiter(oauth_state_manager.redis_client, 'authorize'),
             'oauth_callback': create_rate_limiter(oauth_state_manager.redis_client, 'oauth_callback'),
+            'mfa_verify': create_rate_limiter(oauth_state_manager.redis_client, 'mfa_verify'),
             'token': create_rate_limiter(oauth_state_manager.redis_client, 'token'),
             'register': create_rate_limiter(oauth_state_manager.redis_client, 'register'),
             'revoke': create_rate_limiter(oauth_state_manager.redis_client, 'revoke'),
@@ -6289,11 +6290,86 @@ if PUBLIC_MODE:
                     status_code=500
                 )
 
+        async def handle_mfa_challenge_page(request: Request):
+            """GET /oauth/mfa-challenge - MFA challenge HTML page"""
+            try:
+                session_id = request.query_params.get('session')
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                # Render MFA challenge page
+                html = await oauth_endpoints.handle_mfa_challenge_page(session_id)
+                return Response(content=html, media_type="text/html")
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"MFA challenge page error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_mfa_verify_endpoint(request: Request):
+            """POST /oauth/mfa-verify - Verify MFA code and complete OAuth flow (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent brute-force attacks
+            limiter = rate_limiters.get('mfa_verify')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'mfa_verify')
+                if not allowed:
+                    logging.warning(f"MFA verify rate limit exceeded from {request.client.host if request.client else 'unknown'}")
+                    return JSONResponse(
+                        {"error": "too_many_requests", "error_description": "Too many verification attempts. Please wait before trying again."},
+                        status_code=429
+                    )
+
+            try:
+                # Parse form data
+                form_data = await request.form()
+                session_id = form_data.get('session')
+                verification_code = form_data.get('verification_code')
+
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                if not verification_code:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing verification_code parameter"},
+                        status_code=400
+                    )
+
+                # Verify MFA code and complete OAuth flow
+                redirect_url = await oauth_endpoints.handle_mfa_verify(session_id, verification_code)
+
+                # Redirect to client with authorization code
+                return RedirectResponse(url=redirect_url, status_code=302)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"MFA verification error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
         # Add OAuth routes
         routes.append(Route("/authorize", handle_authorize_endpoint, methods=["GET"]))
         routes.append(Route("/oauth/callback", handle_oauth_callback_endpoint, methods=["GET"]))
         routes.append(Route("/oauth/select-provider", handle_provider_selection_page, methods=["GET"]))
         routes.append(Route("/oauth/select-provider/{provider}", handle_provider_selected_endpoint, methods=["GET"]))
+        routes.append(Route("/oauth/mfa-challenge", handle_mfa_challenge_page, methods=["GET"]))
+        routes.append(Route("/oauth/mfa-verify", handle_mfa_verify_endpoint, methods=["POST"]))
         routes.append(Route("/token", handle_token_endpoint, methods=["POST"]))
         routes.append(Route("/register", handle_register_endpoint, methods=["POST"]))
         routes.append(Route("/revoke", handle_revoke_endpoint, methods=["POST"]))

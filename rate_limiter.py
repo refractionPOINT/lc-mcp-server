@@ -168,6 +168,9 @@ OAUTH_RATE_LIMITS = {
     # Callback endpoint: moderate limit (redirects from OAuth provider)
     "oauth_callback": {"requests_per_minute": 10, "window_size": 60},
 
+    # MFA verification endpoint: strict limit to prevent brute-force attacks
+    "mfa_verify": {"requests_per_minute": 10, "window_size": 60},
+
     # Token endpoint: higher limit (legitimate refresh token usage)
     "token": {"requests_per_minute": 20, "window_size": 60},
 

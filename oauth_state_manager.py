@@ -102,6 +102,26 @@ class ClientRegistration:
         return cls(**data)
 
 
+@dataclass
+class MfaSession:
+    """MFA challenge session data."""
+    mfa_pending_credential: str
+    mfa_enrollment_id: str
+    pending_token: str
+    oauth_state: str
+    display_name: str
+    local_id: str
+    email: str
+    attempt_count: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MfaSession":
+        return cls(**data)
+
+
 class OAuthStateManager:
     """
     Manages OAuth state and token storage in Redis.
@@ -120,6 +140,7 @@ class OAuthStateManager:
     CLIENT_PREFIX = "oauth:client:"
     REFRESH_PREFIX = "oauth:refresh:"
     SELECTION_PREFIX = "oauth:selection:"  # Provider selection sessions
+    MFA_PREFIX = "oauth:mfa:"  # MFA challenge sessions
 
     # TTL values (seconds)
     STATE_TTL = 600  # 10 minutes
@@ -127,6 +148,10 @@ class OAuthStateManager:
     TOKEN_TTL = 3600  # 1 hour (access token)
     REFRESH_TTL = 2592000  # 30 days (refresh token)
     SELECTION_TTL = 300  # 5 minutes (provider selection session)
+    MFA_TTL = 300  # 5 minutes (MFA challenge session)
+
+    # MFA limits
+    MAX_MFA_ATTEMPTS = 3  # Maximum failed MFA attempts per session
 
     def __init__(self, redis_url: Optional[str] = None):
         """
@@ -868,6 +893,138 @@ class OAuthStateManager:
             return params
         except Exception as e:
             logging.error(f"Failed to deserialize selection session: {e}")
+            return None
+
+    # ===== MFA Session Management =====
+
+    def generate_mfa_session_id(self) -> str:
+        """
+        Generate cryptographically secure random MFA session ID.
+
+        Returns:
+            URL-safe random session ID
+        """
+        return secrets.token_urlsafe(32)
+
+    def store_mfa_session(self, session_id: str, mfa_session: MfaSession) -> None:
+        """
+        Store MFA challenge session temporarily.
+
+        Args:
+            session_id: Unique session identifier
+            mfa_session: MFA session data
+
+        Raises:
+            Exception: If Redis operation fails
+        """
+        key = f"{self.MFA_PREFIX}{session_id}"
+
+        # Serialize MFA session
+        data = json.dumps(mfa_session.to_dict())
+
+        # Store with TTL
+        self.redis_client.setex(key, self.MFA_TTL, data)
+        logging.debug(f"Stored MFA session: {session_id[:20]}... (TTL: {self.MFA_TTL}s)")
+
+    def get_mfa_session(self, session_id: str) -> Optional[MfaSession]:
+        """
+        Retrieve MFA session without consuming it (non-destructive read).
+
+        Used for displaying MFA challenge page without consuming the session.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            MfaSession if found, None otherwise
+        """
+        key = f"{self.MFA_PREFIX}{session_id}"
+
+        try:
+            data = self.redis_client.get(key)
+            if not data:
+                logging.warning(f"MFA session not found: {session_id[:20]}...")
+                return None
+
+            # Deserialize
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+
+            session_dict = json.loads(data)
+            return MfaSession.from_dict(session_dict)
+        except Exception as e:
+            logging.error(f"Failed to retrieve MFA session: {e}")
+            return None
+
+    def increment_mfa_attempts(self, session_id: str) -> Optional[int]:
+        """
+        Atomically increment MFA attempt counter.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            New attempt count, or None if session not found
+        """
+        key = f"{self.MFA_PREFIX}{session_id}"
+
+        try:
+            # Get current session
+            mfa_session = self.get_mfa_session(session_id)
+            if not mfa_session:
+                return None
+
+            # Increment attempt count
+            mfa_session.attempt_count += 1
+
+            # Get remaining TTL
+            ttl = self.redis_client.ttl(key)
+            if ttl <= 0:
+                logging.warning(f"MFA session expired during increment: {session_id[:20]}...")
+                return None
+
+            # Store updated session with remaining TTL
+            data = json.dumps(mfa_session.to_dict())
+            self.redis_client.setex(key, ttl, data)
+
+            logging.debug(f"Incremented MFA attempts to {mfa_session.attempt_count} for session: {session_id[:20]}...")
+            return mfa_session.attempt_count
+        except Exception as e:
+            logging.error(f"Failed to increment MFA attempts: {e}")
+            return None
+
+    def consume_mfa_session(self, session_id: str) -> Optional[MfaSession]:
+        """
+        Retrieve and delete MFA session (single-use).
+
+        SECURITY: Uses atomic get-and-delete to prevent race conditions.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            MfaSession if found, None otherwise
+        """
+        key = f"{self.MFA_PREFIX}{session_id}"
+
+        # SECURITY: Atomic get-and-delete
+        data = self.atomic_get_and_delete(keys=[key])
+
+        if not data:
+            logging.warning(f"MFA session not found or already consumed: {session_id[:20]}...")
+            return None
+
+        try:
+            # Convert bytes to string if needed
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+
+            session_dict = json.loads(data)
+            mfa_session = MfaSession.from_dict(session_dict)
+            logging.debug(f"Atomically consumed MFA session: {session_id[:20]}...")
+            return mfa_session
+        except Exception as e:
+            logging.error(f"Failed to deserialize MFA session: {e}")
             return None
 
     # ===== Health and Maintenance =====

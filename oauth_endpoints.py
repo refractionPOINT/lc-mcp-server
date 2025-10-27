@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from firebase_auth_bridge import FirebaseAuthBridge, FirebaseAuthError, get_firebase_bridge
-from oauth_state_manager import OAuthStateManager, OAuthState
+from firebase_auth_bridge import FirebaseAuthBridge, FirebaseAuthError, FirebaseMfaRequiredError, MfaResponse, get_firebase_bridge
+from oauth_state_manager import OAuthStateManager, OAuthState, MfaSession
 from oauth_token_manager import OAuthTokenManager, get_token_manager
 from oauth_metadata import get_metadata_provider, validate_scope, filter_scope_to_supported
 
@@ -563,6 +563,33 @@ class OAuthEndpoints:
             logging.info(f"OAuth callback successful, redirecting to client")
             return redirect_url
 
+        except FirebaseMfaRequiredError as e:
+            # MFA is required - redirect to challenge page
+            logging.info(f"MFA required for user {e.mfa_response.email}, redirecting to challenge page")
+
+            # Generate MFA session ID
+            mfa_session_id = self.state_manager.generate_mfa_session_id()
+
+            # Store MFA session
+            mfa_session = MfaSession(
+                mfa_pending_credential=e.mfa_response.mfa_pending_credential,
+                mfa_enrollment_id=e.mfa_response.mfa_enrollment_id,
+                pending_token=e.mfa_response.pending_token,
+                oauth_state=state,
+                display_name=e.mfa_response.display_name,
+                local_id=e.mfa_response.local_id,
+                email=e.mfa_response.email,
+                attempt_count=0
+            )
+            self.state_manager.store_mfa_session(mfa_session_id, mfa_session)
+
+            # Build redirect URL to MFA challenge page
+            server_url = self.metadata_provider.server_url
+            mfa_challenge_url = f"{server_url}/oauth/mfa-challenge?session={mfa_session_id}"
+
+            logging.info(f"Stored MFA session {mfa_session_id[:12]}..., redirecting to challenge page")
+            return mfa_challenge_url
+
         except FirebaseAuthError as e:
             # SECURITY: Log full error internally but return generic message to client
             # to avoid information disclosure about server internals
@@ -574,6 +601,190 @@ class OAuthEndpoints:
                 'state': state
             }
             return oauth_state.redirect_uri + "?" + urllib.parse.urlencode(error_params)
+
+    async def handle_mfa_challenge_page(self, session_id: str) -> str:
+        """
+        Render MFA challenge HTML page.
+
+        Args:
+            session_id: MFA session ID from redirect
+
+        Returns:
+            Rendered HTML page as string
+
+        Raises:
+            OAuthError: If session is invalid or expired
+        """
+        # Get MFA session (non-destructive read)
+        mfa_session = self.state_manager.get_mfa_session(session_id)
+
+        if mfa_session is None:
+            logging.warning(f"Invalid or expired MFA session: {session_id[:20]}...")
+            raise OAuthError(
+                'invalid_request',
+                'MFA session expired or invalid. Please restart authentication.',
+                400
+            )
+
+        # Check if maximum attempts reached
+        if mfa_session.attempt_count >= self.state_manager.MAX_MFA_ATTEMPTS:
+            logging.warning(f"Maximum MFA attempts reached for session: {session_id[:20]}...")
+            # Consume the session to prevent further attempts
+            self.state_manager.consume_mfa_session(session_id)
+            raise OAuthError(
+                'access_denied',
+                'Maximum verification attempts exceeded. Please restart authentication.',
+                403
+            )
+
+        logging.info(f"Rendering MFA challenge page for user {mfa_session.email}, session: {session_id[:20]}...")
+
+        # Render the MFA challenge page
+        template = self.jinja_env.get_template('mfa_challenge.html')
+        html = template.render(
+            session_id=session_id,
+            email=mfa_session.email,
+            display_name=mfa_session.display_name,
+            attempt_count=mfa_session.attempt_count,
+            max_attempts=self.state_manager.MAX_MFA_ATTEMPTS
+        )
+
+        return html
+
+    async def handle_mfa_verify(self, session_id: str, verification_code: str) -> str:
+        """
+        Verify TOTP code and complete OAuth flow.
+
+        Args:
+            session_id: MFA session ID
+            verification_code: 6-digit TOTP code from authenticator app
+
+        Returns:
+            Redirect URL to send user back to client application
+
+        Raises:
+            OAuthError: If verification fails or session is invalid
+        """
+        logging.info(f"MFA verification attempt for session: {session_id[:20]}...")
+
+        # Validate verification code format (6 digits)
+        if not verification_code or not verification_code.isdigit() or len(verification_code) != 6:
+            logging.warning(f"Invalid verification code format: {len(verification_code) if verification_code else 0} chars")
+            # Increment attempt counter before failing
+            self.state_manager.increment_mfa_attempts(session_id)
+            raise OAuthError(
+                'invalid_request',
+                'Verification code must be 6 digits',
+                400
+            )
+
+        # Get MFA session (non-destructive, need to check attempts first)
+        mfa_session = self.state_manager.get_mfa_session(session_id)
+
+        if mfa_session is None:
+            logging.warning(f"Invalid or expired MFA session: {session_id[:20]}...")
+            raise OAuthError(
+                'invalid_request',
+                'MFA session expired or invalid. Please restart authentication.',
+                400
+            )
+
+        # Check if maximum attempts reached
+        if mfa_session.attempt_count >= self.state_manager.MAX_MFA_ATTEMPTS:
+            logging.warning(f"Maximum MFA attempts already reached for session: {session_id[:20]}...")
+            # Consume the session to prevent further attempts
+            self.state_manager.consume_mfa_session(session_id)
+            raise OAuthError(
+                'access_denied',
+                'Maximum verification attempts exceeded. Please restart authentication.',
+                403
+            )
+
+        # Get OAuth state for redirect
+        oauth_state = self.state_manager.get_oauth_state(mfa_session.oauth_state)
+
+        if not oauth_state:
+            logging.error(f"OAuth state not found for MFA session: {session_id[:20]}...")
+            # Consume MFA session since OAuth state is gone
+            self.state_manager.consume_mfa_session(session_id)
+            raise OAuthError(
+                'invalid_request',
+                'OAuth session expired. Please restart authentication.',
+                400
+            )
+
+        try:
+            # Call Firebase MFA finalization API
+            logging.debug(f"Calling Firebase MFA finalization for user {mfa_session.email}")
+            firebase_tokens = self.firebase_bridge.finalize_mfa_signin(
+                mfa_pending_credential=mfa_session.mfa_pending_credential,
+                mfa_enrollment_id=mfa_session.mfa_enrollment_id,
+                verification_code=verification_code
+            )
+
+            logging.info(f"MFA verification successful for user {mfa_session.email}")
+
+            # Consume the MFA session (single-use, atomic)
+            self.state_manager.consume_mfa_session(session_id)
+
+            # Generate authorization code
+            auth_code = self.state_manager.generate_authorization_code()
+
+            # Store authorization code with Firebase tokens
+            self.state_manager.store_authorization_code(
+                code=auth_code,
+                state=mfa_session.oauth_state,
+                uid=firebase_tokens['uid'],
+                firebase_id_token=firebase_tokens['id_token'],
+                firebase_refresh_token=firebase_tokens['refresh_token'],
+                firebase_expires_at=firebase_tokens['expires_at']
+            )
+
+            # Build redirect URL back to client
+            redirect_params = {
+                'code': auth_code,
+                'state': mfa_session.oauth_state
+            }
+            redirect_url = oauth_state.redirect_uri + "?" + urllib.parse.urlencode(redirect_params)
+
+            logging.info(f"MFA flow complete, redirecting to client")
+            return redirect_url
+
+        except FirebaseAuthError as e:
+            # MFA verification failed (likely wrong code)
+            logging.warning(f"MFA verification failed for session {session_id[:20]}...: {e}")
+
+            # Increment attempt counter
+            attempt_count = self.state_manager.increment_mfa_attempts(session_id)
+
+            if attempt_count is None:
+                # Session expired during verification
+                raise OAuthError(
+                    'invalid_request',
+                    'MFA session expired. Please restart authentication.',
+                    400
+                )
+
+            if attempt_count >= self.state_manager.MAX_MFA_ATTEMPTS:
+                # Maximum attempts reached - consume session
+                logging.warning(f"Maximum MFA attempts reached after verification failure: {session_id[:20]}...")
+                self.state_manager.consume_mfa_session(session_id)
+
+                # Redirect to client with error
+                error_params = {
+                    'error': 'access_denied',
+                    'error_description': 'Maximum verification attempts exceeded. Please restart authentication.',
+                    'state': mfa_session.oauth_state
+                }
+                return oauth_state.redirect_uri + "?" + urllib.parse.urlencode(error_params)
+
+            # Return error for user to retry
+            remaining_attempts = self.state_manager.MAX_MFA_ATTEMPTS - attempt_count
+            raise OAuthError(
+                'invalid_grant',
+                f'Invalid verification code. {remaining_attempts} attempt(s) remaining.',
+                400
+            )
 
     # ===== Token Endpoint =====
 
