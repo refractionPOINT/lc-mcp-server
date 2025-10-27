@@ -410,11 +410,13 @@ class OAuthEndpoints:
             return redirect_url
 
         except FirebaseAuthError as e:
-            logging.error(f"Firebase sign-in failed: {e}")
-            # Redirect to client with error
+            # SECURITY: Log full error internally but return generic message to client
+            # to avoid information disclosure about server internals
+            logging.error(f"Firebase sign-in failed for state {state[:8]}...: {e}")
+            # Redirect to client with generic error
             error_params = {
                 'error': 'server_error',
-                'error_description': str(e),
+                'error_description': 'Authentication failed. Please try again or contact support.',
                 'state': state
             }
             return oauth_state.redirect_uri + "?" + urllib.parse.urlencode(error_params)

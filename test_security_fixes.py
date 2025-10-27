@@ -152,10 +152,12 @@ class TestAtomicOperations:
         state_manager.redis_client.set(key, value)
 
         # Atomically get and delete
+        # SECURITY: The Lua script returns the value directly (not a list)
+        # With decode_responses=True, result is a string (or None if not found)
         result = state_manager.atomic_get_and_delete(keys=[key])
 
         # Verify result
-        assert result[0].decode('utf-8') == value
+        assert result == value
 
         # Verify key is deleted
         assert state_manager.redis_client.get(key) is None

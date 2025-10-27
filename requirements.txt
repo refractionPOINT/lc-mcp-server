@@ -18,6 +18,9 @@ google-cloud-storage
 redis>=5.0.0
 hiredis>=2.0.0
 
+# For rate limiting OAuth endpoints (SECURITY: DoS protection)
+slowapi>=0.1.9
+
 # For token encryption (SECURITY: Required to encrypt tokens in Redis)
 cryptography>=42.0.0
 

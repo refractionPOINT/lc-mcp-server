@@ -217,12 +217,24 @@ if PUBLIC_MODE and MCP_OAUTH_ENABLED:
         from oauth_endpoints import OAuthEndpoints, OAuthError, get_oauth_endpoints
         from oauth_metadata import OAuthMetadataProvider, get_metadata_provider
         from firebase_auth_bridge import FirebaseAuthBridge, FirebaseAuthError
+        from rate_limiter import create_rate_limiter
 
         # Initialize OAuth components
         oauth_state_manager = OAuthStateManager()
         oauth_token_manager = get_token_manager()
         oauth_endpoints = get_oauth_endpoints()
         oauth_metadata_provider = get_metadata_provider()
+
+        # Initialize rate limiters for OAuth endpoints (SECURITY: DoS protection)
+        rate_limiters = {
+            'authorize': create_rate_limiter(oauth_state_manager.redis_client, 'authorize'),
+            'oauth_callback': create_rate_limiter(oauth_state_manager.redis_client, 'oauth_callback'),
+            'token': create_rate_limiter(oauth_state_manager.redis_client, 'token'),
+            'register': create_rate_limiter(oauth_state_manager.redis_client, 'register'),
+            'revoke': create_rate_limiter(oauth_state_manager.redis_client, 'revoke'),
+            'introspect': create_rate_limiter(oauth_state_manager.redis_client, 'introspect'),
+        }
+        logging.info("OAuth rate limiters initialized")
 
         logging.info("MCP OAuth 2.1 support enabled")
         logging.info(f"OAuth server URL: {oauth_metadata_provider.server_url}")
@@ -5961,14 +5973,27 @@ if PUBLIC_MODE:
     if MCP_OAUTH_ENABLED and oauth_endpoints and oauth_metadata_provider:
         logging.info("Adding MCP OAuth 2.1 endpoints")
 
-        # OAuth 2.1 endpoints
+        # OAuth 2.1 endpoints with rate limiting
         async def handle_authorize_endpoint(request: Request):
-            """GET /authorize - Authorization endpoint"""
+            """GET /authorize - Authorization endpoint (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent abuse
+            limiter = rate_limiters.get('authorize')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'authorize')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
             try:
                 params = dict(request.query_params)
                 result = await oauth_endpoints.handle_authorize(params)
                 # Redirect user to Firebase OAuth URL
-                return RedirectResponse(url=result['redirect_url'], status_code=302)
+                response = RedirectResponse(url=result['redirect_url'], status_code=302)
+
+                # Add rate limit headers
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
             except OAuthError as e:
                 return JSONResponse(
                     {"error": e.error, "error_description": e.error_description},
@@ -5982,11 +6007,24 @@ if PUBLIC_MODE:
                 )
 
         async def handle_oauth_callback_endpoint(request: Request):
-            """GET /oauth/callback - OAuth callback from Firebase"""
+            """GET /oauth/callback - OAuth callback from Firebase (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent callback abuse
+            limiter = rate_limiters.get('oauth_callback')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'oauth_callback')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
             try:
                 params = dict(request.query_params)
                 redirect_url = await oauth_endpoints.handle_oauth_callback(params)
-                return RedirectResponse(url=redirect_url, status_code=302)
+                response = RedirectResponse(url=redirect_url, status_code=302)
+
+                # Add rate limit headers
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
             except OAuthError as e:
                 # Return error page or redirect with error
                 return JSONResponse(
@@ -6001,14 +6039,27 @@ if PUBLIC_MODE:
                 )
 
         async def handle_token_endpoint(request: Request):
-            """POST /token - Token endpoint"""
+            """POST /token - Token endpoint (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent token abuse and credential stuffing
+            limiter = rate_limiters.get('token')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'token')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
             try:
                 body = await request.body()
                 # Parse form data
                 import urllib.parse
                 params = dict(urllib.parse.parse_qsl(body.decode('utf-8')))
                 result = await oauth_endpoints.handle_token(params)
-                return JSONResponse(result)
+
+                # Add rate limit headers to successful response
+                response = JSONResponse(result)
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
             except OAuthError as e:
                 return JSONResponse(
                     {"error": e.error, "error_description": e.error_description},
@@ -6022,11 +6073,23 @@ if PUBLIC_MODE:
                 )
 
         async def handle_register_endpoint(request: Request):
-            """POST /register - Dynamic client registration"""
+            """POST /register - Dynamic client registration (rate limited)"""
+            # SECURITY: Apply strict rate limiting to prevent registration abuse
+            limiter = rate_limiters.get('register')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'register')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
             try:
                 params = await request.json()
                 result = await oauth_endpoints.handle_register(params)
-                return JSONResponse(result, status_code=201)
+
+                response = JSONResponse(result, status_code=201)
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
             except OAuthError as e:
                 return JSONResponse(
                     {"error": e.error, "error_description": e.error_description},
