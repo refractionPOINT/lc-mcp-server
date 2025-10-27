@@ -6331,6 +6331,12 @@ if PUBLIC_MODE:
             try:
                 # Parse form data
                 form_data = await request.form()
+
+                # Debug logging to diagnose form data issues
+                logging.debug(f"MFA verify form data keys: {list(form_data.keys())}")
+                logging.debug(f"MFA verify session: {form_data.get('session', 'MISSING')}")
+                logging.debug(f"MFA verify code length: {len(form_data.get('verification_code', ''))}")
+
                 session_id = form_data.get('session')
                 verification_code = form_data.get('verification_code')
 

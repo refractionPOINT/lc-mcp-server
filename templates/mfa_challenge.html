@@ -519,7 +519,11 @@
             errorMessage.classList.remove('show');
 
             try {
-                const formData = new FormData(this);
+                // Explicitly create FormData to ensure fields are captured correctly
+                const formData = new FormData();
+                formData.append('session', '{{ session_id }}');
+                formData.append('verification_code', codeInput.value);
+
                 const response = await fetch('/oauth/mfa-verify', {
                     method: 'POST',
                     body: formData
