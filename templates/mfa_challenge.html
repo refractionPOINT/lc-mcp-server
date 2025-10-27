@@ -529,14 +529,14 @@
                     body: formData
                 });
 
-                if (response.redirected) {
+                // Parse JSON response (server now returns JSON instead of 302 redirect)
+                const data = await response.json();
+
+                if (response.ok && data.success && data.redirect_url) {
                     // Success - redirect to the OAuth callback URL
-                    window.location.href = response.url;
+                    window.location.href = data.redirect_url;
                     return;
                 }
-
-                // Parse JSON error response
-                const data = await response.json();
 
                 if (!response.ok) {
                     // Increment attempt counter

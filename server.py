@@ -6358,8 +6358,12 @@ if PUBLIC_MODE:
                 # Verify MFA code and complete OAuth flow
                 redirect_url = await oauth_endpoints.handle_mfa_verify(session_id, verification_code)
 
-                # Redirect to client with authorization code
-                return RedirectResponse(url=redirect_url, status_code=302)
+                # Return JSON response with redirect URL (avoids CORS issues with fetch())
+                # JavaScript will use window.location.href to redirect
+                return JSONResponse(
+                    {"redirect_url": redirect_url, "success": True},
+                    status_code=200
+                )
             except OAuthError as e:
                 return JSONResponse(
                     {"error": e.error, "error_description": e.error_description},
