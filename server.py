@@ -4898,8 +4898,7 @@ def delete_saved_query(query_name: str, ctx: Context) -> dict[str, Any]:
 def run_saved_query(
     query_name: str,
     limit: int = 100,
-    ctx: Context = None,
-    oid: str = None  # Added by wrapper in UID mode
+    ctx: Context = None
 ) -> dict[str, Any]:
     """Execute a saved query
 
@@ -4933,8 +4932,11 @@ def run_saved_query(
         if not lcql_query:
             return {"error": "Saved query has no query content"}
 
+        # SECURITY: Explicitly read oid from context set by wrapper to pass to nested call
+        # This prevents cross-tenant execution while allowing proper delegation
+        oid = current_oid_context_var.get()
+
         # Now run it using the existing run_lcql_query function
-        # SECURITY: Pass oid explicitly to prevent cross-tenant execution
         return run_lcql_query(lcql_query, limit, ctx=ctx, oid=oid)
 
     except Exception as e:
@@ -5762,7 +5764,7 @@ def unsubscribe_from_extension(extension_name: str, ctx: Context) -> dict[str, A
 # ---------- D&R Rules - Specific Hives ----------
 
 @mcp_tool_with_gcs()
-def list_dr_general_rules(ctx: Context, oid: str = None) -> dict[str, Any]:
+def list_dr_general_rules(ctx: Context) -> dict[str, Any]:
     """List all general D&R rules
 
     Returns:
@@ -5770,12 +5772,13 @@ def list_dr_general_rules(ctx: Context, oid: str = None) -> dict[str, Any]:
             - "rules" (dict): Dictionary of rule names to rule content
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return list_rules("dr-general", ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def get_dr_general_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
+def get_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Get a specific general D&R rule
 
     Args:
@@ -5786,7 +5789,8 @@ def get_dr_general_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[s
             - "rule" (dict): Rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return get_rule("dr-general", rule_name, ctx, oid=oid)
 
 
@@ -5794,8 +5798,7 @@ def get_dr_general_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[s
 def set_dr_general_rule(
     rule_name: str,
     rule_content: dict[str, Any],
-    ctx: Context,
-    oid: str = None
+    ctx: Context
 ) -> dict[str, Any]:
     """Create or update a general D&R rule
 
@@ -5809,12 +5812,13 @@ def set_dr_general_rule(
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return set_rule("dr-general", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def delete_dr_general_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
+def delete_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a general D&R rule
 
     Args:
@@ -5826,12 +5830,13 @@ def delete_dr_general_rule(rule_name: str, ctx: Context, oid: str = None) -> dic
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return delete_rule("dr-general", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def list_dr_managed_rules(ctx: Context, oid: str = None) -> dict[str, Any]:
+def list_dr_managed_rules(ctx: Context) -> dict[str, Any]:
     """List all managed D&R rules
 
     Returns:
@@ -5839,12 +5844,13 @@ def list_dr_managed_rules(ctx: Context, oid: str = None) -> dict[str, Any]:
             - "rules" (dict): Dictionary of rule names to rule content
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return list_rules("dr-managed", ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def get_dr_managed_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
+def get_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Get a specific managed D&R rule
 
     Args:
@@ -5855,7 +5861,8 @@ def get_dr_managed_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[s
             - "rule" (dict): Rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return get_rule("dr-managed", rule_name, ctx, oid=oid)
 
 
@@ -5863,8 +5870,7 @@ def get_dr_managed_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[s
 def set_dr_managed_rule(
     rule_name: str,
     rule_content: dict[str, Any],
-    ctx: Context,
-    oid: str = None
+    ctx: Context
 ) -> dict[str, Any]:
     """Create or update a managed D&R rule
 
@@ -5878,12 +5884,13 @@ def set_dr_managed_rule(
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return set_rule("dr-managed", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def delete_dr_managed_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
+def delete_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a managed D&R rule
 
     Args:
@@ -5895,14 +5902,15 @@ def delete_dr_managed_rule(rule_name: str, ctx: Context, oid: str = None) -> dic
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return delete_rule("dr-managed", rule_name, ctx, oid=oid)
 
 
 # ---------- False Positive Rules ----------
 
 @mcp_tool_with_gcs()
-def get_fp_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
+def get_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Get a specific false positive rule
 
     Args:
@@ -5913,7 +5921,8 @@ def get_fp_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]
             - "rule" (dict): FP rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return get_rule("fp", rule_name, ctx, oid=oid)
 
 
@@ -5921,8 +5930,7 @@ def get_fp_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]
 def set_fp_rule(
     rule_name: str,
     rule_content: dict[str, Any],
-    ctx: Context,
-    oid: str = None
+    ctx: Context
 ) -> dict[str, Any]:
     """Create or update a false positive rule
 
@@ -5936,12 +5944,13 @@ def set_fp_rule(
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return set_rule("fp", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def delete_fp_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
+def delete_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a false positive rule
 
     Args:
@@ -5953,7 +5962,8 @@ def delete_fp_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, A
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
     return delete_rule("fp", rule_name, ctx, oid=oid)
 
 # Ensure thread pool is properly shutdown on app termination
