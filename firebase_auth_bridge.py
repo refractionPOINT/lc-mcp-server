@@ -209,6 +209,8 @@ class FirebaseAuthBridge:
             if not id_token or not refresh_token:
                 if self._is_mfa_required(data):
                     logging.info(f"MFA required for user {data.get('email', 'unknown')}")
+                    # Log the full response to understand what Firebase is sending (ERROR level for Cloud Run visibility)
+                    logging.error(f"[DEBUG] Firebase MFA response data: {json.dumps(data, indent=2)}")
                     mfa_response = self._extract_mfa_response(data)
                     raise FirebaseMfaRequiredError(mfa_response)
                 # Check for account linking/confirmation required
@@ -344,6 +346,13 @@ class FirebaseAuthBridge:
         local_id = response.get('localId')
         email = response.get('email')
 
+        # Log what we actually received for debugging (ERROR level for Cloud Run visibility)
+        logging.error(f"[DEBUG] MFA extraction - mfaPendingCredential present: {bool(mfa_pending_credential)}")
+        logging.error(f"[DEBUG] MFA extraction - pendingToken present: {bool(pending_token)}")
+        logging.error(f"[DEBUG] MFA extraction - mfaEnrollmentId present: {bool(mfa_enrollment_id)}")
+        logging.error(f"[DEBUG] MFA extraction - localId present: {bool(local_id)}")
+        logging.error(f"[DEBUG] MFA extraction - email present: {bool(email)}")
+
         if not all([mfa_pending_credential, pending_token, mfa_enrollment_id, local_id, email]):
             missing = []
             if not mfa_pending_credential:
@@ -356,6 +365,12 @@ class FirebaseAuthBridge:
                 missing.append('localId')
             if not email:
                 missing.append('email')
+
+            # Log the full response for debugging when fields are missing
+            logging.error(f"MFA response missing required fields: {', '.join(missing)}")
+            logging.error(f"Available fields in response: {list(response.keys())}")
+            logging.error(f"mfaInfo content: {json.dumps(mfa_info_list, indent=2)}")
+
             raise FirebaseAuthError(f"Incomplete MFA response, missing: {', '.join(missing)}")
 
         return MfaResponse(
