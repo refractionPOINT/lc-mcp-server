@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in to LimaCharlie MCP</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --lc-dark-bg: #00030C;
+            --lc-accent-blue: #4A90E2;
+            --lc-text-primary: #FFFFFF;
+            --lc-text-secondary: #B0B8C1;
+            --lc-glass-bg: rgba(255, 255, 255, 0.05);
+            --lc-glass-border: rgba(255, 255, 255, 0.1);
+            --lc-hover-glow: rgba(74, 144, 226, 0.4);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Rubik', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--lc-dark-bg);
+            color: var(--lc-text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background-image:
+                radial-gradient(circle at 20% 50%, rgba(74, 144, 226, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(226, 74, 144, 0.08) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 480px;
+            width: 100%;
+        }
+
+        .card {
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 16px;
+            padding: 48px 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .logo-container {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .logo {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, var(--lc-accent-blue), #A74AE2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 12px;
+            color: var(--lc-text-primary);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 14px;
+            margin-bottom: 40px;
+            line-height: 1.5;
+        }
+
+        .provider-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .provider-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 16px 24px;
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 12px;
+            color: var(--lc-text-primary);
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.15s ease-in-out;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .provider-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, var(--lc-accent-blue), #A74AE2);
+            opacity: 0;
+            transition: opacity 0.15s ease-in-out;
+            z-index: -1;
+        }
+
+        .provider-btn:hover {
+            border-color: var(--lc-accent-blue);
+            box-shadow: 0 0 24px var(--lc-hover-glow);
+            transform: translateY(-2px);
+        }
+
+        .provider-btn:hover::before {
+            opacity: 0.1;
+        }
+
+        .provider-btn:active {
+            transform: translateY(0);
+        }
+
+        .provider-icon {
+            font-size: 24px;
+            line-height: 1;
+        }
+
+        .footer {
+            margin-top: 32px;
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 12px;
+        }
+
+        .footer-link {
+            color: var(--lc-accent-blue);
+            text-decoration: none;
+            transition: all 0.15s ease-in-out;
+        }
+
+        .footer-link:hover {
+            text-shadow: 0 0 12px var(--lc-hover-glow);
+        }
+
+        /* Security badge */
+        .security-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 24px;
+            padding: 12px;
+            background: rgba(74, 144, 226, 0.05);
+            border: 1px solid rgba(74, 144, 226, 0.2);
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--lc-text-secondary);
+        }
+
+        .security-icon {
+            font-size: 16px;
+        }
+
+        /* Mobile responsiveness */
+        @media (max-width: 600px) {
+            .card {
+                padding: 32px 24px;
+            }
+
+            h1 {
+                font-size: 20px;
+            }
+
+            .provider-btn {
+                font-size: 15px;
+                padding: 14px 20px;
+            }
+        }
+
+        /* Loading animation */
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .provider-btn.loading {
+            pointer-events: none;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo-container">
+                <div class="logo">LimaCharlie</div>
+            </div>
+
+            <h1>Sign in to LimaCharlie MCP</h1>
+            <p class="subtitle">
+                Choose your authentication provider to continue
+            </p>
+
+            <div class="provider-buttons">
+                <a href="/oauth/select-provider/google?session={{ session_id }}"
+                   class="provider-btn"
+                   onclick="this.classList.add('loading')"
+                   data-provider="google">
+                    <span class="provider-icon">🔵</span>
+                    <span>Continue with Google</span>
+                </a>
+
+                <a href="/oauth/select-provider/microsoft?session={{ session_id }}"
+                   class="provider-btn"
+                   onclick="this.classList.add('loading')"
+                   data-provider="microsoft">
+                    <span class="provider-icon">🟦</span>
+                    <span>Continue with Microsoft</span>
+                </a>
+            </div>
+
+            <div class="security-badge">
+                <span class="security-icon">🔒</span>
+                <span>Secured by Firebase Authentication</span>
+            </div>
+
+            <div class="footer">
+                Powered by <a href="https://limacharlie.io" class="footer-link" target="_blank">LimaCharlie</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Prevent double-submission
+        let submitted = false;
+        document.querySelectorAll('.provider-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                if (submitted) {
+                    e.preventDefault();
+                    return false;
+                }
+                submitted = true;
+            });
+        });
+    </script>
+</body>
+</html>

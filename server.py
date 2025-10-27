@@ -6057,8 +6057,14 @@ if PUBLIC_MODE:
             try:
                 params = dict(request.query_params)
                 result = await oauth_endpoints.handle_authorize(params)
-                # Redirect user to Firebase OAuth URL
-                response = RedirectResponse(url=result['redirect_url'], status_code=302)
+
+                # Check if we need to show provider selection page
+                if 'selection_redirect' in result:
+                    # Redirect to provider selection page
+                    response = RedirectResponse(url=result['selection_redirect'], status_code=302)
+                else:
+                    # Normal flow: Redirect user to Firebase OAuth URL
+                    response = RedirectResponse(url=result['redirect_url'], status_code=302)
 
                 # Add rate limit headers
                 if limiter:
@@ -6222,9 +6228,72 @@ if PUBLIC_MODE:
                     status_code=500
                 )
 
+        async def handle_provider_selection_page(request: Request):
+            """GET /oauth/select-provider - Provider selection HTML page"""
+            try:
+                session_id = request.query_params.get('session')
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                html = await oauth_endpoints.handle_provider_selection_page(session_id)
+                from starlette.responses import HTMLResponse
+                return HTMLResponse(content=html, status_code=200)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Provider selection page error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_provider_selected_endpoint(request: Request):
+            """GET /oauth/select-provider/{provider} - Handle provider selection"""
+            try:
+                # Extract provider from path (google or microsoft)
+                provider = request.path_params.get('provider')
+                session_id = request.query_params.get('session')
+
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                if not provider:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing provider parameter"},
+                        status_code=400
+                    )
+
+                # Continue OAuth flow with selected provider
+                result = await oauth_endpoints.handle_provider_selected(provider, session_id)
+
+                # Redirect to Firebase OAuth URL
+                return RedirectResponse(url=result['redirect_url'], status_code=302)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Provider selection error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
         # Add OAuth routes
         routes.append(Route("/authorize", handle_authorize_endpoint, methods=["GET"]))
         routes.append(Route("/oauth/callback", handle_oauth_callback_endpoint, methods=["GET"]))
+        routes.append(Route("/oauth/select-provider", handle_provider_selection_page, methods=["GET"]))
+        routes.append(Route("/oauth/select-provider/{provider}", handle_provider_selected_endpoint, methods=["GET"]))
         routes.append(Route("/token", handle_token_endpoint, methods=["POST"]))
         routes.append(Route("/register", handle_register_endpoint, methods=["POST"]))
         routes.append(Route("/revoke", handle_revoke_endpoint, methods=["POST"]))

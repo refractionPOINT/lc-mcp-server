@@ -19,6 +19,8 @@ import urllib.parse
 import json
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
+from pathlib import Path
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from firebase_auth_bridge import FirebaseAuthBridge, FirebaseAuthError, get_firebase_bridge
 from oauth_state_manager import OAuthStateManager, OAuthState
@@ -91,6 +93,14 @@ class OAuthEndpoints:
         self.token_manager = token_manager or get_token_manager()
         self.firebase_bridge = firebase_bridge or get_firebase_bridge()
         self.metadata_provider = get_metadata_provider()
+
+        # Set up Jinja2 template environment for HTML pages
+        template_dir = Path(__file__).parent / "templates"
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(str(template_dir)),
+            autoescape=select_autoescape(['html', 'xml'])
+        )
+
         logging.info("OAuth endpoints initialized")
 
     def _validate_and_normalize_provider(self, provider: str) -> str:
@@ -222,6 +232,9 @@ class OAuthEndpoints:
             Dict with:
             - redirect_url: URL to redirect user to for authentication
             - state: OAuth state parameter for CSRF protection
+            OR
+            - selection_redirect: URL to provider selection page (if provider not specified)
+            - session_id: Session ID for provider selection
 
         Raises:
             OAuthError: If request is invalid
@@ -229,8 +242,29 @@ class OAuthEndpoints:
         # Validate request
         auth_req = self.validate_authorize_request(params)
 
-        # Extract and validate provider (defaults to Google for backward compatibility)
-        provider_param = params.get('provider', 'google')
+        # Check if provider selection is needed
+        provider_param = params.get('provider')
+
+        if not provider_param:
+            # No provider specified - show selection page
+            logging.info(f"No provider specified for client {auth_req.client_id}, redirecting to selection page")
+            session_id = self.state_manager.generate_selection_session_id()
+
+            # Store OAuth params for later retrieval
+            self.state_manager.store_oauth_selection_session(
+                session_id=session_id,
+                oauth_params=params
+            )
+
+            # Return redirect to selection page
+            server_url = self.metadata_provider.server_url
+            selection_url = f"{server_url}/oauth/select-provider?session={session_id}"
+            return {
+                "selection_redirect": selection_url,
+                "session_id": session_id
+            }
+
+        # Provider specified - validate and continue
         provider_id = self._validate_and_normalize_provider(provider_param)
 
         logging.info(f"Authorization request from client {auth_req.client_id}, provider: {provider_id}, scope: {auth_req.scope}")
@@ -329,6 +363,82 @@ class OAuthEndpoints:
                 f'Failed to initiate authentication: {str(e)}',
                 500
             )
+
+    async def handle_provider_selection_page(self, session_id: str) -> str:
+        """
+        Render provider selection HTML page.
+
+        Args:
+            session_id: Session ID from the OAuth selection flow
+
+        Returns:
+            Rendered HTML page as string
+
+        Raises:
+            OAuthError: If session is invalid or expired
+        """
+        # Validate session exists (without consuming it)
+        session_key = f"{self.state_manager.SELECTION_PREFIX}{session_id}"
+        if not self.state_manager.redis_client.exists(session_key):
+            logging.warning(f"Invalid or expired provider selection session: {session_id[:20]}...")
+            raise OAuthError(
+                'invalid_request',
+                'Provider selection session expired or invalid. Please restart authentication.',
+                400
+            )
+
+        logging.info(f"Rendering provider selection page for session: {session_id[:20]}...")
+
+        # Render the selection page
+        template = self.jinja_env.get_template('select_provider.html')
+        html = template.render(session_id=session_id)
+
+        return html
+
+    async def handle_provider_selected(self, provider: str, session_id: str) -> Dict[str, Any]:
+        """
+        Handle provider selection from HTML page.
+
+        When user clicks on a provider button, this retrieves the stored OAuth parameters,
+        adds the selected provider, and continues the OAuth authorization flow.
+
+        Args:
+            provider: Selected provider ("google" or "microsoft")
+            session_id: Session ID from provider selection flow
+
+        Returns:
+            Dict with redirect_url and state (same as handle_authorize)
+
+        Raises:
+            OAuthError: If session is invalid, expired, or provider is unsupported
+        """
+        logging.info(f"Provider selected: {provider} for session: {session_id[:20]}...")
+
+        # Validate provider first
+        try:
+            provider_id = self._validate_and_normalize_provider(provider)
+        except OAuthError as e:
+            logging.error(f"Invalid provider selected: {provider}")
+            raise
+
+        # Consume OAuth parameters from session (single-use, atomic)
+        oauth_params = self.state_manager.consume_oauth_selection_session(session_id)
+
+        if oauth_params is None:
+            logging.warning(f"Invalid or expired provider selection session: {session_id[:20]}...")
+            raise OAuthError(
+                'invalid_request',
+                'Provider selection session expired or invalid. Please restart authentication.',
+                400
+            )
+
+        logging.debug(f"Retrieved OAuth params from session, client_id: {oauth_params.get('client_id', 'unknown')}")
+
+        # Merge the selected provider into the OAuth parameters
+        oauth_params['provider'] = provider
+
+        # Continue with normal OAuth flow (handle_authorize with provider specified)
+        return await self.handle_authorize(oauth_params)
 
     async def handle_oauth_callback(self, params: Dict[str, Any]) -> str:
         """

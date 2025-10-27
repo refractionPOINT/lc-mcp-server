@@ -119,12 +119,14 @@ class OAuthStateManager:
     TOKEN_PREFIX = "oauth:token:"
     CLIENT_PREFIX = "oauth:client:"
     REFRESH_PREFIX = "oauth:refresh:"
+    SELECTION_PREFIX = "oauth:selection:"  # Provider selection sessions
 
     # TTL values (seconds)
     STATE_TTL = 600  # 10 minutes
     CODE_TTL = 300  # 5 minutes
     TOKEN_TTL = 3600  # 1 hour (access token)
     REFRESH_TTL = 2592000  # 30 days (refresh token)
+    SELECTION_TTL = 300  # 5 minutes (provider selection session)
 
     def __init__(self, redis_url: Optional[str] = None):
         """
@@ -778,6 +780,95 @@ class OAuthStateManager:
             return False
 
         return redirect_uri in client.redirect_uris
+
+    # ===== Provider Selection Sessions =====
+
+    def generate_selection_session_id(self) -> str:
+        """
+        Generate secure random session ID for provider selection.
+
+        Returns:
+            Base64-encoded random session ID (32 bytes)
+        """
+        return secrets.token_urlsafe(32)
+
+    def store_oauth_selection_session(
+        self,
+        session_id: str,
+        oauth_params: Dict[str, Any]
+    ) -> None:
+        """
+        Store OAuth parameters temporarily during provider selection.
+
+        Args:
+            session_id: Unique session identifier
+            oauth_params: OAuth authorization request parameters
+        """
+        key = f"{self.SELECTION_PREFIX}{session_id}"
+        self.redis_client.setex(
+            key,
+            self.SELECTION_TTL,
+            json.dumps(oauth_params)
+        )
+        logging.debug(f"Stored provider selection session: {session_id[:10]}...")
+
+    def get_oauth_selection_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve OAuth parameters for provider selection session.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            OAuth parameters dict if found, None otherwise
+        """
+        key = f"{self.SELECTION_PREFIX}{session_id}"
+        data = self.redis_client.get(key)
+
+        if not data:
+            logging.warning(f"Provider selection session not found: {session_id[:10]}...")
+            return None
+
+        try:
+            params = json.loads(data)
+            logging.debug(f"Retrieved provider selection session: {session_id[:10]}...")
+            return params
+        except Exception as e:
+            logging.error(f"Failed to deserialize selection session: {e}")
+            return None
+
+    def consume_oauth_selection_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Retrieve and delete provider selection session (single-use).
+
+        SECURITY: Uses atomic get-and-delete to prevent race conditions.
+
+        Args:
+            session_id: Session identifier
+
+        Returns:
+            OAuth parameters dict if found, None otherwise
+        """
+        key = f"{self.SELECTION_PREFIX}{session_id}"
+
+        # SECURITY: Atomic get-and-delete
+        data = self.atomic_get_and_delete(keys=[key])
+
+        if not data:
+            logging.warning(f"Provider selection session not found or already consumed: {session_id[:10]}...")
+            return None
+
+        try:
+            # Convert bytes to string if needed
+            if isinstance(data, bytes):
+                data = data.decode('utf-8')
+
+            params = json.loads(data)
+            logging.debug(f"Atomically consumed provider selection session: {session_id[:10]}...")
+            return params
+        except Exception as e:
+            logging.error(f"Failed to deserialize selection session: {e}")
+            return None
 
     # ===== Health and Maintenance =====
 

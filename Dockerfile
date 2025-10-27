@@ -27,6 +27,9 @@ COPY prompts/ ./prompts/
 # SECURITY: Include rate_limiter.py and token_encryption.py for OAuth security features
 COPY oauth_*.py firebase_auth_bridge.py rate_limiter.py token_encryption.py ./
 
+# Copy OAuth HTML templates for provider selection
+COPY templates/ ./templates/
+
 # Copy audit logging modules
 COPY audit_logger.py audit_decorator.py ./
 
