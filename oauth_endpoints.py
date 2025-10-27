@@ -583,6 +583,23 @@ class OAuthEndpoints:
             )
             self.state_manager.store_mfa_session(mfa_session_id, mfa_session)
 
+            # Store OAuth state data alongside MFA session for later use
+            # OAuth state was already consumed, so store necessary fields
+            mfa_session_key = f"{self.state_manager.MFA_PREFIX}{mfa_session_id}"
+            oauth_state_json = json.dumps({
+                'redirect_uri': oauth_state.redirect_uri,
+                'client_id': oauth_state.client_id,
+                'scope': oauth_state.scope,
+                'code_challenge': oauth_state.code_challenge,
+                'code_challenge_method': oauth_state.code_challenge_method
+            })
+            self.state_manager.redis_client.setex(
+                f"{mfa_session_key}:oauth",
+                self.state_manager.MFA_TTL,
+                oauth_state_json
+            )
+            logging.debug(f"Stored OAuth state data for MFA session")
+
             # Build redirect URL to MFA challenge page
             server_url = self.metadata_provider.server_url
             mfa_challenge_url = f"{server_url}/oauth/mfa-challenge?session={mfa_session_id}"
@@ -700,16 +717,32 @@ class OAuthEndpoints:
                 403
             )
 
-        # Get OAuth state for redirect
-        oauth_state = self.state_manager.get_oauth_state(mfa_session.oauth_state)
+        # Get OAuth state data stored with MFA session
+        mfa_session_key = f"{self.state_manager.MFA_PREFIX}{session_id}"
+        oauth_state_data = self.state_manager.redis_client.get(f"{mfa_session_key}:oauth")
 
-        if not oauth_state:
-            logging.error(f"OAuth state not found for MFA session: {session_id[:20]}...")
+        if not oauth_state_data:
+            logging.error(f"OAuth state data not found for MFA session: {session_id[:20]}...")
             # Consume MFA session since OAuth state is gone
             self.state_manager.consume_mfa_session(session_id)
             raise OAuthError(
                 'invalid_request',
                 'OAuth session expired. Please restart authentication.',
+                400
+            )
+
+        # Parse OAuth state data
+        try:
+            if isinstance(oauth_state_data, bytes):
+                oauth_state_data = oauth_state_data.decode('utf-8')
+            oauth_state_dict = json.loads(oauth_state_data)
+            redirect_uri = oauth_state_dict['redirect_uri']
+        except Exception as e:
+            logging.error(f"Failed to parse OAuth state data: {e}")
+            self.state_manager.consume_mfa_session(session_id)
+            raise OAuthError(
+                'invalid_request',
+                'Invalid OAuth session data. Please restart authentication.',
                 400
             )
 
@@ -745,7 +778,7 @@ class OAuthEndpoints:
                 'code': auth_code,
                 'state': mfa_session.oauth_state
             }
-            redirect_url = oauth_state.redirect_uri + "?" + urllib.parse.urlencode(redirect_params)
+            redirect_url = redirect_uri + "?" + urllib.parse.urlencode(redirect_params)
 
             logging.info(f"MFA flow complete, redirecting to client")
             return redirect_url
@@ -776,7 +809,7 @@ class OAuthEndpoints:
                     'error_description': 'Maximum verification attempts exceeded. Please restart authentication.',
                     'state': mfa_session.oauth_state
                 }
-                return oauth_state.redirect_uri + "?" + urllib.parse.urlencode(error_params)
+                return redirect_uri + "?" + urllib.parse.urlencode(error_params)
 
             # Return error for user to retry
             remaining_attempts = self.state_manager.MAX_MFA_ATTEMPTS - attempt_count
