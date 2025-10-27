@@ -636,8 +636,9 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
     if is_async:
         @functools.wraps(tool_func)
         async def async_wrapper(*args, **kwargs):
-            # Extract oid from kwargs only if required, or use current OID from context (for nested calls)
-            oid = kwargs.pop('oid', None) or current_oid_context_var.get() if requires_oid else None
+            # Extract oid from kwargs only if required
+            # SECURITY: Do NOT inherit from context to prevent cross-tenant pollution in nested calls
+            oid = kwargs.pop('oid', None) if requires_oid else None
 
             # Check if we're in UID mode
             uid_auth = uid_auth_context_var.get()
@@ -708,8 +709,9 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
     else:
         @functools.wraps(tool_func)
         def sync_wrapper(*args, **kwargs):
-            # Extract oid from kwargs only if required, or use current OID from context (for nested calls)
-            oid = kwargs.pop('oid', None) or current_oid_context_var.get() if requires_oid else None
+            # Extract oid from kwargs only if required
+            # SECURITY: Do NOT inherit from context to prevent cross-tenant pollution in nested calls
+            oid = kwargs.pop('oid', None) if requires_oid else None
 
             # Check if we're in UID mode
             uid_auth = uid_auth_context_var.get()
@@ -4896,14 +4898,15 @@ def delete_saved_query(query_name: str, ctx: Context) -> dict[str, Any]:
 def run_saved_query(
     query_name: str,
     limit: int = 100,
-    ctx: Context = None
+    ctx: Context = None,
+    oid: str = None  # Added by wrapper in UID mode
 ) -> dict[str, Any]:
     """Execute a saved query
-    
+
     Args:
         query_name (str): Name of the saved query to run
         limit (int): Maximum number of results to return (default 100)
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "results" (list): Query results
@@ -4911,28 +4914,29 @@ def run_saved_query(
     """
     start = time.time()
     logging.info(f"Tool called: run_saved_query(query_name={json.dumps(query_name)}, limit={limit})")
-    
+
     try:
         sdk = get_sdk_from_context(ctx)
         if sdk is None:
             return {"error": "No authentication provided"}
-        
+
         # First get the saved query
         from limacharlie import Hive
         hive = Hive(sdk, "query")
         query_data = hive.get(query_name)
-        
+
         if not query_data:
             return {"error": f"Saved query '{query_name}' not found"}
-        
+
         # Extract the LCQL query
         lcql_query = query_data.get("query", "")
         if not lcql_query:
             return {"error": "Saved query has no query content"}
-        
+
         # Now run it using the existing run_lcql_query function
-        return run_lcql_query(lcql_query, limit, ctx=ctx)
-        
+        # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+        return run_lcql_query(lcql_query, limit, ctx=ctx, oid=oid)
+
     except Exception as e:
         logging.info(f"Error in run_saved_query: {str(e)}")
         return {"error": str(e)}
@@ -5758,185 +5762,199 @@ def unsubscribe_from_extension(extension_name: str, ctx: Context) -> dict[str, A
 # ---------- D&R Rules - Specific Hives ----------
 
 @mcp_tool_with_gcs()
-def list_dr_general_rules(ctx: Context) -> dict[str, Any]:
+def list_dr_general_rules(ctx: Context, oid: str = None) -> dict[str, Any]:
     """List all general D&R rules
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rules" (dict): Dictionary of rule names to rule content
             - "error" (str): On failure, an error message string
     """
-    return list_rules("dr-general", ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return list_rules("dr-general", ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def get_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
+def get_dr_general_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
     """Get a specific general D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to retrieve
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rule" (dict): Rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    return get_rule("dr-general", rule_name, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return get_rule("dr-general", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
 def set_dr_general_rule(
     rule_name: str,
     rule_content: dict[str, Any],
-    ctx: Context
+    ctx: Context,
+    oid: str = None
 ) -> dict[str, Any]:
     """Create or update a general D&R rule
-    
+
     Args:
         rule_name (str): Name for the rule
         rule_content (dict): Rule content (detection and response)
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if operation was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return set_rule("dr-general", rule_name, rule_content, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return set_rule("dr-general", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def delete_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
+def delete_dr_general_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
     """Delete a general D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to delete
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if deletion was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return delete_rule("dr-general", rule_name, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return delete_rule("dr-general", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def list_dr_managed_rules(ctx: Context) -> dict[str, Any]:
+def list_dr_managed_rules(ctx: Context, oid: str = None) -> dict[str, Any]:
     """List all managed D&R rules
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rules" (dict): Dictionary of rule names to rule content
             - "error" (str): On failure, an error message string
     """
-    return list_rules("dr-managed", ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return list_rules("dr-managed", ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def get_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
+def get_dr_managed_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
     """Get a specific managed D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to retrieve
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rule" (dict): Rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    return get_rule("dr-managed", rule_name, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return get_rule("dr-managed", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
 def set_dr_managed_rule(
     rule_name: str,
     rule_content: dict[str, Any],
-    ctx: Context
+    ctx: Context,
+    oid: str = None
 ) -> dict[str, Any]:
     """Create or update a managed D&R rule
-    
+
     Args:
         rule_name (str): Name for the rule
         rule_content (dict): Rule content (detection and response)
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if operation was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return set_rule("dr-managed", rule_name, rule_content, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return set_rule("dr-managed", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def delete_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
+def delete_dr_managed_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
     """Delete a managed D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to delete
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if deletion was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return delete_rule("dr-managed", rule_name, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return delete_rule("dr-managed", rule_name, ctx, oid=oid)
 
 
 # ---------- False Positive Rules ----------
 
 @mcp_tool_with_gcs()
-def get_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
+def get_fp_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
     """Get a specific false positive rule
-    
+
     Args:
         rule_name (str): Name of the FP rule to retrieve
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rule" (dict): FP rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    return get_rule("fp", rule_name, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return get_rule("fp", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
 def set_fp_rule(
     rule_name: str,
     rule_content: dict[str, Any],
-    ctx: Context
+    ctx: Context,
+    oid: str = None
 ) -> dict[str, Any]:
     """Create or update a false positive rule
-    
+
     Args:
         rule_name (str): Name for the FP rule
         rule_content (dict): FP rule content
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if operation was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return set_rule("fp", rule_name, rule_content, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return set_rule("fp", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
-def delete_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
+def delete_fp_rule(rule_name: str, ctx: Context, oid: str = None) -> dict[str, Any]:
     """Delete a false positive rule
-    
+
     Args:
         rule_name (str): Name of the FP rule to delete
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if deletion was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return delete_rule("fp", rule_name, ctx)
+    # SECURITY: Pass oid explicitly to prevent cross-tenant execution
+    return delete_rule("fp", rule_name, ctx, oid=oid)
 
 # Ensure thread pool is properly shutdown on app termination
 def cleanup_thread_pool():
