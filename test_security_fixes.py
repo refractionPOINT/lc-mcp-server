@@ -27,6 +27,7 @@ class TestOAuthCredentialsIsolation:
     def test_uid_auth_context_includes_oauth_creds(self):
         """Test that OAuth credentials are stored in context."""
         from server import uid_auth_context_var
+        from uid_auth import UIDAuth
 
         # Simulate OAuth mode
         uid = "test-uid"
@@ -36,17 +37,19 @@ class TestOAuthCredentialsIsolation:
             'provider': 'google'
         }
 
-        # Set context
-        token = uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
+        # Set context with UIDAuth class
+        uid_auth = UIDAuth(uid=uid, api_key=None, mode="oauth", oauth_creds=oauth_creds)
+        token = uid_auth_context_var.set(uid_auth)
 
         try:
             # Retrieve and verify
             context = uid_auth_context_var.get()
             assert context is not None
-            assert len(context) == 4
-            assert context[0] == uid
-            assert context[2] == "oauth"
-            assert context[3] == oauth_creds
+            assert isinstance(context, UIDAuth)
+            assert context.uid == uid
+            assert context.mode == "oauth"
+            assert context.oauth_creds == oauth_creds
+            assert context.api_key is None
         finally:
             uid_auth_context_var.reset(token)
 
@@ -54,6 +57,7 @@ class TestOAuthCredentialsIsolation:
     def test_sdk_created_with_explicit_oauth_creds(self, mock_manager):
         """Test that SDK is created with explicit OAuth credentials."""
         from server import wrap_tool_for_multi_mode, uid_auth_context_var
+        from uid_auth import UIDAuth
 
         mock_sdk = Mock()
         mock_manager.return_value = mock_sdk
@@ -69,7 +73,9 @@ class TestOAuthCredentialsIsolation:
             'provider': 'google'
         }
 
-        token = uid_auth_context_var.set(("test-uid", None, "oauth", oauth_creds))
+        # Use UIDAuth class instead of tuple
+        uid_auth = UIDAuth(uid="test-uid", api_key=None, mode="oauth", oauth_creds=oauth_creds)
+        token = uid_auth_context_var.set(uid_auth)
 
         try:
             result = wrapped(oid="test-oid", ctx=Mock())

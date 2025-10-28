@@ -174,29 +174,12 @@ sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
 # Import UIDAuth class for type annotation
 from uid_auth import UIDAuth
 
-uid_auth_context_var = contextvars.ContextVar[UIDAuth | tuple[str, str | None, str, dict | None] | None](
-    "uid_auth", default=None  # Stores UIDAuth instance when in UID mode. Tuple format supported for backward compatibility.
+uid_auth_context_var = contextvars.ContextVar[UIDAuth | None](
+    "uid_auth", default=None  # Stores UIDAuth instance when in UID mode
 )
 current_oid_context_var = contextvars.ContextVar[str | None](
     "current_oid", default=None  # Stores the current OID for nested calls in UID mode
 )
-
-
-def _unpack_uid_auth(uid_auth: UIDAuth | tuple) -> tuple[str, str | None, str, dict | None]:
-    """
-    Helper function to unpack UID auth data from either UIDAuth class or legacy tuple.
-
-    Args:
-        uid_auth: Either a UIDAuth instance or a tuple (uid, api_key, mode, oauth_creds)
-
-    Returns:
-        Tuple of (uid, api_key, mode, oauth_creds)
-    """
-    if isinstance(uid_auth, UIDAuth):
-        return uid_auth.uid, uid_auth.api_key, uid_auth.mode, uid_auth.oauth_creds
-    else:
-        # Legacy tuple format
-        return uid_auth
 
 # Global registry for all tool functions (before registration)
 # Maps tool_name -> (func, is_async)
@@ -675,8 +658,11 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                # Unpack UID auth context (handles both UIDAuth class and legacy tuple)
-                uid, api_key, mode, oauth_creds = _unpack_uid_auth(uid_auth)
+                # Unpack UID auth context
+                uid = uid_auth.uid
+                api_key = uid_auth.api_key
+                mode = uid_auth.mode
+                oauth_creds = uid_auth.oauth_creds
 
                 if requires_oid:
                     # Org-level tool: require OID and create SDK with OID
@@ -748,8 +734,11 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                # Unpack UID auth context (handles both UIDAuth class and legacy tuple)
-                uid, api_key, mode, oauth_creds = _unpack_uid_auth(uid_auth)
+                # Unpack UID auth context
+                uid = uid_auth.uid
+                api_key = uid_auth.api_key
+                mode = uid_auth.mode
+                oauth_creds = uid_auth.oauth_creds
 
                 if requires_oid:
                     # Org-level tool: require OID and create SDK with OID
