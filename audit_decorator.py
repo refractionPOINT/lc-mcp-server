@@ -294,10 +294,23 @@ def _extract_safe_context(kwargs: dict) -> dict:
             # Try to get user ID from context variables
             # This is safe because we're only reading metadata, not credentials
             from server import uid_auth_context_var, current_oid_context_var
+            from uid_auth import UIDAuth
 
             uid_auth = uid_auth_context_var.get()
-            if uid_auth and len(uid_auth) > 0:
-                context["user_id"] = uid_auth[0]  # uid is first element
+            if uid_auth:
+                # Handle both old tuple format and new UIDAuth class for backward compatibility
+                if isinstance(uid_auth, UIDAuth):
+                    # New class-based approach with built-in validation
+                    context["user_id"] = uid_auth.uid
+                elif isinstance(uid_auth, tuple) and len(uid_auth) > 0:
+                    # Legacy tuple format - validate UID before logging
+                    uid = uid_auth[0]
+                    # Use UIDAuth validator to ensure it's not a secret
+                    if UIDAuth._is_valid_uid(uid):
+                        context["user_id"] = uid
+                    else:
+                        # Don't log potentially malformed/secret UIDs
+                        logger.warning("Skipping UID in audit log: failed validation")
 
             # Get current OID from context if not in kwargs
             if "organization_id" not in context:

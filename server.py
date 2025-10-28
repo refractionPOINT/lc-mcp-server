@@ -170,12 +170,33 @@ request_context_var: contextvars.ContextVar = contextvars.ContextVar(
 sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
     "lc_sdk", default=None
 )
-uid_auth_context_var = contextvars.ContextVar[tuple[str, str | None, str, dict | None] | None](
-    "uid_auth", default=None  # Stores (uid, api_key, mode, oauth_creds) when in UID mode. mode: "oauth" or "api_key"
+
+# Import UIDAuth class for type annotation
+from uid_auth import UIDAuth
+
+uid_auth_context_var = contextvars.ContextVar[UIDAuth | tuple[str, str | None, str, dict | None] | None](
+    "uid_auth", default=None  # Stores UIDAuth instance when in UID mode. Tuple format supported for backward compatibility.
 )
 current_oid_context_var = contextvars.ContextVar[str | None](
     "current_oid", default=None  # Stores the current OID for nested calls in UID mode
 )
+
+
+def _unpack_uid_auth(uid_auth: UIDAuth | tuple) -> tuple[str, str | None, str, dict | None]:
+    """
+    Helper function to unpack UID auth data from either UIDAuth class or legacy tuple.
+
+    Args:
+        uid_auth: Either a UIDAuth instance or a tuple (uid, api_key, mode, oauth_creds)
+
+    Returns:
+        Tuple of (uid, api_key, mode, oauth_creds)
+    """
+    if isinstance(uid_auth, UIDAuth):
+        return uid_auth.uid, uid_auth.api_key, uid_auth.mode, uid_auth.oauth_creds
+    else:
+        # Legacy tuple format
+        return uid_auth
 
 # Global registry for all tool functions (before registration)
 # Maps tool_name -> (func, is_async)
@@ -654,8 +675,8 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                # Unpack UID auth context (uid, api_key, mode, oauth_creds)
-                uid, api_key, mode, oauth_creds = uid_auth
+                # Unpack UID auth context (handles both UIDAuth class and legacy tuple)
+                uid, api_key, mode, oauth_creds = _unpack_uid_auth(uid_auth)
 
                 if requires_oid:
                     # Org-level tool: require OID and create SDK with OID
@@ -727,8 +748,8 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
 
             # Validate oid parameter based on mode
             if is_uid_mode:
-                # Unpack UID auth context (uid, api_key, mode, oauth_creds)
-                uid, api_key, mode, oauth_creds = uid_auth
+                # Unpack UID auth context (handles both UIDAuth class and legacy tuple)
+                uid, api_key, mode, oauth_creds = _unpack_uid_auth(uid_auth)
 
                 if requires_oid:
                     # Org-level tool: require OID and create SDK with OID
@@ -1183,7 +1204,7 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
 
                     # Set UID auth context in OAuth mode WITH credentials to avoid GLOBAL_OAUTH race
                     # Do NOT create SDK here - wrapper creates it per-tool with OID (multi-org mode)
-                    uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
+                    uid_auth_context_var.set(UIDAuth(uid=uid, api_key=None, mode="oauth", oauth_creds=oauth_creds))
 
                     # OAuth mode = UID mode = Multi-org mode
                     # Do NOT create SDK without OID - wrapper will create it per-tool with OID from tool parameter
@@ -1199,7 +1220,7 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                 try:
                     uuid.UUID(auth_header)
                     # Valid API key - no OAuth credentials in API key mode
-                    uid_auth_context_var.set((uid, auth_header, "api_key", None))
+                    uid_auth_context_var.set(UIDAuth(uid=uid, api_key=auth_header, mode="api_key", oauth_creds=None))
                     logging.info(f"UID mode detected: uid={uid}")
                     return None  # Wrapper will create SDK per-tool with OID
                 except Exception:
@@ -6439,7 +6460,7 @@ if PUBLIC_MODE:
                                 }
 
                                 # Set UID auth context for wrapper
-                                uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
+                                uid_auth_context_var.set(UIDAuth(uid=uid, api_key=None, mode="oauth", oauth_creds=oauth_creds))
                                 logging.info(f"MCP request: OAuth authentication successful for uid={uid}")
                             except Exception as e:
                                 logging.warning(f"MCP request: OAuth token validation failed: {e}")
@@ -6603,7 +6624,7 @@ if __name__ == "__main__":
                 # limacharlie.GLOBAL_OAUTH = oauth_creds  # REMOVED - security risk
 
                 # Store in context with mode indicator AND credentials
-                uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
+                uid_auth_context_var.set(UIDAuth(uid=uid, api_key=None, mode="oauth", oauth_creds=oauth_creds))
 
             elif api_key_env or api_key_sdk:
                 # API key mode (prefer explicit env var over config)
@@ -6613,7 +6634,7 @@ if __name__ == "__main__":
                 logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
 
                 # Store in context with mode indicator (no oauth_creds in API key mode)
-                uid_auth_context_var.set((uid, api_key, "api_key", None))
+                uid_auth_context_var.set(UIDAuth(uid=uid, api_key=api_key, mode="api_key", oauth_creds=None))
 
             else:
                 logging.error("UID mode requires authentication credentials.")

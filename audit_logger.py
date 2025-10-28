@@ -1,11 +1,14 @@
 """
 Audit logging framework for LimaCharlie MCP Server.
 
-This module provides a simple, secure audit logging system that:
+This module provides a Pythonic audit logging system using Python's
+built-in logging infrastructure (Logger, Handler, Formatter, Filter).
+
+Features:
 - Logs security-relevant events to stdout as structured JSON
 - Never logs sensitive data (parameters, responses, tokens, etc.)
-- Provides severity-based filtering
-- Includes minimal overhead for production use
+- Provides severity-based filtering via standard logging levels
+- Integrates seamlessly with Python's logging ecosystem
 
 Configuration via environment variables:
 - AUDIT_LOG_ENABLED: Enable/disable audit logging (default: true)
@@ -20,17 +23,15 @@ import sys
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
-
-# Standard logging for application logs
-logger = logging.getLogger(__name__)
+import re
 
 
 class AuditSeverity(Enum):
-    """Severity levels for audit events."""
-    CRITICAL = 4  # Auth, delete, credentials, isolation
-    HIGH = 3      # Create/update rules, configurations
-    MEDIUM = 2    # Queries, reads, lists
-    LOW = 1       # Metadata, health checks
+    """Severity levels for audit events mapped to Python logging levels."""
+    CRITICAL = logging.CRITICAL  # Auth, delete, credentials, isolation
+    HIGH = logging.ERROR         # Create/update rules, configurations
+    MEDIUM = logging.WARNING     # Queries, reads, lists
+    LOW = logging.INFO           # Metadata, health checks
 
 
 class AuditAction(Enum):
@@ -43,12 +44,162 @@ class AuditAction(Enum):
     AUTH = "auth"
 
 
+class AuditLogFilter(logging.Filter):
+    """
+    Filter for audit log records based on severity configuration.
+
+    This filter implements the AUDIT_LOG_INCLUDE_LOW logic and ensures
+    only appropriate severity levels are logged.
+    """
+
+    def __init__(self, min_severity: AuditSeverity, include_low: bool = False):
+        """
+        Initialize the audit log filter.
+
+        Args:
+            min_severity: Minimum severity level to log
+            include_low: Whether to include LOW severity events
+        """
+        super().__init__()
+        self.min_severity = min_severity
+        self.include_low = include_low
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """
+        Determine if a record should be logged.
+
+        Args:
+            record: The log record to filter
+
+        Returns:
+            True if the record should be logged, False otherwise
+        """
+        # Check if this is an audit record (has audit_event attribute)
+        if not hasattr(record, 'audit_event'):
+            return True  # Pass through non-audit logs
+
+        severity = getattr(record, 'audit_severity', None)
+        if severity is None:
+            return True
+
+        # Always exclude LOW unless explicitly enabled
+        if severity == AuditSeverity.LOW:
+            return self.include_low
+
+        # Check if severity meets minimum threshold
+        return severity.value >= self.min_severity.value
+
+
+class AuditLogFormatter(logging.Formatter):
+    """
+    Formatter for audit log records that outputs structured JSON.
+
+    This formatter extracts audit event data from the LogRecord and
+    formats it as JSON with safe fields only.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        """
+        Format a log record as JSON.
+
+        Args:
+            record: The log record to format
+
+        Returns:
+            JSON string representation of the audit event
+        """
+        # Check if this is an audit event (has audit_event attribute)
+        if not hasattr(record, 'audit_event'):
+            # Fall back to default formatting for non-audit logs
+            return super().format(record)
+
+        # Extract the audit event data
+        event = record.audit_event
+
+        # Sanitize error message if present
+        if 'error_message' in event and event['error_message']:
+            event['error_message'] = self._sanitize_error_message(event['error_message'])
+
+        try:
+            # Write as JSON with AUDIT prefix for easy filtering
+            json_str = json.dumps(event, ensure_ascii=False)
+            return f"AUDIT: {json_str}"
+        except Exception as e:
+            # If JSON serialization fails, return a safe error message
+            return f"AUDIT: {{\"error\": \"Failed to serialize audit event: {type(e).__name__}\"}}"
+
+    @staticmethod
+    def _sanitize_error_message(error_message: str) -> str:
+        """
+        Sanitize error messages to remove potentially sensitive information.
+
+        Args:
+            error_message: The raw error message
+
+        Returns:
+            A sanitized error message safe for logging
+        """
+        # Truncate very long messages
+        if len(error_message) > 500:
+            error_message = error_message[:497] + "..."
+
+        # Basic sanitization - remove common patterns that might leak info
+        sensitive_patterns = [
+            "api_key=",
+            "apiKey=",
+            "secret=",
+            "password=",
+            "token=",
+            "jwt=",
+            "bearer ",
+            "authorization:",
+        ]
+
+        lower_msg = error_message.lower()
+        for pattern in sensitive_patterns:
+            if pattern in lower_msg:
+                return "Error occurred (details redacted for security)"
+
+        return error_message
+
+
+class AuditLogHandler(logging.StreamHandler):
+    """
+    Handler for audit logs that writes to stdout.
+
+    This handler ensures audit logs are written to stdout with immediate
+    flushing for real-time visibility.
+    """
+
+    def __init__(self):
+        """Initialize the handler with stdout stream."""
+        super().__init__(stream=sys.stdout)
+        # Set the formatter
+        self.setFormatter(AuditLogFormatter())
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """
+        Emit a log record.
+
+        Args:
+            record: The log record to emit
+        """
+        try:
+            super().emit(record)
+            # Ensure immediate flush for audit logs
+            self.flush()
+        except Exception:
+            # If emit fails, use handleError but don't fail the operation
+            self.handleError(record)
+
+
 class AuditLogger:
     """
-    Simple audit logger that writes structured JSON events to stdout.
+    Audit logger using Python's logging infrastructure.
 
-    This logger is designed to be safe by default - it only logs
-    known-safe fields and never logs potentially sensitive data.
+    This class provides a clean interface for audit logging while
+    leveraging Python's built-in logging system for filtering,
+    formatting, and output.
     """
 
     def __init__(self):
@@ -60,10 +211,20 @@ class AuditLogger:
         try:
             self.min_severity = AuditSeverity[level_str]
         except KeyError:
-            logger.warning(f"Invalid AUDIT_LOG_LEVEL '{level_str}', defaulting to MEDIUM")
+            logging.warning(f"Invalid AUDIT_LOG_LEVEL '{level_str}', defaulting to MEDIUM")
             self.min_severity = AuditSeverity.MEDIUM
 
         self.include_low = os.getenv("AUDIT_LOG_INCLUDE_LOW", "false").lower() in ("true", "1", "yes")
+
+        # Create a dedicated logger for audit events
+        self.logger = logging.getLogger("limacharlie.audit")
+        self.logger.setLevel(logging.DEBUG)  # Let filter handle actual filtering
+        self.logger.propagate = False  # Don't propagate to root logger
+
+        # Add our custom handler
+        handler = AuditLogHandler()
+        handler.addFilter(AuditLogFilter(self.min_severity, self.include_low))
+        self.logger.addHandler(handler)
 
     def should_log(self, severity: AuditSeverity) -> bool:
         """
@@ -142,7 +303,7 @@ class AuditLogger:
         if status_code is not None:
             event["status_code"] = status_code
         if error_message is not None:
-            event["error_message"] = self._sanitize_error_message(error_message)
+            event["error_message"] = error_message
         if request_id is not None:
             event["request_id"] = request_id
         if source_ip is not None:
@@ -156,58 +317,13 @@ class AuditLogger:
         if additional_safe_fields:
             event.update(additional_safe_fields)
 
-        # Write to stdout as JSON
-        self._write_audit_event(event)
-
-    def _sanitize_error_message(self, error_message: str) -> str:
-        """
-        Sanitize error messages to remove potentially sensitive information.
-
-        Args:
-            error_message: The raw error message
-
-        Returns:
-            A sanitized error message safe for logging
-        """
-        # Truncate very long messages
-        if len(error_message) > 500:
-            error_message = error_message[:497] + "..."
-
-        # Basic sanitization - remove common patterns that might leak info
-        # Note: This is conservative - we prefer to truncate rather than leak
-        sensitive_patterns = [
-            "api_key=",
-            "apiKey=",
-            "secret=",
-            "password=",
-            "token=",
-            "jwt=",
-            "bearer ",
-            "authorization:",
-        ]
-
-        lower_msg = error_message.lower()
-        for pattern in sensitive_patterns:
-            if pattern in lower_msg:
-                # If we detect potential sensitive data, return a generic message
-                return "Error occurred (details redacted for security)"
-
-        return error_message
-
-    def _write_audit_event(self, event: Dict[str, Any]) -> None:
-        """
-        Write an audit event to stdout.
-
-        Args:
-            event: The audit event dictionary
-        """
-        try:
-            # Write to stdout with immediate flush
-            json_str = json.dumps(event, ensure_ascii=False)
-            print(f"AUDIT: {json_str}", file=sys.stdout, flush=True)
-        except Exception as e:
-            # If audit logging fails, log to standard logger but don't fail the operation
-            logger.error(f"Failed to write audit log: {e}")
+        # Log using Python's logging infrastructure
+        # Attach event data and severity to the LogRecord
+        extra = {
+            'audit_event': event,
+            'audit_severity': severity
+        }
+        self.logger.log(severity.value, "Audit event", extra=extra)
 
 
 # Global audit logger instance
