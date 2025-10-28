@@ -1179,13 +1179,14 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                     }
 
                     # Set UID auth context in OAuth mode WITH credentials to avoid GLOBAL_OAUTH race
+                    # Do NOT create SDK here - wrapper creates it per-tool with OID (multi-org mode)
                     uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
 
-                    # Create SDK immediately since wrapper isn't executing in FastMCP context
-                    # Pass OAuth credentials directly to avoid global variable race conditions
-                    sdk = limacharlie.Manager(uid=uid, oauth_creds=oauth_creds)
-                    sdk_context_var.set(sdk)
-                    return sdk
+                    # OAuth mode = UID mode = Multi-org mode
+                    # Do NOT create SDK without OID - wrapper will create it per-tool with OID from tool parameter
+                    # This matches the behavior of API key UID mode (lines 1193-1202)
+                    logging.debug(f"OAuth mode: Auth context set, wrapper will create SDK per-tool with OID")
+                    return None  # Wrapper will create SDK per-tool with OID
 
             # Check for UID mode first
             uid = request.headers.get("x-lc-uid")
