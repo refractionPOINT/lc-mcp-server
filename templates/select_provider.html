@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign in to LimaCharlie MCP</title>
+    <title>LimaCharlie - Authentication</title>
+    <link rel="icon" type="image/png" href="/static/favicon/favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -59,13 +62,16 @@
         }
 
         .logo {
-            font-size: 28px;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            background: linear-gradient(135deg, var(--lc-accent-blue), #A74AE2);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            max-width: 200px;
+            height: auto;
+            margin: 0 auto;
+            display: block;
+            filter: drop-shadow(0 4px 12px rgba(74, 144, 226, 0.3));
+            transition: filter 0.3s ease-in-out;
+        }
+
+        .logo:hover {
+            filter: drop-shadow(0 6px 16px rgba(74, 144, 226, 0.5));
         }
 
         h1 {
@@ -215,7 +221,7 @@
     <div class="container">
         <div class="card">
             <div class="logo-container">
-                <div class="logo">LimaCharlie</div>
+                <img src="/static/images/limacharlie-logo.png" alt="LimaCharlie" class="logo">
             </div>
 
             <h1>Sign in to LimaCharlie MCP</h1>

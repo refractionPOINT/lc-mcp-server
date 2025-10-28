@@ -6043,7 +6043,9 @@ if PUBLIC_MODE:
 
     # Create main Starlette app with profile-based routing
     from starlette.routing import Route, Mount as StarletteMount
+    from starlette.staticfiles import StaticFiles
     from starlette.datastructures import URL
+    from pathlib import Path
     routes = []
 
     # Add MCP OAuth endpoints if enabled
@@ -6394,6 +6396,12 @@ if PUBLIC_MODE:
         routes.append(Route("/introspect", handle_introspect_endpoint, methods=["POST", "OPTIONS"]))
         routes.append(Route("/.well-known/oauth-protected-resource", handle_oauth_metadata_endpoint, methods=["GET"]))
         routes.append(Route("/.well-known/oauth-authorization-server", handle_oauth_authz_metadata_endpoint, methods=["GET"]))
+
+        # Add static files route for OAuth page assets (logo, favicon, etc.)
+        static_dir = Path(__file__).parent / "static"
+        if static_dir.exists():
+            routes.append(StarletteMount("/static", StaticFiles(directory=str(static_dir)), name="static"))
+            logging.info(f"Static files mounted at /static from {static_dir}")
 
         logging.info("MCP OAuth endpoints registered")
 
