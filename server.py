@@ -645,9 +645,12 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
             # SECURITY: Do NOT inherit from context to prevent cross-tenant pollution in nested calls
             oid = kwargs.pop('oid', None) if requires_oid else None
 
+            logging.debug(f"Wrapper for {tool_func.__name__}: requires_oid={requires_oid}, oid={oid}, kwargs={list(kwargs.keys())}")
+
             # Check if we're in UID mode
             uid_auth = uid_auth_context_var.get()
             is_uid_mode = uid_auth is not None
+            logging.debug(f"Wrapper for {tool_func.__name__}: UID mode={is_uid_mode}, uid_auth={uid_auth is not None}")
 
             # Validate oid parameter based on mode
             if is_uid_mode:
@@ -1185,6 +1188,7 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                     # OAuth mode = UID mode = Multi-org mode
                     # Do NOT create SDK without OID - wrapper will create it per-tool with OID from tool parameter
                     # This matches the behavior of API key UID mode (lines 1193-1202)
+                    logging.info(f"OAuth authentication successful: uid={uid}, mode=oauth, context set for wrapper")
                     logging.debug(f"OAuth mode: Auth context set, wrapper will create SDK per-tool with OID")
                     return None  # Wrapper will create SDK per-tool with OID
 
