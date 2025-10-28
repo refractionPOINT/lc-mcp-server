@@ -6420,7 +6420,7 @@ if PUBLIC_MODE:
                         # Validate OAuth access token
                         if MCP_OAUTH_ENABLED and oauth_token_manager:
                             try:
-                                token_info = await oauth_token_manager.get_token_info_for_request(access_token)
+                                token_info = oauth_token_manager.get_token_info_for_request(access_token)
                                 uid = token_info['uid']
 
                                 # Build OAuth credentials
