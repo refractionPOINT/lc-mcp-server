@@ -679,11 +679,11 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
                     if mode == "oauth":
                         # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
                         logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid}) with explicit credentials")
-                        sdk = limacharlie.Manager(uid=uid, oauth_creds=oauth_creds)
+                        sdk = limacharlie.Manager(oid='-', uid=uid, oauth_creds=oauth_creds)
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
-                        sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
+                        sdk = limacharlie.Manager(oid='-', uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
                 sdk_token = sdk_context_var.set(sdk)
@@ -752,11 +752,11 @@ def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = Tru
                     if mode == "oauth":
                         # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
                         logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid}) with explicit credentials")
-                        sdk = limacharlie.Manager(uid=uid, oauth_creds=oauth_creds)
+                        sdk = limacharlie.Manager(oid='-', uid=uid, oauth_creds=oauth_creds)
                     else:
                         # API key mode
                         logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
-                        sdk = limacharlie.Manager(uid=uid, secret_api_key=api_key)
+                        sdk = limacharlie.Manager(oid='-', uid=uid, secret_api_key=api_key)
 
                 # Store SDK and OID in context for this tool execution and nested calls
                 sdk_token = sdk_context_var.set(sdk)
