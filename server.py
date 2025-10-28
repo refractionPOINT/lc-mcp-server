@@ -6397,16 +6397,69 @@ if PUBLIC_MODE:
 
         logging.info("MCP OAuth endpoints registered")
 
+    # Create ASGI wrapper that adds authentication to MCP sub-apps
+    class MCPAuthWrapper:
+        """ASGI middleware that adds OAuth authentication to MCP sub-applications"""
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                # Set up context vars for this request
+                request = Request(scope, receive)
+                request_token = request_context_var.set(request)
+                sdk_token = sdk_context_var.set(None)
+                uid_token = uid_auth_context_var.set(None)
+
+                try:
+                    # Extract and validate OAuth token if present
+                    auth_header = request.headers.get("authorization", "")
+                    if auth_header.startswith("Bearer "):
+                        access_token = auth_header[7:]  # Remove "Bearer " prefix
+
+                        # Validate OAuth access token
+                        if MCP_OAUTH_ENABLED and oauth_token_manager:
+                            try:
+                                token_info = await oauth_token_manager.get_token_info_for_request(access_token)
+                                uid = token_info['uid']
+
+                                # Build OAuth credentials
+                                oauth_creds = {
+                                    'id_token': token_info['firebase_id_token'],
+                                    'refresh_token': token_info['firebase_refresh_token'],
+                                    'provider': 'google'
+                                }
+
+                                # Set UID auth context for wrapper
+                                uid_auth_context_var.set((uid, None, "oauth", oauth_creds))
+                                logging.info(f"MCP request: OAuth authentication successful for uid={uid}")
+                            except Exception as e:
+                                logging.warning(f"MCP request: OAuth token validation failed: {e}")
+
+                    # Call the MCP app
+                    await self.app(scope, receive, send)
+                finally:
+                    # Clean up context
+                    request_context_var.reset(request_token)
+                    sdk_context_var.reset(sdk_token)
+                    uid_auth_context_var.reset(uid_token)
+            else:
+                # Non-HTTP requests (e.g., WebSocket) - pass through
+                await self.app(scope, receive, send)
+
     # Add profile-specific endpoints (mount with trailing slash only)
     for profile, profile_mcp in profile_mcps.items():
+        # Wrap MCP app with authentication middleware
+        wrapped_app = MCPAuthWrapper(profile_mcp.streamable_http_app())
+
         if profile == "all":
             # Mount "all" profile at /mcp/ with trailing slash for backward compatibility
-            routes.append(Mount("/mcp/", profile_mcp.streamable_http_app()))
-            logging.info(f"Mounted 'all' profile at /mcp/")
+            routes.append(Mount("/mcp/", wrapped_app))
+            logging.info(f"Mounted 'all' profile at /mcp/ with OAuth auth wrapper")
         else:
             # Mount other profiles at /<profile_name>/ with trailing slash
-            routes.append(Mount(f"/{profile}/", profile_mcp.streamable_http_app()))
-            logging.info(f"Mounted '{profile}' profile at /{profile}/")
+            routes.append(Mount(f"/{profile}/", wrapped_app))
+            logging.info(f"Mounted '{profile}' profile at /{profile}/ with OAuth auth wrapper")
 
     # Create root endpoint for health checks and profile listing
 
