@@ -1380,8 +1380,10 @@ def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
         # Make SDK interactive
         if not sdk._inv_id:
             sdk._inv_id = f"mcp-{uuid.uuid4()}"
+        logging.info(f"Making SDK interactive: {sdk._inv_id}")
         sdk.make_interactive()
-        
+        logging.info(f"SDK interactive: {sdk._inv_id}")
+
         # Get sensor and execute command
         sensor = sdk.sensor(sid)
         return safe_simple_request(sensor, cmd)
