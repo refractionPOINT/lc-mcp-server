@@ -179,7 +179,12 @@ class TestAtomicOperations:
             uid="test-uid",
             firebase_id_token="test-id-token",
             firebase_refresh_token="test-refresh-token",
-            firebase_expires_at=int(time.time()) + 3600
+            firebase_expires_at=int(time.time()) + 3600,
+            redirect_uri="https://example.com/callback",
+            client_id="test-client-id",
+            scope="limacharlie:read limacharlie:write",
+            code_challenge="test-challenge",
+            code_challenge_method="S256"
         )
 
         # First consumption should succeed
@@ -202,7 +207,12 @@ class TestAtomicOperations:
             uid="test-uid",
             firebase_id_token="test-id-token",
             firebase_refresh_token="test-refresh-token",
-            firebase_expires_at=int(time.time()) + 3600
+            firebase_expires_at=int(time.time()) + 3600,
+            redirect_uri="https://example.com/callback",
+            client_id="test-client-id",
+            scope="limacharlie:read limacharlie:write",
+            code_challenge="test-challenge",
+            code_challenge_method="S256"
         )
 
         results = []
@@ -237,7 +247,12 @@ class TestAtomicOperations:
             uid="test-uid",
             firebase_id_token=firebase_id_token,
             firebase_refresh_token=firebase_refresh_token,
-            firebase_expires_at=int(time.time()) + 3600
+            firebase_expires_at=int(time.time()) + 3600,
+            redirect_uri="https://example.com/callback",
+            client_id="test-client-id",
+            scope="limacharlie:read limacharlie:write",
+            code_challenge="test-challenge",
+            code_challenge_method="S256"
         )
 
         # Directly read from Redis (bypass decryption)
