@@ -205,3 +205,14 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Temporary analysis/documentation files
+ARCHITECTURE_AND_SECURITY_ANALYSIS.md
+CODEBASE_EXPLORATION_SUMMARY.md
+FIXES_APPLIED.md
+MULTI_PROVIDER_IMPLEMENTATION.md
+OAUTH_2FA_IMPLEMENTATION.md
+QUICK_REFERENCE.md
+SECURITY_FIXES.md
+SECURITY_FIX_OID_INHERITANCE.md
+verify_docker_includes.py

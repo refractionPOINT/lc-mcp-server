@@ -1,11 +1,120 @@
-from starlette.exceptions import HTTPException
+"""
+LimaCharlie MCP Server
+
+This server provides MCP (Model Context Protocol) access to LimaCharlie security platform
+capabilities. It supports multiple authentication modes for different use cases.
+
+AUTHENTICATION MODES
+====================
+
+The server supports three authentication modes:
+
+1. NORMAL MODE (Single Organization)
+   - Environment Variables: LC_OID, LC_API_KEY
+   - Use Case: Working with a single LimaCharlie organization
+   - Tool Behavior: Tools operate on the configured organization
+   - Configuration:
+     export LC_OID="your-organization-id"
+     export LC_API_KEY="your-api-key"
+
+2. UID MODE with API Key (Multi-Organization)
+   - Environment Variables: LC_UID, LC_API_KEY
+   - Use Case: Working across multiple organizations with API key authentication
+   - Tool Behavior: Each tool call requires an 'oid' parameter to specify the target organization
+   - Configuration:
+     export LC_UID="your-user-id"
+     export LC_API_KEY="your-api-key"
+   - Example Tool Call:
+     list_sensors(oid="org-123-456")
+
+3. UID MODE with OAuth (Multi-Organization, Recommended)
+   - Environment Variables: LC_UID, LC_CURRENT_ENV (optional)
+   - Use Case: Working across multiple organizations with OAuth authentication
+   - Tool Behavior: Each tool call requires an 'oid' parameter to specify the target organization
+   - Benefits: Automatic JWT token renewal, no need to manage API keys
+   - Configuration:
+     a) Set up OAuth credentials in ~/.limacharlie (use 'limacharlie login' CLI command)
+     b) Export LC_UID:
+        export LC_UID="your-user-id"
+     c) Optionally specify environment (defaults to "default"):
+        export LC_CURRENT_ENV="production"
+   - OAuth File Format (~/.limacharlie):
+     {
+       "default": {
+         "oid": "optional-default-org-id",
+         "uid": "your-user-id",
+         "oauth": {
+           "refresh_token": "...",
+           "api_key": "...",
+           "id_token": "...",
+           ...
+         }
+       },
+       "production": {
+         "oid": "prod-org-id",
+         "uid": "your-user-id",
+         "oauth": { ... }
+       }
+     }
+   - Example Tool Call:
+     list_sensors(oid="org-123-456")
+
+AUTHENTICATION PRECEDENCE
+=========================
+
+When LC_UID is set (UID Mode), the server determines authentication method in this order:
+1. OAuth (if credentials found in ~/.limacharlie for LC_CURRENT_ENV)
+2. API Key (if LC_API_KEY is set)
+3. Error (if neither OAuth nor API key is available)
+
+DEPLOYMENT MODES
+================
+
+STDIO Mode (Default):
+- Used with Claude Desktop or other MCP clients
+- Requires: mcp, limacharlie packages
+- Optional: google-genai (for AI-powered features)
+
+HTTP Mode (PUBLIC_MODE=true):
+- Exposes HTTP endpoints for web-based access
+- Requires: starlette, sse-starlette (in addition to STDIO requirements)
+- Use Case: Web applications, API integrations
+
+ENVIRONMENT VARIABLES REFERENCE
+===============================
+
+Authentication:
+  LC_OID              - Organization ID (Normal Mode)
+  LC_API_KEY          - API key for authentication
+  LC_UID              - User ID (enables UID Mode for multi-org)
+  LC_CURRENT_ENV      - Environment name in ~/.limacharlie (default: "default")
+
+Deployment:
+  PUBLIC_MODE         - "true" for HTTP mode, "false" for STDIO (default: "false")
+  MCP_PROFILE         - Tool profile filter: "all", "core", "ai" (default: "all")
+
+AI Features:
+  GEMINI_API_KEY      - Google Gemini API key for AI-powered tools
+
+Storage:
+  GCS_BUCKET_NAME           - Google Cloud Storage bucket for large results
+  GCS_URL_EXPIRY_HOURS      - Signed URL expiration in hours (default: 24)
+  GCS_TOKEN_THRESHOLD       - Token count threshold for GCS upload (default: 1000)
+  GCS_SIGNER_SERVICE_ACCOUNT - Service account for signing URLs
+
+Logging:
+  LLM_YAML_RETRY_COUNT - Number of retries for LLM YAML parsing (default: 10)
+
+For more information, visit: https://limacharlie.io
+"""
+
+# Core imports (always needed)
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Context
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, RedirectResponse
-from typing import Any
+from typing import Any, TYPE_CHECKING
 import limacharlie
 import limacharlie.Replay
+import limacharlie.Billing
 import json
 import uuid
 import time
@@ -22,11 +131,21 @@ import logging
 import sys
 import contextvars
 import contextlib
-from starlette.types import ASGIApp, Receive, Scope, Send
 import shlex
 from datetime import datetime, timedelta
 import functools
 import tempfile
+
+# Audit logging imports
+from audit_logger import AuditSeverity, AuditAction
+from audit_decorator import audit_log, set_request_metadata, clear_request_metadata
+
+# Type hints only (for IDE/type checkers, not runtime)
+if TYPE_CHECKING:
+    from starlette.exceptions import HTTPException
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response, RedirectResponse
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 # Try to import GCS libraries if available
 try:
@@ -45,11 +164,21 @@ except ImportError:
 SDK_THREAD_POOL = ThreadPoolExecutor(max_workers=100, thread_name_prefix="sdk-worker")
 
 # Create contextvars to store the current HTTP request and SDK
-request_context_var = contextvars.ContextVar[Request | None](
+request_context_var: contextvars.ContextVar = contextvars.ContextVar(
     "http_request", default=None
 )
 sdk_context_var = contextvars.ContextVar[limacharlie.Manager | None](
     "lc_sdk", default=None
+)
+
+# Import UIDAuth class for type annotation
+from uid_auth import UIDAuth
+
+uid_auth_context_var = contextvars.ContextVar[UIDAuth | None](
+    "uid_auth", default=None  # Stores UIDAuth instance when in UID mode
+)
+current_oid_context_var = contextvars.ContextVar[str | None](
+    "current_oid", default=None  # Stores the current OID for nested calls in UID mode
 )
 
 # Global registry for all tool functions (before registration)
@@ -66,6 +195,83 @@ GCS_TOKEN_THRESHOLD = int(os.getenv("GCS_TOKEN_THRESHOLD", "1000"))  # Default: 
 GCS_SIGNER_SERVICE_ACCOUNT = os.getenv("GCS_SIGNER_SERVICE_ACCOUNT", "mcp-server@lc-api.iam.gserviceaccount.com")
 # PUBLIC_MODE determines whether to use HTTP header auth (true) or local SDK auth (false)
 PUBLIC_MODE = os.getenv("PUBLIC_MODE", "false").lower() == "true"
+# MCP_OAUTH_ENABLED determines whether to enable MCP OAuth 2.1 flow
+MCP_OAUTH_ENABLED = os.getenv("MCP_OAUTH_ENABLED", "false").lower() == "true"
+
+# Conditional imports for HTTP mode (PUBLIC_MODE)
+# In STDIO mode, starlette is not needed and may not be installed
+if PUBLIC_MODE:
+    from starlette.exceptions import HTTPException
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response, RedirectResponse
+    from starlette.types import ASGIApp, Receive, Scope, Send
+else:
+    # Placeholders for STDIO mode (not used at runtime)
+    HTTPException = None  # type: ignore
+    Request = None  # type: ignore
+    JSONResponse = None  # type: ignore
+    Response = None  # type: ignore
+    RedirectResponse = None  # type: ignore
+    ASGIApp = None  # type: ignore
+    Receive = None  # type: ignore
+    Scope = None  # type: ignore
+    Send = None  # type: ignore
+
+# Conditional imports for MCP OAuth (requires PUBLIC_MODE and MCP_OAUTH_ENABLED)
+if PUBLIC_MODE and MCP_OAUTH_ENABLED:
+    try:
+        from oauth_state_manager import OAuthStateManager
+        from oauth_token_manager import OAuthTokenManager, get_token_manager
+        from oauth_endpoints import OAuthEndpoints, OAuthError, get_oauth_endpoints
+        from oauth_metadata import OAuthMetadataProvider, get_metadata_provider
+        from firebase_auth_bridge import FirebaseAuthBridge, FirebaseAuthError
+        from rate_limiter import create_rate_limiter
+
+        # Initialize OAuth components
+        oauth_state_manager = OAuthStateManager()
+        oauth_token_manager = get_token_manager()
+        oauth_endpoints = get_oauth_endpoints()
+        oauth_metadata_provider = get_metadata_provider()
+
+        # Initialize rate limiters for OAuth endpoints (SECURITY: DoS protection)
+        rate_limiters = {
+            'authorize': create_rate_limiter(oauth_state_manager.redis_client, 'authorize'),
+            'oauth_callback': create_rate_limiter(oauth_state_manager.redis_client, 'oauth_callback'),
+            'mfa_verify': create_rate_limiter(oauth_state_manager.redis_client, 'mfa_verify'),
+            'token': create_rate_limiter(oauth_state_manager.redis_client, 'token'),
+            'register': create_rate_limiter(oauth_state_manager.redis_client, 'register'),
+            'revoke': create_rate_limiter(oauth_state_manager.redis_client, 'revoke'),
+            'introspect': create_rate_limiter(oauth_state_manager.redis_client, 'introspect'),
+        }
+        logging.info("OAuth rate limiters initialized")
+
+        logging.info("MCP OAuth 2.1 support enabled")
+        logging.info(f"OAuth server URL: {oauth_metadata_provider.server_url}")
+
+        # Test Redis connection
+        if not oauth_state_manager.ping():
+            logging.error("Redis connection failed! OAuth will not work properly.")
+            logging.error("Please ensure Redis is running and REDIS_URL is correct.")
+        else:
+            logging.info(f"Redis connection successful: {oauth_state_manager.redis_url}")
+
+    except ImportError as e:
+        logging.error(f"Failed to import OAuth modules: {e}")
+        logging.error("MCP OAuth requires: redis, hiredis")
+        logging.error("Install with: pip install redis hiredis")
+        MCP_OAUTH_ENABLED = False
+    except Exception as e:
+        logging.error(f"Failed to initialize OAuth components: {e}")
+        import traceback
+        traceback.print_exc()
+        MCP_OAUTH_ENABLED = False
+else:
+    # Placeholders
+    oauth_state_manager = None
+    oauth_token_manager = None
+    oauth_endpoints = None
+    oauth_metadata_provider = None
+
 # Profile selection for filtering tools (default: "all" for backward compatibility)
 MCP_PROFILE = os.getenv("MCP_PROFILE", "all").lower()
 # LLM retry configuration
@@ -263,6 +469,8 @@ PROFILES = {
         "get_extension_config",
         "set_extension_config",
         "delete_extension_config",
+        "subscribe_to_extension",
+        "unsubscribe_from_extension",
         # Hive rules
         "list_rules",
         "get_rule",
@@ -279,7 +487,14 @@ PROFILES = {
         "delete_api_key",
         # Organization
         "get_org_info",
+        "list_user_orgs",
+        "create_org",
         "get_usage_stats",
+        "get_org_errors",
+        "dismiss_org_error",
+        "get_billing_details",
+        "get_org_invoice_url",
+        "get_sku_definitions",
     },
 }
 
@@ -374,16 +589,224 @@ def upload_to_gcs(data: dict[str, Any], tool_name: str) -> tuple[str, int]:
         
         logging.info(f"Uploaded large result to GCS: {filename}")
         return signed_url, len(json_bytes)
-        
+
     except Exception as e:
         logging.info(f"Error uploading to GCS: {e}")
         raise
 
-def mcp_tool_with_gcs():
+def wrap_tool_for_multi_mode(tool_func, is_async: bool, requires_oid: bool = True):
+    """
+    Wraps a tool function to support both normal mode (OID-based) and UID mode (multi-org).
+
+    Args:
+        tool_func: The tool function to wrap
+        is_async: Whether the function is async
+        requires_oid: Whether this tool requires an OID parameter (defaults to True)
+                     Set to False for user-level tools that operate on UID only
+
+    In normal mode:
+      - SDK created from context (API Key + OID from auth)
+      - oid parameter must NOT be provided (if requires_oid=True)
+
+    In UID mode:
+      - If requires_oid=True: SDK created per-call with provided OID (API Key + UID + OID)
+                             oid parameter MUST be provided
+      - If requires_oid=False: SDK created with UID only (API Key + UID)
+                              oid parameter NOT added to signature
+
+    Mode is detected from uid_auth_context_var:
+      - If set: UID mode
+      - If None: normal mode
+    """
+    import inspect
+
+    # Add oid parameter to the function signature only if required
+    sig = inspect.signature(tool_func)
+    params = list(sig.parameters.values())
+
+    if requires_oid:
+        # Insert oid parameter before ctx (which is always the last parameter)
+        # Use POSITIONAL_OR_KEYWORD to maintain compatibility with parameter ordering
+        oid_param = inspect.Parameter(
+            'oid',
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            default=None,
+            annotation=str | None
+        )
+        params.insert(-1, oid_param)  # Insert before last parameter (ctx)
+
+        # Ensure ctx parameter has a default value to avoid "non-default after default" error
+        # FastMCP injects ctx automatically, so it's safe to give it a default
+        if params[-1].default == inspect.Parameter.empty:
+            params[-1] = params[-1].replace(default=None)
+
+    new_sig = sig.replace(parameters=params)
+
+    if is_async:
+        @functools.wraps(tool_func)
+        async def async_wrapper(*args, **kwargs):
+            # Extract oid from kwargs only if required
+            # SECURITY: Do NOT inherit from context to prevent cross-tenant pollution in nested calls
+            oid = kwargs.pop('oid', None) if requires_oid else None
+
+            logging.debug(f"Wrapper for {tool_func.__name__}: requires_oid={requires_oid}, oid={oid}, kwargs={list(kwargs.keys())}")
+
+            # Check if we're in UID mode
+            uid_auth = uid_auth_context_var.get()
+            is_uid_mode = uid_auth is not None
+            logging.debug(f"Wrapper for {tool_func.__name__}: UID mode={is_uid_mode}, uid_auth={uid_auth is not None}")
+
+            # Validate oid parameter based on mode
+            if is_uid_mode:
+                # Unpack UID auth context
+                uid = uid_auth.uid
+                api_key = uid_auth.api_key
+                mode = uid_auth.mode
+                oauth_creds = uid_auth.oauth_creds
+
+                if requires_oid:
+                    # Org-level tool: require OID and create SDK with OID
+                    if oid is None:
+                        raise ValueError(
+                            f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
+                            f"Please specify the organization ID for this operation."
+                        )
+
+                    # Create SDK based on authentication mode
+                    if mode == "oauth":
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for oid={oid} with explicit credentials")
+                        sdk = limacharlie.Manager(oid=oid, oauth_creds=oauth_creds)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for oid={oid}")
+                        sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+                else:
+                    # User-level tool: create SDK with UID only (no OID)
+                    if mode == "oauth":
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid}) with explicit credentials")
+                        sdk = limacharlie.Manager(oid='-', uid=uid, oauth_creds=oauth_creds)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
+                        sdk = limacharlie.Manager(oid='-', uid=uid, secret_api_key=api_key)
+
+                # Store SDK and OID in context for this tool execution and nested calls
+                sdk_token = sdk_context_var.set(sdk)
+                oid_token = current_oid_context_var.set(oid) if oid else None
+                try:
+                    # Execute tool
+                    result = await tool_func(*args, **kwargs)
+                    return result
+                finally:
+                    # Clean up SDK and context
+                    try:
+                        sdk.shutdown()
+                    except Exception:
+                        pass
+                    sdk_context_var.reset(sdk_token)
+                    if oid_token:
+                        current_oid_context_var.reset(oid_token)
+            else:
+                # Normal mode
+                if requires_oid and oid is not None:
+                    raise ValueError(
+                        f"Tool {tool_func.__name__}: 'oid' parameter is not allowed in normal mode. "
+                        f"In normal mode, the organization is specified via authentication headers."
+                    )
+                # Use existing SDK from context
+                result = await tool_func(*args, **kwargs)
+                return result
+
+        async_wrapper.__signature__ = new_sig
+        return async_wrapper
+    else:
+        @functools.wraps(tool_func)
+        def sync_wrapper(*args, **kwargs):
+            # Extract oid from kwargs only if required
+            # SECURITY: Do NOT inherit from context to prevent cross-tenant pollution in nested calls
+            oid = kwargs.pop('oid', None) if requires_oid else None
+
+            # Check if we're in UID mode
+            uid_auth = uid_auth_context_var.get()
+            is_uid_mode = uid_auth is not None
+
+            # Validate oid parameter based on mode
+            if is_uid_mode:
+                # Unpack UID auth context
+                uid = uid_auth.uid
+                api_key = uid_auth.api_key
+                mode = uid_auth.mode
+                oauth_creds = uid_auth.oauth_creds
+
+                if requires_oid:
+                    # Org-level tool: require OID and create SDK with OID
+                    if oid is None:
+                        raise ValueError(
+                            f"Tool {tool_func.__name__}: 'oid' parameter is required in UID mode. "
+                            f"Please specify the organization ID for this operation."
+                        )
+
+                    # Create SDK based on authentication mode
+                    if mode == "oauth":
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for oid={oid} with explicit credentials")
+                        sdk = limacharlie.Manager(oid=oid, oauth_creds=oauth_creds)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for oid={oid}")
+                        sdk = limacharlie.Manager(oid, secret_api_key=api_key)
+                else:
+                    # User-level tool: create SDK with UID only (no OID)
+                    if mode == "oauth":
+                        # OAuth mode - pass credentials explicitly to avoid GLOBAL_OAUTH race condition
+                        logging.debug(f"OAuth mode: Creating SDK for user-level operation (uid={uid}) with explicit credentials")
+                        sdk = limacharlie.Manager(oid='-', uid=uid, oauth_creds=oauth_creds)
+                    else:
+                        # API key mode
+                        logging.debug(f"API key mode: Creating SDK for user-level operation (uid={uid})")
+                        sdk = limacharlie.Manager(oid='-', uid=uid, secret_api_key=api_key)
+
+                # Store SDK and OID in context for this tool execution and nested calls
+                sdk_token = sdk_context_var.set(sdk)
+                oid_token = current_oid_context_var.set(oid) if oid else None
+                try:
+                    # Execute tool
+                    result = tool_func(*args, **kwargs)
+                    return result
+                finally:
+                    # Clean up SDK and context
+                    try:
+                        sdk.shutdown()
+                    except Exception:
+                        pass
+                    sdk_context_var.reset(sdk_token)
+                    if oid_token:
+                        current_oid_context_var.reset(oid_token)
+            else:
+                # Normal mode
+                if requires_oid and oid is not None:
+                    raise ValueError(
+                        f"Tool {tool_func.__name__}: 'oid' parameter is not allowed in normal mode. "
+                        f"In normal mode, the organization is specified via authentication headers."
+                    )
+                # Use existing SDK from context
+                result = tool_func(*args, **kwargs)
+                return result
+
+        sync_wrapper.__signature__ = new_sig
+        return sync_wrapper
+
+def mcp_tool_with_gcs(requires_oid: bool = True):
     """
     Decorator that wraps MCP tools to handle large results via GCS.
     Instead of immediately registering with an MCP instance, this stores
     the tool in TOOL_REGISTRY for later registration based on profile.
+
+    Args:
+        requires_oid: Whether this tool requires an OID parameter in UID mode (defaults to True)
+                     Set to False for user-level tools that operate on UID only
     """
     def decorator(func):
         tool_name = func.__name__
@@ -469,11 +892,14 @@ def mcp_tool_with_gcs():
         else:
             gcs_wrapped = wrapper
 
+        # Apply multi-mode wrapper to add oid parameter support (or skip it for user-level tools)
+        multi_mode_wrapped = wrap_tool_for_multi_mode(gcs_wrapped, is_async, requires_oid=requires_oid)
+
         # Store in registry instead of immediately registering
-        TOOL_REGISTRY[tool_name] = (gcs_wrapped, is_async)
+        TOOL_REGISTRY[tool_name] = (multi_mode_wrapped, is_async)
 
         # Return the wrapped function (not registered yet)
-        return gcs_wrapped
+        return multi_mode_wrapped
 
     return decorator
 
@@ -516,6 +942,116 @@ def create_mcp_for_profile(profile_name: str) -> FastMCP:
 
     return profile_mcp
 
+def get_auth_from_sdk_config() -> tuple[str | None, str | None, dict | None]:
+    """
+    Load authentication credentials from SDK config file (~/.limacharlie).
+
+    Returns:
+        tuple: (uid, api_key, oauth_creds)
+        - uid: User ID from config (if present)
+        - api_key: API key from config (if present)
+        - oauth_creds: OAuth credentials dict (if present)
+            {
+                'id_token': str,
+                'refresh_token': str,
+                'expires_at': int,
+                'provider': str
+            }
+
+    Uses LC_CURRENT_ENV environment variable to select environment (default: 'default').
+    Returns (None, None, None) if SDK config not found or cannot be loaded.
+    """
+    try:
+        from limacharlie import _getEnvironmentCreds
+        env_name = os.getenv("LC_CURRENT_ENV", "default")
+        logging.debug(f"Loading credentials from SDK config environment: {env_name}")
+
+        oid, uid, api_key, oauth_creds = _getEnvironmentCreds(env_name)
+
+        if oauth_creds:
+            logging.debug(f"Found OAuth credentials in SDK config (provider: {oauth_creds.get('provider', 'unknown')})")
+        elif api_key:
+            logging.debug("Found API key in SDK config")
+
+        return uid, api_key, oauth_creds
+    except FileNotFoundError:
+        logging.debug("SDK config file (~/.limacharlie) not found")
+        return None, None, None
+    except KeyError as e:
+        logging.debug(f"Environment '{os.getenv('LC_CURRENT_ENV', 'default')}' not found in SDK config: {e}")
+        return None, None, None
+    except Exception as e:
+        logging.debug(f"Could not load SDK config: {e}")
+        return None, None, None
+
+def get_uid_from_environment() -> str | None:
+    """
+    Get UID from environment variables or SDK defaults.
+
+    Checks in order:
+    1. LC_UID environment variable
+    2. SDK default UID (from limacharlie config)
+
+    Returns:
+        UID string if found, None otherwise
+    """
+    # Check environment variable first
+    uid = os.getenv("LC_UID")
+    if uid:
+        logging.info(f"UID mode: Using LC_UID from environment: {uid}")
+        return uid
+
+    # Try to get UID from SDK defaults
+    try:
+        # Create a temporary SDK instance to check for default UID
+        # This will use the SDK's default authentication config
+        temp_sdk = limacharlie.Manager()
+
+        # Check if SDK has a method to get default UID
+        # The SDK might store this in config or as an attribute
+        if hasattr(temp_sdk, '_uid') and temp_sdk._uid:
+            logging.info(f"UID mode: Using UID from SDK defaults: {temp_sdk._uid}")
+            return temp_sdk._uid
+
+        # Try to check the SDK's internal config
+        # Note: This is SDK-specific and may need adjustment based on actual SDK implementation
+        if hasattr(temp_sdk, 'getDefaultUserId'):
+            uid = temp_sdk.getDefaultUserId()
+            if uid:
+                logging.info(f"UID mode: Using UID from SDK getDefaultUserId: {uid}")
+                return uid
+    except Exception as e:
+        logging.debug(f"Could not get UID from SDK defaults: {e}")
+
+    return None
+
+def validate_oid_parameter(oid: Any, uid_mode: bool, tool_name: str, mode: str | None = None) -> None:
+    """
+    Validate oid parameter based on mode.
+
+    Args:
+        oid: The oid parameter value
+        uid_mode: True if in UID mode, False otherwise
+        tool_name: Name of the tool (for error messages)
+        mode: Authentication mode ("oauth" or "api_key") for better error messages
+
+    Raises:
+        ValueError: If oid parameter is invalid for the mode
+    """
+    if uid_mode:
+        if oid is None:
+            mode_info = f" (auth mode: {mode})" if mode else ""
+            raise ValueError(
+                f"Tool {tool_name}: 'oid' parameter is required in UID mode{mode_info}. "
+                f"Please specify the organization ID for this operation."
+            )
+    else:
+        if oid is not None:
+            raise ValueError(
+                f"Tool {tool_name}: 'oid' parameter is not allowed in normal mode. "
+                f"In normal mode, the organization is specified via authentication headers."
+            )
+
 # Test tool to verify MCP is working
 @mcp_tool_with_gcs()
 def test_tool(ctx: Context) -> dict[str, Any]:
@@ -531,39 +1067,64 @@ def test_tool(ctx: Context) -> dict[str, Any]:
     }
 
 # Dependency: Extract Bearer token from the request
-async def get_auth_info(request: Request) -> tuple[str | None, str | None, str | None]:
+async def get_auth_info(request: "Request") -> tuple[str | None, str | None, str | None, str | None]:
+    """
+    Extract authentication info from request headers.
+
+    Returns: (jwt, api_key, oid, uid)
+
+    Two modes:
+    1. Normal mode (x-lc-oid present): Returns (jwt|None, api_key|None, oid, None)
+    2. UID mode (x-lc-uid present): Returns (None, api_key, None, uid)
+    """
     # In non-public mode, return None to indicate no auth from headers
     if not PUBLIC_MODE:
-        return None, None, None
-    
+        return None, None, None, None
+
     auth_header = request.headers.get("authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    # There are three flavors of the token determined by the UUID format
-    # # of the oid and api_key:
+    auth_header = auth_header.removeprefix("Bearer ").strip()
+
+    # Check for UID mode first (x-lc-uid header present)
+    uid = request.headers.get("x-lc-uid")
+    if uid:
+        # UID mode: Authorization should be just the API key (no :oid suffix)
+        # Validate it's a UUID (API key format)
+        try:
+            uuid.UUID(auth_header)
+            # Valid API key
+            return None, auth_header, None, uid
+        except Exception:
+            raise HTTPException(
+                status_code=401,
+                detail="In UID mode (x-lc-uid present), Authorization must be 'Bearer <api_key>' without :oid suffix"
+            )
+
+    # Normal mode: Check for x-lc-oid or :oid suffix
+    # There are three flavors of the token determined by the UUID format:
     # 1. Just a JWT, the OID is in x-lc-oid
     # 2. A jwt:oid
     # 3. A api_key:oid
-    auth_header = auth_header.removeprefix("Bearer ").strip()
-
     if ':' not in auth_header:
-        # Case 1
+        # Case 1: JWT only, OID must be in x-lc-oid header
         oid = request.headers.get("x-lc-oid")
         if not oid:
             raise HTTPException(status_code=401, detail=f"oid missing or invalid: {oid}")
-        return auth_header, None, oid
+        return auth_header, None, oid, None
 
+    # Cases 2 & 3: auth:oid format
     auth, oid = auth_header.split(':', 1)
 
-    # Check if the auth is a UUID, if it is, then it's an api_key.
+    # Check if the auth is a UUID, if it is, then it's an api_key
     try:
         uuid.UUID(auth)
-        # Case 3
-        return None, auth, oid
+        # Case 3: API key with OID
+        return None, auth, oid, None
     except Exception:
-        # Case 2
-        return auth, None, oid
+        # Case 2: JWT with OID
+        return auth, None, oid, None
 
 def make_sdk(oid: str | None = None, token: str | None = None, api_key: str | None = None) -> limacharlie.Manager:
     if PUBLIC_MODE:
@@ -579,29 +1140,86 @@ def make_sdk(oid: str | None = None, token: str | None = None, api_key: str | No
 
 # Helper to get SDK from context headers
 def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
-    """Extract auth info from context and create SDK."""
+    """
+    Extract auth info from context and create SDK.
+
+    In UID mode (x-lc-uid header present):
+      - Sets uid_auth_context_var with (uid, api_key)
+      - Returns None (wrapper will create SDK per-tool with OID)
+
+    In normal mode:
+      - Creates SDK from auth headers
+      - Returns SDK instance
+    """
     try:
         # Check if SDK already exists in context
         sdk = sdk_context_var.get()
         if sdk:
+            logging.debug(f"get_sdk_from_context: Returning SDK from context")
             return sdk
-        
+
+        logging.debug(f"get_sdk_from_context: No SDK in context, checking auth headers")
+
         if PUBLIC_MODE:
             # Get the HTTP request from the contextvar
             request = request_context_var.get()
-            
+
             if not request:
                 return None
-            
+
             # Now try to get headers
             auth_header = request.headers.get("authorization")
-            
+
             if not auth_header or not auth_header.startswith("Bearer "):
                 return None
-                
+
             auth_header = auth_header.removeprefix("Bearer ").strip()
-            
-            # Parse the auth header (same logic as get_auth_info)
+
+            # Check if this is an MCP OAuth token
+            if MCP_OAUTH_ENABLED and oauth_token_manager:
+                # Try to validate as OAuth access token
+                token_info = oauth_token_manager.get_token_info_for_request(auth_header)
+                if token_info:
+                    # Valid OAuth token - set UID auth context
+                    uid = token_info['uid']
+                    logging.info(f"Valid OAuth access token for UID: {uid}")
+
+                    # Create OAuth credentials dict for SDK
+                    oauth_creds = {
+                        'id_token': token_info['firebase_id_token'],
+                        'refresh_token': token_info['firebase_refresh_token'],
+                        'provider': 'google'
+                    }
+
+                    # Set UID auth context in OAuth mode WITH credentials to avoid GLOBAL_OAUTH race
+                    # Do NOT create SDK here - wrapper creates it per-tool with OID (multi-org mode)
+                    uid_auth_context_var.set(UIDAuth(uid=uid, api_key=None, mode="oauth", oauth_creds=oauth_creds))
+
+                    # OAuth mode = UID mode = Multi-org mode
+                    # Do NOT create SDK without OID - wrapper will create it per-tool with OID from tool parameter
+                    # This matches the behavior of API key UID mode (lines 1193-1202)
+                    logging.info(f"OAuth authentication successful: uid={uid}, mode=oauth, context set for wrapper")
+                    logging.debug(f"OAuth mode: Auth context set, wrapper will create SDK per-tool with OID")
+                    return None  # Wrapper will create SDK per-tool with OID
+
+            # Check for UID mode first
+            uid = request.headers.get("x-lc-uid")
+            if uid:
+                # UID mode: Set context var for wrapper to use, don't create SDK here
+                try:
+                    uuid.UUID(auth_header)
+                    # Valid API key - no OAuth credentials in API key mode
+                    uid_auth_context_var.set(UIDAuth(uid=uid, api_key=auth_header, mode="api_key", oauth_creds=None))
+                    logging.info(f"UID mode detected: uid={uid}")
+                    return None  # Wrapper will create SDK per-tool with OID
+                except Exception:
+                    logging.error(f"Invalid API key format in UID mode")
+                    return None
+
+            # Normal mode: Parse the auth header and create SDK
+            # Clear UID context var in case it was set previously
+            uid_auth_context_var.set(None)
+
             if ':' not in auth_header:
                 oid = request.headers.get("x-lc-oid")
                 if not oid:
@@ -609,7 +1227,7 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                 sdk = make_sdk(oid, token=auth_header)
             else:
                 auth, oid = auth_header.split(':', 1)
-                
+
                 try:
                     uuid.UUID(auth)
                     # It's an API key
@@ -619,12 +1237,13 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
                     sdk = make_sdk(oid, token=auth)
         else:
             # In local mode, create SDK with default auth
+            # UID mode in STDIO is handled separately (uid_auth_context_var set at startup)
             sdk = make_sdk()
-        
+
         # Store SDK in contextvar for this request
         if sdk:
             sdk_context_var.set(sdk)
-        
+
         return sdk
     except Exception as e:
         logging.info(f"Error getting SDK from context: {e}")
@@ -635,16 +1254,37 @@ def get_sdk_from_context(ctx: Context) -> limacharlie.Manager | None:
 # These functions are no longer needed as we're using get_sdk_from_context instead
 
 class RequestContextMiddleware:
-    """Middleware that stores the HTTP request in a contextvar."""
-    
-    def __init__(self, app: ASGIApp):
+    """Middleware that stores the HTTP request in a contextvar and manages SDK/UID auth lifecycle."""
+
+    def __init__(self, app: "ASGIApp"):
         self.app = app
-    
-    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+
+    def _send_oauth_challenge(self, send, scope, error=None, error_description=None):
+        """Send 401 response with WWW-Authenticate header for OAuth"""
+        if MCP_OAUTH_ENABLED and oauth_metadata_provider:
+            www_authenticate = oauth_metadata_provider.generate_www_authenticate_header(
+                error=error,
+                error_description=error_description,
+                scope="limacharlie:read limacharlie:write"
+            )
+        else:
+            www_authenticate = 'Bearer realm="LimaCharlie MCP Server"'
+
+        # Send 401 response with WWW-Authenticate header
+        response = Response(
+            content=json.dumps({"error": error or "unauthorized", "error_description": error_description or "Authentication required"}),
+            status_code=401,
+            media_type="application/json",
+            headers={"WWW-Authenticate": www_authenticate}
+        )
+        return response(scope, receive, send)
+
+    async def __call__(self, scope: "Scope", receive: "Receive", send: "Send"):
         if scope["type"] == "http":
-            request = Request(scope, receive)
+            request = Request(scope, receive)  # type: ignore
             request_token = request_context_var.set(request)
             sdk_token = sdk_context_var.set(None)  # Reset SDK for each request
+            uid_token = uid_auth_context_var.set(None)  # Reset UID auth for each request
             try:
                 await self.app(scope, receive, send)
             finally:
@@ -655,10 +1295,11 @@ class RequestContextMiddleware:
                         sdk.shutdown()
                     except Exception:
                         pass  # Ignore cleanup errors
-                
+
                 # Reset contextvars
                 request_context_var.reset(request_token)
                 sdk_context_var.reset(sdk_token)
+                uid_auth_context_var.reset(uid_token)
         else:
             await self.app(scope, receive, send)
 
@@ -716,6 +1357,7 @@ def get_processes(sid: str, ctx: Context) -> dict[str, Any]:
         logging.info(f"get_processes time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def get_historic_events(sid: str, start_time: int, end_time: int, ctx: Context) -> dict[str, Any]:
     """Get historic events for a given Sensor ID between timestamps
 
@@ -1086,6 +1728,7 @@ def yara_scan_memory(sid: str, rule: str, process_expr: str, ctx: Context) -> di
         logging.info(f"yara_scan_memory time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.EXECUTE)
 def isolate_network(sid: str, ctx: Context) -> dict[str, Any]:
     """Isolate a sensor from the network
 
@@ -1113,6 +1756,7 @@ def isolate_network(sid: str, ctx: Context) -> dict[str, Any]:
         logging.info(f"isolate_network time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.EXECUTE)
 def rejoin_network(sid: str, ctx: Context) -> dict[str, Any]:
     """Rejoin a sensor to the network
 
@@ -1194,6 +1838,7 @@ def is_online(sid: str, ctx: Context) -> dict[str, Any]:
         logging.info(f"is_online time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def add_tag(sid: str, tag: str, ttl: int, ctx: Context) -> dict[str, Any]:
     """Add a tag to a sensor
 
@@ -1223,6 +1868,7 @@ def add_tag(sid: str, tag: str, ttl: int, ctx: Context) -> dict[str, Any]:
         logging.info(f"add_tag time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def remove_tag(sid: str, tag: str, ctx: Context) -> dict[str, Any]:
     """Remove a tag from a sensor
 
@@ -1513,6 +2159,7 @@ def get_time_when_sensor_has_data(sid: str, start: int, end: int, ctx: Context) 
         logging.info(f"get_time_when_sensor_has_data time: {time.time() - start_time} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def get_historic_detections(start: int, end: int, limit: int = None, cat: str = None, ctx: Context = None) -> dict[str, Any]:
     """Get historic detections for the organization between two epoch second timestamps
 
@@ -1592,6 +2239,7 @@ def get_fp_rules(ctx: Context) -> dict[str, Any]:
         logging.info(f"get_fp_rules time: {time.time() - start} seconds")
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def run_lcql_query(query: str, limit: int = 100, stream = "event", ctx: Context = None) -> dict[str, Any]:
     """Run a LCQL query on the organization
 
@@ -2353,7 +3001,7 @@ def list_sensors(
                 if hasattr(sensor_obj, '__dict__'):
                     # It's a Sensor object
                     sensor_info = sensor_obj.getInfo()
-                    sensor_tags = sensor_obj.getTags()
+                    sensor_tags = list(sensor_obj.getTags())
                 else:
                     # It's already a dict
                     sensor_info = sensor_obj
@@ -2417,7 +3065,7 @@ def get_sensor_info(sid: str, ctx: Context) -> dict[str, Any]:
         # Add additional useful information
         sensor_info['is_online'] = sensor.isOnline()
         sensor_info['is_isolated'] = sensor.isIsolatedFromNetwork()
-        sensor_info['tags'] = sensor.getTags()
+        sensor_info['tags'] = list(sensor.getTags())
         sensor_info['platform_type'] = {
             'is_windows': sensor.isWindows(),
             'is_mac': sensor.isMac(),
@@ -2517,6 +3165,7 @@ def search_hosts(hostname_expr: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_sensor(sid: str, ctx: Context) -> dict[str, Any]:
     """Delete a sensor from the organization
     
@@ -2721,6 +3370,7 @@ def list_outputs(ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.CREATE)
 def add_output(
     name: str,
     module: str,
@@ -2767,6 +3417,7 @@ def add_output(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_output(name: str, ctx: Context) -> dict[str, Any]:
     """Delete an output configuration
     
@@ -2829,6 +3480,7 @@ def list_installation_keys(ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.CREATE)
 def create_installation_key(
     tags: list[str],
     description: str,
@@ -2872,6 +3524,7 @@ def create_installation_key(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_installation_key(iid: str, ctx: Context) -> dict[str, Any]:
     """Delete an installation key
     
@@ -2973,8 +3626,8 @@ def get_rule(hive_name: str, rule_name: str, ctx: Context) -> dict[str, Any]:
         
         # Get the specific rule
         rule = hive.get(rule_name)
-        
-        return {"rule": rule if rule else {}}
+
+        return {"rule": rule.toJSON() if rule else {}}
         
     except Exception as e:
         logging.info(f"Error in get_rule: {str(e)}")
@@ -2984,6 +3637,7 @@ def get_rule(hive_name: str, rule_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_rule(
     hive_name: str,
     rule_name: str,
@@ -3032,6 +3686,7 @@ def set_rule(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_rule(hive_name: str, rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a rule from a hive
     
@@ -3176,6 +3831,7 @@ def get_artifact(payload_id: str, ctx: Context) -> dict[str, Any]:
 # ============================================================================
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.MEDIUM, action=AuditAction.READ)
 def search_iocs(
     ioc_type: str,
     ioc_value: str,
@@ -3296,7 +3952,7 @@ def get_usage_stats(ctx: Context) -> dict[str, Any]:
 @mcp_tool_with_gcs()
 def get_org_info(ctx: Context) -> dict[str, Any]:
     """Get detailed organization information and configuration
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "org" (dict): Organization details and configuration
@@ -3304,20 +3960,302 @@ def get_org_info(ctx: Context) -> dict[str, Any]:
     """
     start = time.time()
     logging.info(f"Tool called: get_org_info()")
-    
+
     try:
         sdk = get_sdk_from_context(ctx)
         if sdk is None:
             return {"error": "No authentication provided"}
-        
+
         org_info = sdk.getOrgInfo()
         return {"org": org_info if org_info else {}}
-        
+
     except Exception as e:
         logging.info(f"Error in get_org_info: {str(e)}")
         return {"error": str(e)}
     finally:
         logging.info(f"get_org_info time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs(requires_oid=False)
+def list_user_orgs(ctx: Context) -> dict[str, Any]:
+    """List all organizations accessible to the authenticated user
+
+    This is a user-level operation that does not require an organization ID.
+    It returns all organizations the user has access to.
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "orgs" (dict): Dictionary mapping organization IDs to organization details
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Call the user-level API to get all accessible orgs
+        orgs = sdk.userAccessibleOrgs()
+        return {"orgs": orgs if orgs else {}}
+
+    except Exception as e:
+        logging.info(f"Error in list_user_orgs: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"list_user_orgs time: {time.time() - start} seconds")
+
+
+def get_available_locations_from_plans(sdk) -> list[str]:
+    """
+    Fetch available locations dynamically from billing service.
+    Normalizes region names to location codes using a future-proof algorithm.
+
+    Args:
+        sdk: LimaCharlie SDK instance
+
+    Returns:
+        list[str]: Available location codes (e.g., ['canada', 'europe', 'usa'])
+    """
+    try:
+        from limacharlie import Billing
+        billing = Billing(sdk)
+        resp = billing.getAvailablePlans()
+        plans = resp.get('plans', [])
+
+        available_locs = set()
+        for plan in plans:
+            datacenter = plan.get('Datacenter')
+            if datacenter and datacenter.get('Region'):
+                region = datacenter['Region']
+
+                # Normalize region name to location code:
+                # - If contains '-': use as-is (private clusters like LCIO-NYC3-GENERAL)
+                # - Otherwise: lowercase and remove dots (U.S.A. -> usa, Japan -> japan)
+                if '-' in region:
+                    loc_code = region
+                else:
+                    loc_code = region.lower().replace('.', '')
+
+                available_locs.add(loc_code)
+
+        return sorted(list(available_locs))
+    except Exception as e:
+        logging.warning(f"Failed to fetch available plans: {e}")
+        # Fallback to common default locations
+        return ['canada', 'europe', 'exp', 'india', 'uk', 'usa']
+
+
+@mcp_tool_with_gcs(requires_oid=False)
+def create_org(name: str, location: str, template: str | None = None, ctx: Context = None) -> dict[str, Any]:
+    """Create a new organization
+
+    This is a user-level operation that does not require an organization ID.
+    Only users (not API keys) can create organizations.
+
+    Args:
+        name (str): Name for the new organization
+        location (str): Location where the organization will be created (e.g., 'usa', 'europe', 'canada', 'india', 'uk', 'exp')
+        template (str): Optional YAML Infrastructure-as-Code template to initialize the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "org" (dict): Created organization details including OID
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: create_org(name={name}, location={location})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Get available locations for this user
+        available_locs = get_available_locations_from_plans(sdk)
+
+        # Validate location (case-insensitive)
+        location_lower = location.lower()
+        if location_lower not in [loc.lower() for loc in available_locs]:
+            return {
+                "error": f"Invalid location '{location}'. Available locations: {', '.join(sorted(available_locs))}"
+            }
+
+        # Find the actual location code (preserving case for private clusters)
+        actual_location = None
+        for loc in available_locs:
+            if loc.lower() == location_lower:
+                actual_location = loc
+                break
+
+        # Create the organization using the SDK
+        result = sdk.createNewOrg(name, actual_location, template)
+
+        return {"org": result}
+
+    except Exception as e:
+        logging.info(f"Error in create_org: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"create_org time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_org_errors(ctx: Context) -> dict[str, Any]:
+    """Get error logs for the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "errors" (list): List of error objects, each with component, error message, oid, and timestamp
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_org_errors()")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Make API call to get errors
+        result = sdk._apiCall('errors/%s' % sdk._oid, 'GET', {})
+        errors = result.get('errors', [])
+
+        return {"errors": errors}
+
+    except Exception as e:
+        logging.info(f"Error in get_org_errors: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_org_errors time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def dismiss_org_error(component: str, ctx: Context) -> dict[str, Any]:
+    """Dismiss a specific error for the organization
+
+    Args:
+        component (str): Component name of the error to dismiss
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "success" (bool): True if deletion was successful
+            - "message" (str): Status message
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: dismiss_org_error(component={json.dumps(component)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Make API call to dismiss error
+        sdk._apiCall('errors/%s/%s' % (sdk._oid, component), 'DELETE', {})
+
+        return {
+            "success": True,
+            "message": f"Error for component '{component}' dismissed successfully"
+        }
+
+    except Exception as e:
+        logging.info(f"Error in dismiss_org_error: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"dismiss_org_error time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_billing_details(ctx: Context) -> dict[str, Any]:
+    """Get billing details for the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "details" (dict): Billing details for the organization
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_billing_details()")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Create Billing instance and get org details
+        billing = limacharlie.Billing(sdk)
+        details = billing.getOrgDetails()
+        return {"details": details if details else {}}
+
+    except Exception as e:
+        logging.info(f"Error in get_billing_details: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_billing_details time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_org_invoice_url(year: int, month: int, format: str = None, ctx: Context = None) -> dict[str, Any]:
+    """Get the URL to download an organization's invoice for a specific month
+
+    Args:
+        year (int): The year of the invoice
+        month (int): The month of the invoice (1-12)
+        format (str): Optional format parameter for the invoice
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "url" (str): URL to download the invoice
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_org_invoice_url(year={year}, month={month}, format={json.dumps(format)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Create Billing instance and get invoice URL
+        billing = limacharlie.Billing(sdk)
+        result = billing.getOrgInvoiceURL(year, month, format)
+        return {"url": result if result else ""}
+
+    except Exception as e:
+        logging.info(f"Error in get_org_invoice_url: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_org_invoice_url time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def get_sku_definitions(ctx: Context) -> dict[str, Any]:
+    """Get SKU definitions for the organization
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "definitions" (dict): SKU definitions for the organization including pricing and quotas
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: get_sku_definitions()")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        # Create Billing instance and get SKU definitions
+        billing = limacharlie.Billing(sdk)
+        definitions = billing.getSkuDefinitions()
+        return {"definitions": definitions if definitions else {}}
+
+    except Exception as e:
+        logging.info(f"Error in get_sku_definitions: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"get_sku_definitions time: {time.time() - start} seconds")
 
 
 @mcp_tool_with_gcs()
@@ -3348,6 +4286,7 @@ def list_api_keys(ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.CREATE)
 def create_api_key(
     key_name: str,
     permissions: list[str] = None,
@@ -3388,6 +4327,7 @@ def create_api_key(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_api_key(key_hash: str, ctx: Context) -> dict[str, Any]:
     """Delete an API key
     
@@ -3492,6 +4432,7 @@ def get_yara_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_yara_rule(
     rule_name: str,
     rule_content: str,
@@ -3549,6 +4490,7 @@ def set_yara_rule(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_yara_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a YARA rule
     
@@ -3702,6 +4644,7 @@ def get_lookup(lookup_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_lookup(
     lookup_name: str,
     lookup_data: dict[str, Any],
@@ -3746,6 +4689,7 @@ def set_lookup(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_lookup(lookup_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a lookup table
     
@@ -3903,6 +4847,7 @@ def get_saved_query(query_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_saved_query(
     query_name: str,
     lcql_query: str,
@@ -3955,6 +4900,7 @@ def set_saved_query(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_saved_query(query_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a saved query
     
@@ -3998,11 +4944,11 @@ def run_saved_query(
     ctx: Context = None
 ) -> dict[str, Any]:
     """Execute a saved query
-    
+
     Args:
         query_name (str): Name of the saved query to run
         limit (int): Maximum number of results to return (default 100)
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "results" (list): Query results
@@ -4010,28 +4956,32 @@ def run_saved_query(
     """
     start = time.time()
     logging.info(f"Tool called: run_saved_query(query_name={json.dumps(query_name)}, limit={limit})")
-    
+
     try:
         sdk = get_sdk_from_context(ctx)
         if sdk is None:
             return {"error": "No authentication provided"}
-        
+
         # First get the saved query
         from limacharlie import Hive
         hive = Hive(sdk, "query")
         query_data = hive.get(query_name)
-        
+
         if not query_data:
             return {"error": f"Saved query '{query_name}' not found"}
-        
+
         # Extract the LCQL query
         lcql_query = query_data.get("query", "")
         if not lcql_query:
             return {"error": "Saved query has no query content"}
-        
+
+        # SECURITY: Explicitly read oid from context set by wrapper to pass to nested call
+        # This prevents cross-tenant execution while allowing proper delegation
+        oid = current_oid_context_var.get()
+
         # Now run it using the existing run_lcql_query function
-        return run_lcql_query(lcql_query, limit, ctx=ctx)
-        
+        return run_lcql_query(lcql_query, limit, ctx=ctx, oid=oid)
+
     except Exception as e:
         logging.info(f"Error in run_saved_query: {str(e)}")
         return {"error": str(e)}
@@ -4109,6 +5059,7 @@ def get_secret(secret_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.CREATE)
 def set_secret(
     secret_name: str,
     secret_value: str,
@@ -4158,6 +5109,7 @@ def set_secret(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_secret(secret_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a secret
     
@@ -4260,6 +5212,7 @@ def get_playbook(playbook_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_playbook(
     playbook_name: str,
     playbook_data: dict[str, Any],
@@ -4304,6 +5257,7 @@ def set_playbook(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_playbook(playbook_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a playbook
     
@@ -4406,6 +5360,7 @@ def get_cloud_sensor(sensor_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_cloud_sensor(
     sensor_name: str,
     sensor_config: dict[str, Any],
@@ -4450,6 +5405,7 @@ def set_cloud_sensor(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_cloud_sensor(sensor_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a cloud sensor configuration
     
@@ -4552,6 +5508,7 @@ def get_external_adapter(adapter_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_external_adapter(
     adapter_name: str,
     adapter_config: dict[str, Any],
@@ -4596,6 +5553,7 @@ def set_external_adapter(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_external_adapter(adapter_name: str, ctx: Context) -> dict[str, Any]:
     """Delete an external adapter configuration
     
@@ -4698,6 +5656,7 @@ def get_extension_config(extension_name: str, ctx: Context) -> dict[str, Any]:
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_extension_config(
     extension_name: str,
     config_data: dict[str, Any],
@@ -4742,6 +5701,7 @@ def set_extension_config(
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_extension_config(extension_name: str, ctx: Context) -> dict[str, Any]:
     """Delete an extension configuration
     
@@ -4778,134 +5738,230 @@ def delete_extension_config(extension_name: str, ctx: Context) -> dict[str, Any]
         logging.info(f"delete_extension_config time: {time.time() - start} seconds")
 
 
+@mcp_tool_with_gcs()
+def subscribe_to_extension(extension_name: str, ctx: Context) -> dict[str, Any]:
+    """Subscribe to an extension
+
+    Args:
+        extension_name (str): Name of the extension to subscribe to
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "success" (bool): True if subscription was successful
+            - "message" (str): Status message
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: subscribe_to_extension(extension_name={json.dumps(extension_name)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        from limacharlie import Extension
+        ext = Extension(sdk)
+        result = ext.subscribe(extension_name)
+
+        return {
+            "success": True,
+            "message": f"Successfully subscribed to extension '{extension_name}'",
+            "result": result
+        }
+
+    except Exception as e:
+        logging.info(f"Error in subscribe_to_extension: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"subscribe_to_extension time: {time.time() - start} seconds")
+
+
+@mcp_tool_with_gcs()
+def unsubscribe_from_extension(extension_name: str, ctx: Context) -> dict[str, Any]:
+    """Unsubscribe from an extension
+
+    Args:
+        extension_name (str): Name of the extension to unsubscribe from
+
+    Returns:
+        dict[str, Any]: A dictionary containing either:
+            - "success" (bool): True if unsubscription was successful
+            - "message" (str): Status message
+            - "error" (str): On failure, an error message string
+    """
+    start = time.time()
+    logging.info(f"Tool called: unsubscribe_from_extension(extension_name={json.dumps(extension_name)})")
+
+    try:
+        sdk = get_sdk_from_context(ctx)
+        if sdk is None:
+            return {"error": "No authentication provided"}
+
+        from limacharlie import Extension
+        ext = Extension(sdk)
+        result = ext.unsubscribe(extension_name)
+
+        return {
+            "success": True,
+            "message": f"Successfully unsubscribed from extension '{extension_name}'",
+            "result": result
+        }
+
+    except Exception as e:
+        logging.info(f"Error in unsubscribe_from_extension: {str(e)}")
+        return {"error": str(e)}
+    finally:
+        logging.info(f"unsubscribe_from_extension time: {time.time() - start} seconds")
+
+
 # ---------- D&R Rules - Specific Hives ----------
 
 @mcp_tool_with_gcs()
 def list_dr_general_rules(ctx: Context) -> dict[str, Any]:
     """List all general D&R rules
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rules" (dict): Dictionary of rule names to rule content
             - "error" (str): On failure, an error message string
     """
-    return list_rules("dr-general", ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return list_rules("dr-general", ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
 def get_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Get a specific general D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to retrieve
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rule" (dict): Rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    return get_rule("dr-general", rule_name, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return get_rule("dr-general", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_dr_general_rule(
     rule_name: str,
     rule_content: dict[str, Any],
     ctx: Context
 ) -> dict[str, Any]:
     """Create or update a general D&R rule
-    
+
     Args:
         rule_name (str): Name for the rule
         rule_content (dict): Rule content (detection and response)
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if operation was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return set_rule("dr-general", rule_name, rule_content, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return set_rule("dr-general", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_dr_general_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a general D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to delete
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if deletion was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return delete_rule("dr-general", rule_name, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return delete_rule("dr-general", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
 def list_dr_managed_rules(ctx: Context) -> dict[str, Any]:
     """List all managed D&R rules
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rules" (dict): Dictionary of rule names to rule content
             - "error" (str): On failure, an error message string
     """
-    return list_rules("dr-managed", ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return list_rules("dr-managed", ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
 def get_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Get a specific managed D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to retrieve
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rule" (dict): Rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    return get_rule("dr-managed", rule_name, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return get_rule("dr-managed", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_dr_managed_rule(
     rule_name: str,
     rule_content: dict[str, Any],
     ctx: Context
 ) -> dict[str, Any]:
     """Create or update a managed D&R rule
-    
+
     Args:
         rule_name (str): Name for the rule
         rule_content (dict): Rule content (detection and response)
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if operation was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return set_rule("dr-managed", rule_name, rule_content, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return set_rule("dr-managed", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a managed D&R rule
-    
+
     Args:
         rule_name (str): Name of the rule to delete
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if deletion was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return delete_rule("dr-managed", rule_name, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return delete_rule("dr-managed", rule_name, ctx, oid=oid)
 
 
 # ---------- False Positive Rules ----------
@@ -4913,53 +5969,61 @@ def delete_dr_managed_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
 @mcp_tool_with_gcs()
 def get_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Get a specific false positive rule
-    
+
     Args:
         rule_name (str): Name of the FP rule to retrieve
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "rule" (dict): FP rule content and metadata
             - "error" (str): On failure, an error message string
     """
-    return get_rule("fp", rule_name, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return get_rule("fp", rule_name, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.HIGH, action=AuditAction.UPDATE)
 def set_fp_rule(
     rule_name: str,
     rule_content: dict[str, Any],
     ctx: Context
 ) -> dict[str, Any]:
     """Create or update a false positive rule
-    
+
     Args:
         rule_name (str): Name for the FP rule
         rule_content (dict): FP rule content
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if operation was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return set_rule("fp", rule_name, rule_content, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return set_rule("fp", rule_name, rule_content, ctx, oid=oid)
 
 
 @mcp_tool_with_gcs()
+@audit_log(severity=AuditSeverity.CRITICAL, action=AuditAction.DELETE)
 def delete_fp_rule(rule_name: str, ctx: Context) -> dict[str, Any]:
     """Delete a false positive rule
-    
+
     Args:
         rule_name (str): Name of the FP rule to delete
-        
+
     Returns:
         dict[str, Any]: A dictionary containing either:
             - "success" (bool): True if deletion was successful
             - "message" (str): Status message
             - "error" (str): On failure, an error message string
     """
-    return delete_rule("fp", rule_name, ctx)
+    # SECURITY: Explicitly read oid from context set by wrapper
+    oid = current_oid_context_var.get()
+    return delete_rule("fp", rule_name, ctx, oid=oid)
 
 # Ensure thread pool is properly shutdown on app termination
 def cleanup_thread_pool():
@@ -4989,19 +6053,431 @@ if PUBLIC_MODE:
 
     # Create main Starlette app with profile-based routing
     from starlette.routing import Route, Mount as StarletteMount
+    from starlette.staticfiles import StaticFiles
     from starlette.datastructures import URL
+    from pathlib import Path
     routes = []
+
+    # Add MCP OAuth endpoints if enabled
+    if MCP_OAUTH_ENABLED and oauth_endpoints and oauth_metadata_provider:
+        logging.info("Adding MCP OAuth 2.1 endpoints")
+
+        # OAuth 2.1 endpoints with rate limiting
+        async def handle_authorize_endpoint(request: Request):
+            """GET /authorize - Authorization endpoint (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent abuse
+            limiter = rate_limiters.get('authorize')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'authorize')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
+            try:
+                params = dict(request.query_params)
+                result = await oauth_endpoints.handle_authorize(params)
+
+                # Check if we need to show provider selection page
+                if 'selection_redirect' in result:
+                    # Redirect to provider selection page
+                    response = RedirectResponse(url=result['selection_redirect'], status_code=302)
+                else:
+                    # Normal flow: Redirect user to Firebase OAuth URL
+                    response = RedirectResponse(url=result['redirect_url'], status_code=302)
+
+                # Add rate limit headers
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Authorization endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_oauth_callback_endpoint(request: Request):
+            """GET /oauth/callback - OAuth callback from Firebase (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent callback abuse
+            limiter = rate_limiters.get('oauth_callback')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'oauth_callback')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
+            try:
+                # Pass both parsed params and raw query string for better Firebase compatibility
+                params = dict(request.query_params)
+                # Store raw query string in params for Firebase signInWithIdp
+                params['_raw_query_string'] = str(request.url.query)
+                redirect_url = await oauth_endpoints.handle_oauth_callback(params)
+                response = RedirectResponse(url=redirect_url, status_code=302)
+
+                # Add rate limit headers
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
+            except OAuthError as e:
+                # Return error page or redirect with error
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"OAuth callback error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_token_endpoint(request: Request):
+            """POST /token - Token endpoint (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent token abuse and credential stuffing
+            limiter = rate_limiters.get('token')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'token')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
+            try:
+                body = await request.body()
+                # Parse form data
+                import urllib.parse
+                params = dict(urllib.parse.parse_qsl(body.decode('utf-8')))
+                result = await oauth_endpoints.handle_token(params)
+
+                # Add rate limit headers to successful response
+                response = JSONResponse(result)
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Token endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_register_endpoint(request: Request):
+            """POST /register - Dynamic client registration (rate limited)"""
+            # SECURITY: Apply strict rate limiting to prevent registration abuse
+            limiter = rate_limiters.get('register')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'register')
+                if not allowed:
+                    return limiter.create_rate_limit_response()
+
+            try:
+                params = await request.json()
+                result = await oauth_endpoints.handle_register(params)
+
+                response = JSONResponse(result, status_code=201)
+                if limiter:
+                    response.headers["X-RateLimit-Limit"] = str(limiter.requests_per_minute)
+                    response.headers["X-RateLimit-Remaining"] = str(remaining)
+                return response
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Registration endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_revoke_endpoint(request: Request):
+            """POST /revoke - Token revocation"""
+            try:
+                body = await request.body()
+                import urllib.parse
+                params = dict(urllib.parse.parse_qsl(body.decode('utf-8')))
+                await oauth_endpoints.handle_revoke(params)
+                return JSONResponse({})
+            except Exception as e:
+                logging.error(f"Revocation endpoint error: {e}")
+                # OAuth spec says revocation always returns 200
+                return JSONResponse({})
+
+        async def handle_introspect_endpoint(request: Request):
+            """POST /introspect - Token introspection"""
+            try:
+                body = await request.body()
+                import urllib.parse
+                params = dict(urllib.parse.parse_qsl(body.decode('utf-8')))
+                result = await oauth_endpoints.handle_introspect(params)
+                return JSONResponse(result)
+            except Exception as e:
+                logging.error(f"Introspection endpoint error: {e}")
+                return JSONResponse({"active": False})
+
+        async def handle_oauth_metadata_endpoint(request: Request):
+            """GET /.well-known/oauth-protected-resource - Protected resource metadata"""
+            try:
+                metadata = oauth_metadata_provider.get_protected_resource_metadata()
+                return JSONResponse(metadata)
+            except Exception as e:
+                logging.error(f"Metadata endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error"},
+                    status_code=500
+                )
+
+        async def handle_oauth_authz_metadata_endpoint(request: Request):
+            """GET /.well-known/oauth-authorization-server - Authorization server metadata"""
+            try:
+                metadata = oauth_metadata_provider.get_authorization_server_metadata()
+                return JSONResponse(metadata)
+            except Exception as e:
+                logging.error(f"Authorization server metadata endpoint error: {e}")
+                return JSONResponse(
+                    {"error": "server_error"},
+                    status_code=500
+                )
+
+        async def handle_provider_selection_page(request: Request):
+            """GET /oauth/select-provider - Provider selection HTML page"""
+            try:
+                session_id = request.query_params.get('session')
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                html = await oauth_endpoints.handle_provider_selection_page(session_id)
+                from starlette.responses import HTMLResponse
+                return HTMLResponse(content=html, status_code=200)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Provider selection page error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_provider_selected_endpoint(request: Request):
+            """GET /oauth/select-provider/{provider} - Handle provider selection"""
+            try:
+                # Extract provider from path (google or microsoft)
+                provider = request.path_params.get('provider')
+                session_id = request.query_params.get('session')
+
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                if not provider:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing provider parameter"},
+                        status_code=400
+                    )
+
+                # Continue OAuth flow with selected provider
+                result = await oauth_endpoints.handle_provider_selected(provider, session_id)
+
+                # Redirect to Firebase OAuth URL
+                return RedirectResponse(url=result['redirect_url'], status_code=302)
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"Provider selection error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_mfa_challenge_page(request: Request):
+            """GET /oauth/mfa-challenge - MFA challenge HTML page"""
+            try:
+                session_id = request.query_params.get('session')
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                # Render MFA challenge page
+                html = await oauth_endpoints.handle_mfa_challenge_page(session_id)
+                return Response(content=html, media_type="text/html")
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"MFA challenge page error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        async def handle_mfa_verify_endpoint(request: Request):
+            """POST /oauth/mfa-verify - Verify MFA code and complete OAuth flow (rate limited)"""
+            # SECURITY: Apply rate limiting to prevent brute-force attacks
+            limiter = rate_limiters.get('mfa_verify')
+            if limiter:
+                allowed, remaining = limiter.check_rate_limit(request, 'mfa_verify')
+                if not allowed:
+                    logging.warning(f"MFA verify rate limit exceeded from {request.client.host if request.client else 'unknown'}")
+                    return JSONResponse(
+                        {"error": "too_many_requests", "error_description": "Too many verification attempts. Please wait before trying again."},
+                        status_code=429
+                    )
+
+            try:
+                # Parse form data
+                form_data = await request.form()
+
+                # Debug logging to diagnose form data issues
+                logging.debug(f"MFA verify form data keys: {list(form_data.keys())}")
+                logging.debug(f"MFA verify session: {form_data.get('session', 'MISSING')}")
+                logging.debug(f"MFA verify code length: {len(form_data.get('verification_code', ''))}")
+
+                session_id = form_data.get('session')
+                verification_code = form_data.get('verification_code')
+
+                if not session_id:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing session parameter"},
+                        status_code=400
+                    )
+
+                if not verification_code:
+                    return JSONResponse(
+                        {"error": "invalid_request", "error_description": "Missing verification_code parameter"},
+                        status_code=400
+                    )
+
+                # Verify MFA code and complete OAuth flow
+                redirect_url = await oauth_endpoints.handle_mfa_verify(session_id, verification_code)
+
+                # Return JSON response with redirect URL (avoids CORS issues with fetch())
+                # JavaScript will use window.location.href to redirect
+                return JSONResponse(
+                    {"redirect_url": redirect_url, "success": True},
+                    status_code=200
+                )
+            except OAuthError as e:
+                return JSONResponse(
+                    {"error": e.error, "error_description": e.error_description},
+                    status_code=e.status_code
+                )
+            except Exception as e:
+                logging.error(f"MFA verification error: {e}")
+                return JSONResponse(
+                    {"error": "server_error", "error_description": str(e)},
+                    status_code=500
+                )
+
+        # Add OAuth routes
+        routes.append(Route("/authorize", handle_authorize_endpoint, methods=["GET"]))
+        routes.append(Route("/oauth/callback", handle_oauth_callback_endpoint, methods=["GET"]))
+        routes.append(Route("/oauth/select-provider", handle_provider_selection_page, methods=["GET"]))
+        routes.append(Route("/oauth/select-provider/{provider}", handle_provider_selected_endpoint, methods=["GET"]))
+        routes.append(Route("/oauth/mfa-challenge", handle_mfa_challenge_page, methods=["GET"]))
+        routes.append(Route("/oauth/mfa-verify", handle_mfa_verify_endpoint, methods=["POST", "OPTIONS"]))
+        routes.append(Route("/token", handle_token_endpoint, methods=["POST", "OPTIONS"]))
+        routes.append(Route("/register", handle_register_endpoint, methods=["POST", "OPTIONS"]))
+        routes.append(Route("/revoke", handle_revoke_endpoint, methods=["POST", "OPTIONS"]))
+        routes.append(Route("/introspect", handle_introspect_endpoint, methods=["POST", "OPTIONS"]))
+        routes.append(Route("/.well-known/oauth-protected-resource", handle_oauth_metadata_endpoint, methods=["GET"]))
+        routes.append(Route("/.well-known/oauth-authorization-server", handle_oauth_authz_metadata_endpoint, methods=["GET"]))
+
+        # Add static files route for OAuth page assets (logo, favicon, etc.)
+        static_dir = Path(__file__).parent / "static"
+        if static_dir.exists():
+            routes.append(StarletteMount("/static", StaticFiles(directory=str(static_dir)), name="static"))
+            logging.info(f"Static files mounted at /static from {static_dir}")
+
+        logging.info("MCP OAuth endpoints registered")
+
+    # Create ASGI wrapper that adds authentication to MCP sub-apps
+    class MCPAuthWrapper:
+        """ASGI middleware that adds OAuth authentication to MCP sub-applications"""
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http":
+                # Set up context vars for this request
+                request = Request(scope, receive)
+                request_token = request_context_var.set(request)
+                sdk_token = sdk_context_var.set(None)
+                uid_token = uid_auth_context_var.set(None)
+
+                try:
+                    # Extract and validate OAuth token if present
+                    auth_header = request.headers.get("authorization", "")
+                    if auth_header.startswith("Bearer "):
+                        access_token = auth_header[7:]  # Remove "Bearer " prefix
+
+                        # Validate OAuth access token
+                        if MCP_OAUTH_ENABLED and oauth_token_manager:
+                            try:
+                                token_info = oauth_token_manager.get_token_info_for_request(access_token)
+                                uid = token_info['uid']
+
+                                # Build OAuth credentials
+                                oauth_creds = {
+                                    'id_token': token_info['firebase_id_token'],
+                                    'refresh_token': token_info['firebase_refresh_token'],
+                                    'provider': 'google'
+                                }
+
+                                # Set UID auth context for wrapper
+                                uid_auth_context_var.set(UIDAuth(uid=uid, api_key=None, mode="oauth", oauth_creds=oauth_creds))
+                                logging.info(f"MCP request: OAuth authentication successful for uid={uid}")
+                            except Exception as e:
+                                logging.warning(f"MCP request: OAuth token validation failed: {e}")
+
+                    # Call the MCP app
+                    await self.app(scope, receive, send)
+                finally:
+                    # Clean up context
+                    request_context_var.reset(request_token)
+                    sdk_context_var.reset(sdk_token)
+                    uid_auth_context_var.reset(uid_token)
+            else:
+                # Non-HTTP requests (e.g., WebSocket) - pass through
+                await self.app(scope, receive, send)
 
     # Add profile-specific endpoints (mount with trailing slash only)
     for profile, profile_mcp in profile_mcps.items():
+        # Wrap MCP app with authentication middleware
+        wrapped_app = MCPAuthWrapper(profile_mcp.streamable_http_app())
+
         if profile == "all":
             # Mount "all" profile at /mcp/ with trailing slash for backward compatibility
-            routes.append(Mount("/mcp/", profile_mcp.streamable_http_app()))
-            logging.info(f"Mounted 'all' profile at /mcp/")
+            routes.append(Mount("/mcp/", wrapped_app))
+            logging.info(f"Mounted 'all' profile at /mcp/ with OAuth auth wrapper")
         else:
             # Mount other profiles at /<profile_name>/ with trailing slash
-            routes.append(Mount(f"/{profile}/", profile_mcp.streamable_http_app()))
-            logging.info(f"Mounted '{profile}' profile at /{profile}/")
+            routes.append(Mount(f"/{profile}/", wrapped_app))
+            logging.info(f"Mounted '{profile}' profile at /{profile}/ with OAuth auth wrapper")
 
     # Create root endpoint for health checks and profile listing
 
@@ -5041,6 +6517,19 @@ if PUBLIC_MODE:
 
     # Create Starlette app with all routes
     base_app = Starlette(routes=routes, lifespan=combined_lifespan)
+
+    # Add CORS middleware to allow OAuth clients
+    # OAuth security is provided by PKCE and state parameters, not CORS
+    # We allow all origins since OAuth flows involve redirects from external providers (Google)
+    # and we don't use credentials/cookies in OAuth endpoints
+    from starlette.middleware.cors import CORSMiddleware
+    base_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Allow all origins - OAuth security is via PKCE, not CORS
+        allow_credentials=False,  # OAuth endpoints don't use cookies
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
     # Add middleware to capture HTTP requests in contextvar
     base_app.add_middleware(RequestContextMiddleware)
@@ -5084,8 +6573,11 @@ if __name__ == "__main__":
 
     if not PUBLIC_MODE:
         # Configure logging for STDIO mode - all output must go to stderr
+        # Allow DEBUG level via environment variable for troubleshooting
+        log_level_str = os.getenv('LOG_LEVEL', 'INFO').upper()
+        log_level = getattr(logging, log_level_str, logging.INFO)
         logging.basicConfig(
-            level=logging.INFO,
+            level=log_level,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[logging.StreamHandler(sys.stderr)]
         )
@@ -5097,6 +6589,54 @@ if __name__ == "__main__":
         logging.info("Starting LimaCharlie MCP Server in STDIO mode (local usage)")
         logging.info(f"Selected profile: {MCP_PROFILE}")
         logging.info("PUBLIC_MODE is false - using local SDK authentication")
+
+        # Check for UID mode in STDIO
+        uid = get_uid_from_environment()
+        if uid:
+            # UID mode detected - check for OAuth or API key authentication
+            api_key_env = os.getenv("LC_API_KEY")
+
+            # Try to load credentials from SDK config (~/.limacharlie)
+            uid_sdk, api_key_sdk, oauth_creds = get_auth_from_sdk_config()
+
+            # OAuth takes precedence over API key (matches SDK behavior)
+            if oauth_creds:
+                logging.info(f"OAuth mode enabled: uid={uid}")
+                logging.info(f"Using OAuth environment: {os.getenv('LC_CURRENT_ENV', 'default')}")
+                logging.info(f"OAuth provider: {oauth_creds.get('provider', 'unknown')}")
+                logging.info("JWT will be automatically renewed by SDK")
+                logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
+
+                # SECURITY: Do NOT set GLOBAL_OAUTH - pass credentials explicitly per-request
+                # to avoid race conditions in multi-user scenarios
+                # import limacharlie
+                # limacharlie.GLOBAL_OAUTH = oauth_creds  # REMOVED - security risk
+
+                # Store in context with mode indicator AND credentials
+                uid_auth_context_var.set(UIDAuth(uid=uid, api_key=None, mode="oauth", oauth_creds=oauth_creds))
+
+            elif api_key_env or api_key_sdk:
+                # API key mode (prefer explicit env var over config)
+                api_key = api_key_env or api_key_sdk
+                source = "environment variable" if api_key_env else "SDK config"
+                logging.info(f"UID mode with API key: uid={uid} (source: {source})")
+                logging.info("In UID mode, all tools require 'oid' parameter for organization selection")
+
+                # Store in context with mode indicator (no oauth_creds in API key mode)
+                uid_auth_context_var.set(UIDAuth(uid=uid, api_key=api_key, mode="api_key", oauth_creds=None))
+
+            else:
+                logging.error("UID mode requires authentication credentials.")
+                logging.error("Please provide one of the following:")
+                logging.error("  1. OAuth credentials in ~/.limacharlie (recommended)")
+                logging.error("     Run: limacharlie login")
+                logging.error("  2. LC_API_KEY environment variable")
+                logging.error("")
+                logging.error(f"Current LC_CURRENT_ENV: {os.getenv('LC_CURRENT_ENV', 'default')}")
+                sys.exit(1)
+        else:
+            # Normal mode
+            logging.info("Normal mode: Using OID from LC_OID environment variable")
 
         # Create MCP instance for the selected profile
         try:

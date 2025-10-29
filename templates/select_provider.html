@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LimaCharlie - Authentication</title>
+    <link rel="icon" type="image/png" href="/static/favicon/favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --lc-dark-bg: #00030C;
+            --lc-accent-blue: #4A90E2;
+            --lc-text-primary: #FFFFFF;
+            --lc-text-secondary: #B0B8C1;
+            --lc-glass-bg: rgba(255, 255, 255, 0.05);
+            --lc-glass-border: rgba(255, 255, 255, 0.1);
+            --lc-hover-glow: rgba(74, 144, 226, 0.4);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Rubik', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--lc-dark-bg);
+            color: var(--lc-text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background-image:
+                radial-gradient(circle at 20% 50%, rgba(74, 144, 226, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(226, 74, 144, 0.08) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 480px;
+            width: 100%;
+        }
+
+        .card {
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 16px;
+            padding: 48px 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .logo-container {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .logo {
+            max-width: 200px;
+            height: auto;
+            margin: 0 auto;
+            display: block;
+            filter: drop-shadow(0 4px 12px rgba(74, 144, 226, 0.3));
+            transition: filter 0.3s ease-in-out;
+        }
+
+        .logo:hover {
+            filter: drop-shadow(0 6px 16px rgba(74, 144, 226, 0.5));
+        }
+
+        .logo-svg {
+            max-width: 240px;
+            height: auto;
+            margin: 0 auto;
+            display: block;
+            filter: drop-shadow(0 4px 12px rgba(74, 144, 226, 0.3));
+            transition: filter 0.3s ease-in-out;
+        }
+
+        .logo-svg:hover {
+            filter: drop-shadow(0 6px 16px rgba(74, 144, 226, 0.5));
+        }
+
+        .logo-text {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 28px;
+            font-weight: 600;
+            color: var(--lc-accent-blue);
+            letter-spacing: -0.5px;
+            text-shadow: 0 4px 12px rgba(74, 144, 226, 0.3);
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 12px;
+            color: var(--lc-text-primary);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 14px;
+            margin-bottom: 40px;
+            line-height: 1.5;
+        }
+
+        .provider-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .provider-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            padding: 16px 24px;
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 12px;
+            color: var(--lc-text-primary);
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.15s ease-in-out;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .provider-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, var(--lc-accent-blue), #A74AE2);
+            opacity: 0;
+            transition: opacity 0.15s ease-in-out;
+            z-index: -1;
+        }
+
+        .provider-btn:hover {
+            border-color: var(--lc-accent-blue);
+            box-shadow: 0 0 24px var(--lc-hover-glow);
+            transform: translateY(-2px);
+        }
+
+        .provider-btn:hover::before {
+            opacity: 0.1;
+        }
+
+        .provider-btn:active {
+            transform: translateY(0);
+        }
+
+        .provider-icon {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .provider-icon svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        .footer {
+            margin-top: 32px;
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 12px;
+        }
+
+        .footer-link {
+            color: var(--lc-accent-blue);
+            text-decoration: none;
+            transition: all 0.15s ease-in-out;
+        }
+
+        .footer-link:hover {
+            text-shadow: 0 0 12px var(--lc-hover-glow);
+        }
+
+        /* Security badge */
+        .security-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 24px;
+            padding: 12px;
+            background: rgba(74, 144, 226, 0.05);
+            border: 1px solid rgba(74, 144, 226, 0.2);
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--lc-text-secondary);
+        }
+
+        .security-icon {
+            font-size: 16px;
+        }
+
+        /* Mobile responsiveness */
+        @media (max-width: 600px) {
+            .card {
+                padding: 32px 24px;
+            }
+
+            h1 {
+                font-size: 20px;
+            }
+
+            .provider-btn {
+                font-size: 15px;
+                padding: 14px 20px;
+            }
+        }
+
+        /* Loading animation */
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .provider-btn.loading {
+            pointer-events: none;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo-container">
+                <!-- Official LimaCharlie Logo -->
+                <svg class="logo-svg" viewBox="0 0 960 660" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="lcLogoGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                            <stop offset="0%" style="stop-color:#4A90E2;stop-opacity:1" />
+                            <stop offset="100%" style="stop-color:#A74AE2;stop-opacity:1" />
+                        </linearGradient>
+                    </defs>
+                    <path d="M453.395 146.606L346.008 40L54 329.884L346.008 619.767L453.395 513.287L268.648 329.884L453.395 146.606Z" fill="url(#lcLogoGradient)"/>
+                    <path d="M617.201 426.259C563.31 426.259 519.611 382.934 519.611 329.505C519.611 276.075 563.31 232.751 617.201 232.751C662.683 232.751 701.031 263.697 711.733 305.506H884.873L616.946 40L324.558 329.884L616.946 619.767L885 354.009H711.606C700.649 395.565 662.556 426.259 617.201 426.259Z" fill="url(#lcLogoGradient)"/>
+                </svg>
+            </div>
+
+            <h1>Sign in to LimaCharlie MCP</h1>
+            <p class="subtitle">
+                Choose your authentication provider to continue
+            </p>
+
+            <div class="provider-buttons">
+                <a href="/oauth/select-provider/google?session={{ session_id }}"
+                   class="provider-btn"
+                   onclick="this.classList.add('loading')"
+                   data-provider="google">
+                    <span class="provider-icon">
+                        <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                            <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                            <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                            <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                        </svg>
+                    </span>
+                    <span>Continue with Google</span>
+                </a>
+
+                <a href="/oauth/select-provider/microsoft?session={{ session_id }}"
+                   class="provider-btn"
+                   onclick="this.classList.add('loading')"
+                   data-provider="microsoft">
+                    <span class="provider-icon">
+                        <svg viewBox="0 0 23 23" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="0" y="0" width="11" height="11" fill="#F25022"/>
+                            <rect x="12" y="0" width="11" height="11" fill="#7FBA00"/>
+                            <rect x="0" y="12" width="11" height="11" fill="#00A4EF"/>
+                            <rect x="12" y="12" width="11" height="11" fill="#FFB900"/>
+                        </svg>
+                    </span>
+                    <span>Continue with Microsoft</span>
+                </a>
+            </div>
+
+            <div class="security-badge">
+                <span class="security-icon">🔒</span>
+                <span>Secured by Firebase Authentication</span>
+            </div>
+
+            <div class="footer">
+                Powered by <a href="https://limacharlie.io" class="footer-link" target="_blank">LimaCharlie</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Prevent double-submission
+        let submitted = false;
+        document.querySelectorAll('.provider-btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                if (submitted) {
+                    e.preventDefault();
+                    return false;
+                }
+                submitted = true;
+            });
+        });
+    </script>
+</body>
+</html>

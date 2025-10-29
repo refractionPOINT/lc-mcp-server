@@ -41,7 +41,7 @@ sys.modules['mcp.server.fastmcp'] = mock_fastmcp
 sys.modules['mcp.server.fastmcp.server'] = mock_fastmcp_server
 
 # Now import server components
-from server import RequestContextMiddleware, request_context_var, sdk_context_var
+from server import RequestContextMiddleware, request_context_var, sdk_context_var, uid_auth_context_var
 
 
 @pytest.fixture

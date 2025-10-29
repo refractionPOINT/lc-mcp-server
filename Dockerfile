@@ -9,30 +9,29 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set the working directory
 WORKDIR /app
 
-# Install system dependencies including git
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies (includes MCP 1.19.0 from PyPI)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Clone and install MCP from the official GitHub repository
-RUN git clone https://github.com/modelcontextprotocol/python-sdk.git /tmp/python-sdk \
-    && cd /tmp/python-sdk \
-    && pip install --no-cache-dir . \
-    && cd /app \
-    && rm -rf /tmp/python-sdk \
-    && apt-get purge -y git \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* \
+RUN pip install --no-cache-dir -r requirements.txt \
     && python -c "import mcp; print('MCP package imported successfully')"
 
 # Copy the application code and prompts
 COPY server.py .
 COPY prompts/ ./prompts/
+
+# Copy OAuth modules (optional, enabled via MCP_OAUTH_ENABLED env var)
+# SECURITY: Include rate_limiter.py and token_encryption.py for OAuth security features
+COPY oauth_*.py firebase_auth_bridge.py rate_limiter.py token_encryption.py ./
+
+# Copy OAuth HTML templates for provider selection
+COPY templates/ ./templates/
+
+# Copy audit logging modules and UID auth class
+COPY audit_logger.py audit_decorator.py uid_auth.py ./
 
 # Expose the application port
 EXPOSE 8080
