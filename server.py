@@ -198,6 +198,19 @@ PUBLIC_MODE = os.getenv("PUBLIC_MODE", "false").lower() == "true"
 # MCP_OAUTH_ENABLED determines whether to enable MCP OAuth 2.1 flow
 MCP_OAUTH_ENABLED = os.getenv("MCP_OAUTH_ENABLED", "false").lower() == "true"
 
+# Configure logging for all modes (STDIO and HTTP)
+# In STDIO mode, logs go to stderr (stdout is reserved for JSON-RPC)
+# In HTTP mode (Cloud Run), logs go to stdout (captured by Cloud Logging)
+log_level_str = os.getenv('LOG_LEVEL', 'INFO').upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+log_stream = sys.stderr if not PUBLIC_MODE else sys.stdout
+logging.basicConfig(
+    level=log_level,
+    format='%(message)s' if PUBLIC_MODE else '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(log_stream)],
+    force=True  # Override any existing configuration
+)
+
 # Conditional imports for HTTP mode (PUBLIC_MODE)
 # In STDIO mode, starlette is not needed and may not be installed
 if PUBLIC_MODE:
@@ -1362,11 +1375,15 @@ class RequestContextMiddleware:
 
 def safe_simple_request(sensor: limacharlie.Sensor, cmd: str) -> Any:
     try:
+        logging.info(f"safe_simple_request: Starting simpleRequest() for command: {cmd}")
         ret = sensor.simpleRequest(cmd)
         if ret is None:
+            logging.info(f"safe_simple_request: simpleRequest() returned None (timeout)")
             return {"error": "timeout waiting for sensor response"}
+        logging.info(f"safe_simple_request: simpleRequest() succeeded")
         return ret
     except Exception as e:
+        logging.info(f"safe_simple_request: simpleRequest() raised exception: {e}")
         return {"error": f"Error issuing sensor request: {e}"}
 
 def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
@@ -1376,20 +1393,39 @@ def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
         sdk = get_sdk_from_context(ctx)
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
-        
-        # Make SDK interactive
-        if not sdk._inv_id:
-            sdk._inv_id = f"mcp-{uuid.uuid4()}"
-        logging.info(f"Making SDK interactive: {sdk._inv_id}")
+
+        # Always set a fresh investigation ID for each command
+        # This ensures we get a new Spout connection and Output in LimaCharlie
+        old_inv_id = getattr(sdk, '_inv_id', None)
+        sdk._inv_id = f"mcp-{uuid.uuid4()}"
+        logging.info(f"execute_sensor_command: Setting investigation ID: {sdk._inv_id} (was: {old_inv_id})")
+
+        # Force fresh Spout creation if SDK is already interactive
+        # This prevents reusing stale Spout connections across requests
+        if sdk._is_interactive:
+            logging.info(f"execute_sensor_command: SDK already interactive, forcing Spout refresh")
+            if hasattr(sdk, '_spout') and sdk._spout:
+                try:
+                    sdk._spout.shutdown()
+                except Exception as e:
+                    logging.info(f"execute_sensor_command: Error shutting down old Spout: {e}")
+                sdk._spout = None
+            sdk._is_interactive = False
+
+        # Make SDK interactive (creates new Spout with investigation ID)
+        logging.info(f"execute_sensor_command: Making SDK interactive with inv_id={sdk._inv_id}")
         sdk.make_interactive()
-        logging.info(f"SDK interactive: {sdk._inv_id}")
+        logging.info(f"execute_sensor_command: SDK interactive complete, Spout ready")
 
         # Get sensor and execute command
         sensor = sdk.sensor(sid)
-        return safe_simple_request(sensor, cmd)
+        logging.info(f"execute_sensor_command: Sending command '{cmd}' to sensor {sid}")
+        result = safe_simple_request(sensor, cmd)
+        logging.info(f"execute_sensor_command: Command completed")
+        return result
     except Exception as e:
         import traceback
-        logging.info(f"Tool error: {traceback.format_exc()}")
+        logging.info(f"execute_sensor_command: Error: {traceback.format_exc()}")
         return {"error": f"Error issuing sensor request: {e}"}
 
 
