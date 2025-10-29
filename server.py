@@ -3149,57 +3149,27 @@ def get_sensor_info(sid: str, ctx: Context) -> dict[str, Any]:
 @mcp_tool_with_gcs()
 def get_online_sensors(ctx: Context) -> dict[str, Any]:
     """List all currently online sensors in the organization
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
-            - "sensors" (list): List of online sensor IDs with basic information
+            - "sensors" (list): List of online sensor IDs (strings)
             - "error" (str): On failure, an error message string
     """
     start = time.time()
     logging.info(f"Tool called: get_online_sensors()")
-    
+
     try:
         sdk = get_sdk_from_context(ctx)
         if sdk is None:
             return {"error": "No authentication provided"}
-        
-        # Get all online sensors
-        online_sensors = sdk.getAllOnlineSensors()
 
-        # Convert to list of dicts with useful info
-        # Note: SDK may return list of SIDs or dict of {sid: info}
-        sensor_list = []
-        for sid, sensor_info in safe_dict_items(online_sensors):
-            # Handle case where sensor_info might be just the SID string
-            if isinstance(sensor_info, str):
-                # SDK returned list of SIDs only
-                sensor_data = {
-                    'sid': sensor_info,
-                    'hostname': 'Unknown',
-                    'platform': 'Unknown',
-                    'architecture': 'Unknown',
-                    'internal_ip': 'Unknown',
-                    'external_ip': 'Unknown',
-                    'last_seen': 0
-                }
-            elif isinstance(sensor_info, dict):
-                # SDK returned dict with full info
-                sensor_data = {
-                    'sid': sid,
-                    'hostname': sensor_info.get('hostname', 'Unknown'),
-                    'platform': sensor_info.get('plat', 'Unknown'),
-                    'architecture': sensor_info.get('arch', 'Unknown'),
-                    'internal_ip': sensor_info.get('int_ip', 'Unknown'),
-                    'external_ip': sensor_info.get('ext_ip', 'Unknown'),
-                    'last_seen': sensor_info.get('last_seen', 0)
-                }
-            else:
-                # Unknown type, skip
-                continue
-            sensor_list.append(sensor_data)
-        
-        return {"sensors": sensor_list}
-        
+        # Get all online sensor IDs
+        # The SDK returns a list of SID strings
+        online_sids = sdk.getAllOnlineSensors()
+
+        # Return the SIDs directly - this is what the API provides
+        return {"sensors": online_sids if online_sids else []}
+
     except Exception as e:
         logging.info(f"Error in get_online_sensors: {str(e)}")
         return {"error": str(e)}

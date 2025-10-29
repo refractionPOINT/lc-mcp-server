@@ -118,36 +118,34 @@ class TestFunctionTypeSafety(unittest.TestCase):
 
     @patch('server.get_sdk_from_context')
     def test_get_online_sensors_with_list(self, mock_get_sdk):
-        """Test get_online_sensors handles list response (SDK's actual return type)."""
+        """Test get_online_sensors returns list of SIDs (SDK's actual return type)."""
         from server import get_online_sensors
 
         mock_get_sdk.return_value = self.mock_sdk
-        # SDK actually returns a list of SIDs
+        # SDK returns a list of SID strings
         self.mock_sdk.getAllOnlineSensors.return_value = ['sid1', 'sid2', 'sid3']
 
         result = get_online_sensors(self.mock_context)
 
         self.assertIn('sensors', result)
         self.assertEqual(len(result['sensors']), 3)
-        self.assertEqual(result['sensors'][0]['sid'], 'sid1')
+        self.assertEqual(result['sensors'][0], 'sid1')
+        self.assertEqual(result['sensors'][1], 'sid2')
+        self.assertEqual(result['sensors'][2], 'sid3')
 
     @patch('server.get_sdk_from_context')
-    def test_get_online_sensors_with_dict(self, mock_get_sdk):
-        """Test get_online_sensors handles dict response (backward compatibility)."""
+    def test_get_online_sensors_with_empty_list(self, mock_get_sdk):
+        """Test get_online_sensors handles empty list response."""
         from server import get_online_sensors
 
         mock_get_sdk.return_value = self.mock_sdk
-        # Old format: dict with full info
-        self.mock_sdk.getAllOnlineSensors.return_value = {
-            'sid1': {'hostname': 'host1', 'plat': 'windows'},
-            'sid2': {'hostname': 'host2', 'plat': 'linux'}
-        }
+        # No online sensors
+        self.mock_sdk.getAllOnlineSensors.return_value = []
 
         result = get_online_sensors(self.mock_context)
 
         self.assertIn('sensors', result)
-        self.assertEqual(len(result['sensors']), 2)
-        self.assertEqual(result['sensors'][0]['hostname'], 'host1')
+        self.assertEqual(result['sensors'], [])
 
     @patch('server.get_sdk_from_context')
     def test_search_hosts_with_list(self, mock_get_sdk):
@@ -264,36 +262,24 @@ class TestRegressionPrevention(unittest.TestCase):
     """Test that the fixes don't break existing functionality."""
 
     @patch('server.get_sdk_from_context')
-    def test_existing_dict_behavior_preserved(self, mock_get_sdk):
-        """Ensure normal dict responses still work exactly as before."""
+    def test_get_online_sensors_returns_api_data(self, mock_get_sdk):
+        """Ensure get_online_sensors returns what the API provides."""
         from server import get_online_sensors
 
         mock_sdk = Mock()
         mock_get_sdk.return_value = mock_sdk
 
-        # Old working format
-        mock_sdk.getAllOnlineSensors.return_value = {
-            'sensor1': {
-                'hostname': 'test-host',
-                'plat': 'windows',
-                'arch': 'x64',
-                'int_ip': '10.0.0.1',
-                'ext_ip': '1.2.3.4',
-                'last_seen': 1234567890
-            }
-        }
+        # SDK returns list of SID strings
+        mock_sdk.getAllOnlineSensors.return_value = ['sid-1', 'sid-2', 'sid-3']
 
         result = get_online_sensors(Mock())
 
-        # Verify all fields are preserved
-        self.assertEqual(len(result['sensors']), 1)
-        sensor = result['sensors'][0]
-        self.assertEqual(sensor['hostname'], 'test-host')
-        self.assertEqual(sensor['platform'], 'windows')
-        self.assertEqual(sensor['architecture'], 'x64')
-        self.assertEqual(sensor['internal_ip'], '10.0.0.1')
-        self.assertEqual(sensor['external_ip'], '1.2.3.4')
-        self.assertEqual(sensor['last_seen'], 1234567890)
+        # Verify it returns the list as-is
+        self.assertIn('sensors', result)
+        self.assertEqual(result['sensors'], ['sid-1', 'sid-2', 'sid-3'])
+        # All items should be strings (SIDs)
+        for sid in result['sensors']:
+            self.assertIsInstance(sid, str)
 
 
 if __name__ == '__main__':
