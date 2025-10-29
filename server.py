@@ -1415,6 +1415,12 @@ def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
         # Make SDK interactive (creates new Spout with investigation ID)
         logging.info(f"execute_sensor_command: Making SDK interactive with inv_id={sdk._inv_id}")
         sdk.make_interactive()
+
+        # Wait for Spout thread to initialize and start listening for responses
+        # The background thread needs time to: start executing, open stream connection,
+        # and enter the iter_lines() loop before we send tasks
+        logging.info(f"execute_sensor_command: Waiting 2 seconds for Spout thread to initialize...")
+        time.sleep(2)
         logging.info(f"execute_sensor_command: SDK interactive complete, Spout ready")
 
         # Get sensor and execute command
