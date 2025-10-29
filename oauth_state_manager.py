@@ -46,7 +46,10 @@ class OAuthState:
 
 @dataclass
 class AuthorizationCode:
-    """Authorization code with associated data."""
+    """Authorization code with associated data.
+
+    SECURITY: Stores OAuth security parameters for validation during token exchange.
+    """
     code: str
     state: str
     uid: str
@@ -54,6 +57,12 @@ class AuthorizationCode:
     firebase_refresh_token: str
     firebase_expires_at: int
     created_at: int
+    # OAuth security parameters for token exchange validation
+    redirect_uri: str
+    client_id: str
+    scope: str
+    code_challenge: Optional[str]
+    code_challenge_method: Optional[str]
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -403,12 +412,20 @@ class OAuthStateManager:
         uid: str,
         firebase_id_token: str,
         firebase_refresh_token: str,
-        firebase_expires_at: int
+        firebase_expires_at: int,
+        redirect_uri: str,
+        client_id: str,
+        scope: str,
+        code_challenge: Optional[str] = None,
+        code_challenge_method: Optional[str] = None
     ) -> None:
         """
         Store authorization code with Firebase token mapping.
 
-        SECURITY: Firebase tokens are encrypted before storage if encryption is enabled.
+        SECURITY:
+        - Firebase tokens are encrypted before storage if encryption is enabled
+        - OAuth security parameters stored for validation during token exchange
+        - Prevents authorization code interception and redirect_uri manipulation
 
         Args:
             code: Authorization code
@@ -417,6 +434,11 @@ class OAuthStateManager:
             firebase_id_token: Firebase ID token
             firebase_refresh_token: Firebase refresh token
             firebase_expires_at: Firebase token expiration timestamp
+            redirect_uri: Client's redirect URI for validation
+            client_id: OAuth client ID
+            scope: Authorized scope
+            code_challenge: PKCE challenge (required for secure flows)
+            code_challenge_method: PKCE challenge method (e.g., 'S256')
         """
         # Encrypt sensitive Firebase tokens before storage
         encrypted_id_token = self._encrypt_token(firebase_id_token)
@@ -429,7 +451,12 @@ class OAuthStateManager:
             firebase_id_token=encrypted_id_token,
             firebase_refresh_token=encrypted_refresh_token,
             firebase_expires_at=firebase_expires_at,
-            created_at=int(time.time())
+            created_at=int(time.time()),
+            redirect_uri=redirect_uri,
+            client_id=client_id,
+            scope=scope,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method
         )
 
         key = f"{self.CODE_PREFIX}{code}"

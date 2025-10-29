@@ -563,14 +563,20 @@ class OAuthEndpoints:
             # Generate authorization code
             auth_code = self.state_manager.generate_authorization_code()
 
-            # Store authorization code with Firebase tokens
+            # Store authorization code with Firebase tokens and OAuth security parameters
+            # SECURITY: Store OAuth parameters for validation during token exchange
             self.state_manager.store_authorization_code(
                 code=auth_code,
                 state=state,
                 uid=firebase_tokens['uid'],
                 firebase_id_token=firebase_tokens['id_token'],
                 firebase_refresh_token=firebase_tokens['refresh_token'],
-                firebase_expires_at=firebase_tokens['expires_at']
+                firebase_expires_at=firebase_tokens['expires_at'],
+                redirect_uri=oauth_state.redirect_uri,
+                client_id=oauth_state.client_id,
+                scope=oauth_state.scope,
+                code_challenge=oauth_state.code_challenge,
+                code_challenge_method=oauth_state.code_challenge_method
             )
 
             # Build redirect URL back to client
@@ -757,6 +763,10 @@ class OAuthEndpoints:
                 oauth_state_data = oauth_state_data.decode('utf-8')
             oauth_state_dict = json.loads(oauth_state_data)
             redirect_uri = oauth_state_dict['redirect_uri']
+            client_id = oauth_state_dict['client_id']
+            scope = oauth_state_dict['scope']
+            code_challenge = oauth_state_dict.get('code_challenge')
+            code_challenge_method = oauth_state_dict.get('code_challenge_method')
         except Exception as e:
             logging.error(f"Failed to parse OAuth state data: {e}")
             self.state_manager.consume_mfa_session(session_id)
@@ -783,14 +793,20 @@ class OAuthEndpoints:
             # Generate authorization code
             auth_code = self.state_manager.generate_authorization_code()
 
-            # Store authorization code with Firebase tokens
+            # Store authorization code with Firebase tokens and OAuth security parameters
+            # SECURITY: Store OAuth parameters for validation during token exchange
             self.state_manager.store_authorization_code(
                 code=auth_code,
                 state=mfa_session.oauth_state,
                 uid=firebase_tokens['uid'],
                 firebase_id_token=firebase_tokens['id_token'],
                 firebase_refresh_token=firebase_tokens['refresh_token'],
-                firebase_expires_at=firebase_tokens['expires_at']
+                firebase_expires_at=firebase_tokens['expires_at'],
+                redirect_uri=redirect_uri,
+                client_id=client_id,
+                scope=scope,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method
             )
 
             # Build redirect URL back to client
@@ -963,26 +979,34 @@ class OAuthEndpoints:
         if not auth_code_data:
             raise OAuthError('invalid_grant', 'Invalid or expired authorization code')
 
-        # Retrieve OAuth state to get PKCE challenge
-        oauth_state = self.state_manager.get_oauth_state(auth_code_data.state)
+        # SECURITY: Validate OAuth security parameters stored with the authorization code
+        # These validations are MANDATORY to prevent authorization code interception attacks
 
-        if not oauth_state:
-            # State might have expired, but we have the code data, so proceed
-            # In production, you might want to fail here for extra security
-            logging.warning("OAuth state expired but authorization code is valid, proceeding")
-            # Verify redirect_uri matches at minimum
-            pass
-        else:
-            # Verify redirect_uri matches
-            if token_req.redirect_uri != oauth_state.redirect_uri:
-                raise OAuthError('invalid_grant', 'redirect_uri does not match authorization request')
+        # Validate that required OAuth security parameters are present
+        if not auth_code_data.redirect_uri:
+            logging.error("Authorization code missing redirect_uri - possible security issue")
+            raise OAuthError('invalid_grant', 'Invalid authorization code: missing redirect_uri')
 
-            # Verify PKCE
-            if not self.verify_pkce(oauth_state.code_challenge, token_req.code_verifier):
-                raise OAuthError('invalid_grant', 'PKCE verification failed')
+        if not auth_code_data.code_challenge:
+            logging.error("Authorization code missing PKCE challenge - possible security issue")
+            raise OAuthError('invalid_grant', 'Invalid authorization code: missing PKCE challenge')
 
-        # Create token response using Firebase tokens
-        scope = oauth_state.scope if oauth_state else "limacharlie:read limacharlie:write"
+        # Verify redirect_uri matches (MANDATORY - prevents token theft)
+        if token_req.redirect_uri != auth_code_data.redirect_uri:
+            logging.warning(f"redirect_uri mismatch: expected {auth_code_data.redirect_uri[:50]}..., got {token_req.redirect_uri[:50]}...")
+            raise OAuthError('invalid_grant', 'redirect_uri does not match authorization request')
+
+        # Verify PKCE (MANDATORY - prevents authorization code interception)
+        if not self.verify_pkce(auth_code_data.code_challenge, token_req.code_verifier):
+            logging.warning("PKCE verification failed")
+            raise OAuthError('invalid_grant', 'PKCE verification failed')
+
+        # Use the authorized scope stored with the authorization code
+        # SECURITY: Never fall back to default scope - use only what was authorized
+        scope = auth_code_data.scope
+        if not scope:
+            logging.warning("Authorization code missing scope - using minimal default")
+            scope = "limacharlie:read"  # Minimal default if scope somehow missing
         token_response = self.token_manager.create_token_response(
             uid=auth_code_data.uid,
             firebase_id_token=auth_code_data.firebase_id_token,
