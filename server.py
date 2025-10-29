@@ -498,6 +498,63 @@ PROFILES = {
     },
 }
 
+def safe_dict_items(obj: Any, default_key_extractor: callable = None):
+    """
+    Safely iterate over SDK responses that might be dict, list, or None.
+
+    This utility function handles type inconsistencies in LimaCharlie SDK responses
+    where methods may return dicts, lists, or None depending on API conditions.
+
+    Args:
+        obj: The response object from SDK (dict, list, or None)
+        default_key_extractor: Optional callable to extract keys from list items
+
+    Yields:
+        Tuples of (key, value) for iteration, mimicking dict.items() behavior
+
+    Examples:
+        # For dict responses (normal case)
+        for k, v in safe_dict_items({'a': 1, 'b': 2}):
+            print(k, v)  # a 1, b 2
+
+        # For list responses (error case)
+        for k, v in safe_dict_items([{'sid': 'x'}, {'sid': 'y'}]):
+            print(k, v)  # x {'sid': 'x'}, y {'sid': 'y'}
+
+        # For None responses (empty case)
+        for k, v in safe_dict_items(None):
+            pass  # No iteration
+    """
+    if isinstance(obj, dict):
+        # Normal case: dict response, yield items directly
+        yield from obj.items()
+    elif isinstance(obj, list):
+        # Error case: list response, try to extract meaningful keys
+        for idx, item in enumerate(obj):
+            if default_key_extractor and callable(default_key_extractor):
+                # Use custom key extractor if provided
+                try:
+                    key = default_key_extractor(item)
+                except (KeyError, TypeError, AttributeError):
+                    key = str(idx)
+            elif isinstance(item, dict) and 'sid' in item:
+                # Common case: sensor lists with sid field
+                key = item['sid']
+            elif isinstance(item, dict) and 'id' in item:
+                # Alternative: id field
+                key = item['id']
+            elif isinstance(item, str):
+                # List of strings (like getAllOnlineSensors returns)
+                key = item
+                # Value is the item itself
+                yield (key, item)
+                continue
+            else:
+                # Fallback: use index as key
+                key = str(idx)
+            yield (key, item)
+    # For None or other types, yield nothing (empty iteration)
+
 def get_profile_tools(profile_name: str) -> set[str]:
     """
     Get the set of tool names for a given profile.
@@ -2203,11 +2260,16 @@ def get_detection_rules(ctx: Context) -> dict[str, Any]:
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
         hive = limacharlie.Hive(sdk, "dr-general")
-        genRules = {k: v.toJSON() for k, v in hive.list().items()}
+        genRulesData = hive.list()
+        genRules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(genRulesData)} if genRulesData else {}
+
         hive = limacharlie.Hive(sdk, "dr-managed")
-        managedRules = {k: v.toJSON() for k, v in hive.list().items()}
+        managedRulesData = hive.list()
+        managedRules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(managedRulesData)} if managedRulesData else {}
+
         hive = limacharlie.Hive(sdk, "dr-service")
-        svcRules = {k: v.toJSON() for k, v in hive.list().items()}
+        svcRulesData = hive.list()
+        svcRules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(svcRulesData)} if svcRulesData else {}
         return {"rules": {**genRules, **managedRules, **svcRules}}
     except Exception as e:
         return {"error": f"{e}"}
@@ -2231,7 +2293,8 @@ def get_fp_rules(ctx: Context) -> dict[str, Any]:
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
         hive = limacharlie.Hive(sdk, "fp")
-        rules = {k: v.toJSON() for k, v in hive.list().items()}
+        rulesData = hive.list()
+        rules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(rulesData)} if rulesData else {}
         return {"rules": rules}
     except Exception as e:
         return {"error": f"{e}"}
@@ -3102,19 +3165,37 @@ def get_online_sensors(ctx: Context) -> dict[str, Any]:
         
         # Get all online sensors
         online_sensors = sdk.getAllOnlineSensors()
-        
+
         # Convert to list of dicts with useful info
+        # Note: SDK may return list of SIDs or dict of {sid: info}
         sensor_list = []
-        for sid, sensor_info in online_sensors.items():
-            sensor_data = {
-                'sid': sid,
-                'hostname': sensor_info.get('hostname', 'Unknown'),
-                'platform': sensor_info.get('plat', 'Unknown'),
-                'architecture': sensor_info.get('arch', 'Unknown'),
-                'internal_ip': sensor_info.get('int_ip', 'Unknown'),
-                'external_ip': sensor_info.get('ext_ip', 'Unknown'),
-                'last_seen': sensor_info.get('last_seen', 0)
-            }
+        for sid, sensor_info in safe_dict_items(online_sensors):
+            # Handle case where sensor_info might be just the SID string
+            if isinstance(sensor_info, str):
+                # SDK returned list of SIDs only
+                sensor_data = {
+                    'sid': sensor_info,
+                    'hostname': 'Unknown',
+                    'platform': 'Unknown',
+                    'architecture': 'Unknown',
+                    'internal_ip': 'Unknown',
+                    'external_ip': 'Unknown',
+                    'last_seen': 0
+                }
+            elif isinstance(sensor_info, dict):
+                # SDK returned dict with full info
+                sensor_data = {
+                    'sid': sid,
+                    'hostname': sensor_info.get('hostname', 'Unknown'),
+                    'platform': sensor_info.get('plat', 'Unknown'),
+                    'architecture': sensor_info.get('arch', 'Unknown'),
+                    'internal_ip': sensor_info.get('int_ip', 'Unknown'),
+                    'external_ip': sensor_info.get('ext_ip', 'Unknown'),
+                    'last_seen': sensor_info.get('last_seen', 0)
+                }
+            else:
+                # Unknown type, skip
+                continue
             sensor_list.append(sensor_data)
         
         return {"sensors": sensor_list}
@@ -3148,12 +3229,22 @@ def search_hosts(hostname_expr: str, ctx: Context) -> dict[str, Any]:
         
         # Search for hosts matching the expression
         result = sdk.hosts(hostname_expr, as_dict=True)
-        
+
         # Convert to list format
+        # Note: SDK may return dict, list, or None
         sensor_list = []
-        for sid, sensor_info in result.items():
-            sensor_info['sid'] = sid
-            sensor_list.append(sensor_info)
+        if result:
+            for sid, sensor_info in safe_dict_items(result):
+                # Handle different response types
+                if isinstance(sensor_info, dict):
+                    sensor_info['sid'] = sid
+                    sensor_list.append(sensor_info)
+                elif isinstance(sensor_info, str):
+                    # If sensor_info is just a string (SID), create minimal dict
+                    sensor_list.append({'sid': sensor_info})
+                else:
+                    # Handle other types by creating minimal entry
+                    sensor_list.append({'sid': sid})
         
         return {"sensors": sensor_list}
         
@@ -3589,8 +3680,8 @@ def list_rules(hive_name: str, ctx: Context) -> dict[str, Any]:
         
         # List all rules
         rules = hive.list()
-        
-        return {"rules": {k: v.toJSON() for k, v in rules.items()} if rules else {}}
+
+        return {"rules": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(rules)} if rules else {}}
         
     except Exception as e:
         logging.info(f"Error in list_rules: {str(e)}")
@@ -4388,8 +4479,8 @@ def list_yara_rules(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "yara")
         rules = hive.list()
-        
-        return {"rules": {k: v.toJSON() for k, v in rules.items()} if rules else {}}
+
+        return {"rules": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(rules)} if rules else {}}
         
     except Exception as e:
         logging.info(f"Error in list_yara_rules: {str(e)}")
@@ -4600,8 +4691,8 @@ def list_lookups(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "lookup")
         lookups = hive.list()
-        
-        return {"lookups": {k: v.toJSON() for k, v in lookups.items()} if lookups else {}}
+
+        return {"lookups": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(lookups)} if lookups else {}}
         
     except Exception as e:
         logging.info(f"Error in list_lookups: {str(e)}")
@@ -4803,8 +4894,8 @@ def list_saved_queries(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "query")
         queries = hive.list()
-        
-        return {"queries": {k: v.toJSON() for k, v in queries.items()} if queries else {}}
+
+        return {"queries": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(queries)} if queries else {}}
         
     except Exception as e:
         logging.info(f"Error in list_saved_queries: {str(e)}")
@@ -5168,8 +5259,8 @@ def list_playbooks(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "playbook")
         playbooks = hive.list()
-        
-        return {"playbooks": {k: v.toJSON() for k, v in playbooks.items()} if playbooks else {}}
+
+        return {"playbooks": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(playbooks)} if playbooks else {}}
         
     except Exception as e:
         logging.info(f"Error in list_playbooks: {str(e)}")
@@ -5316,8 +5407,8 @@ def list_cloud_sensors(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "cloud_sensor")
         cloud_sensors = hive.list()
-        
-        return {"cloud_sensors": {k: v.toJSON() for k, v in cloud_sensors.items()} if cloud_sensors else {}}
+
+        return {"cloud_sensors": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(cloud_sensors)} if cloud_sensors else {}}
         
     except Exception as e:
         logging.info(f"Error in list_cloud_sensors: {str(e)}")
@@ -5464,8 +5555,8 @@ def list_external_adapters(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "external_adapter")
         adapters = hive.list()
-        
-        return {"adapters": {k: v.toJSON() for k, v in adapters.items()} if adapters else {}}
+
+        return {"adapters": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(adapters)} if adapters else {}}
         
     except Exception as e:
         logging.info(f"Error in list_external_adapters: {str(e)}")
@@ -5612,8 +5703,8 @@ def list_extension_configs(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "extension_config")
         configs = hive.list()
-        
-        return {"configs": {k: v.toJSON() for k, v in configs.items()} if configs else {}}
+
+        return {"configs": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(configs)} if configs else {}}
         
     except Exception as e:
         logging.info(f"Error in list_extension_configs: {str(e)}")
