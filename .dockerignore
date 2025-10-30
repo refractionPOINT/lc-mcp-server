@@ -1,0 +1,58 @@
+# Git files
+.git/
+.gitignore
+.github/
+
+# Build artifacts
+server
+lc-mcp-go
+*.exe
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+build/
+
+# Test files
+*.test
+coverage.txt
+coverage.html
+*.out
+
+# Documentation (temporary review docs)
+CODE_QUALITY_REVIEW.md
+CRITICAL_FIXES_SESSION*.md
+CRITICAL_OAUTH_FIXES_SESSION*.md
+FRESH_CODE_REVIEW.md
+IMPLEMENTATION_SUMMARY.md
+SECURITY_FIXES.md
+SECURITY_REVIEW.md
+ULTRADEEP_SECURITY_REVIEW.md
+STATUS.md
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.*
+*.local
+
+# Vendor directory (if using vendoring)
+vendor/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.log

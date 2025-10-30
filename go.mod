@@ -1,6 +1,6 @@
 module github.com/refractionpoint/lc-mcp-go
 
-go 1.25.3
+go 1.24
 
 require (
 	github.com/mark3labs/mcp-go v0.42.0
