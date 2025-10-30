@@ -1,0 +1,50 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/server
+/lc-mcp-go
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+
+# Dependency directories
+vendor/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary review and status documents
+CODE_QUALITY_REVIEW.md
+CRITICAL_FIXES_SESSION*.md
+CRITICAL_OAUTH_FIXES_SESSION*.md
+FRESH_CODE_REVIEW.md
+IMPLEMENTATION_SUMMARY.md
+SECURITY_FIXES.md
+SECURITY_REVIEW.md
+ULTRADEEP_SECURITY_REVIEW.md
+STATUS.md
+
+# Build artifacts
+dist/
+build/
+bin/
+
+# Environment variables
+.env
+.env.local
