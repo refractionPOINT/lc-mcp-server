@@ -3,6 +3,7 @@ module github.com/refractionpoint/lc-mcp-go
 go 1.24
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/mark3labs/mcp-go v0.42.0
 	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251006170418-fd936b4b65b2
 	github.com/sirupsen/logrus v1.9.3
@@ -32,7 +33,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.2 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
@@ -73,3 +73,4 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+replace github.com/refractionPOINT/go-limacharlie/limacharlie => ../go-limacharlie/limacharlie

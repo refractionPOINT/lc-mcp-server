@@ -48,3 +48,4 @@ bin/
 # Environment variables
 .env
 .env.local
+lc-mcp-server
