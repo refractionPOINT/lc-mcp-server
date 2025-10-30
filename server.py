@@ -4014,9 +4014,21 @@ def batch_search_iocs(
         if sdk is None:
             return {"error": "No authentication provided"}
         
+        # Transform list of dicts to dict of lists format expected by SDK
+        # Input: [{"type": "hash", "name": "hash1", "info": "summary"}, ...]
+        # Output: {"hash": ["hash1", "hash2"], "domain": ["dom1", "dom2"]}
+        transformed_objects = {}
+        for obj in objects:
+            obj_type = obj.get('type')
+            obj_name = obj.get('name')
+            if obj_type and obj_name:
+                if obj_type not in transformed_objects:
+                    transformed_objects[obj_type] = []
+                transformed_objects[obj_type].append(obj_name)
+
         # Perform batch IOC search
         results = sdk.getBatchObjectInformation(
-            objects=objects,
+            objects=transformed_objects,
             isCaseSensitive=False
         )
         
