@@ -1394,16 +1394,16 @@ def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
 
-        # CRITICAL: Force JWT population before making interactive
-        # The Manager._jwt is initialized as None and only populated on first API call
-        # Spout will capture whatever _jwt value exists when make_interactive() is called
-        # So we MUST ensure JWT is populated first to avoid auth failures
-        logging.info(f"execute_sensor_command: Ensuring JWT is populated before creating Spout")
+        # CRITICAL: Force a FRESH JWT before making interactive
+        # Spout captures Manager._jwt at creation time and never updates it
+        # If JWT is close to expiring, Spout will keep reconnecting with expired JWT
+        # We MUST get a fresh JWT with full TTL before Spout creation
+        logging.info(f"execute_sensor_command: Forcing fresh JWT refresh before creating Spout")
         try:
-            sdk.testAuth()  # This calls _apiCall() which triggers _refreshJWT()
-            logging.info(f"execute_sensor_command: JWT is now populated and valid")
+            sdk._refreshJWT()  # Get brand new JWT with full expiry time
+            logging.info(f"execute_sensor_command: Fresh JWT obtained with full TTL")
         except Exception as e:
-            logging.info(f"execute_sensor_command: testAuth() failed: {e}")
+            logging.info(f"execute_sensor_command: JWT refresh failed: {e}")
             return {"error": f"Authentication failed: {e}"}
 
         # Always set a fresh investigation ID for each command
