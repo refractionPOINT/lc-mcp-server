@@ -198,6 +198,19 @@ PUBLIC_MODE = os.getenv("PUBLIC_MODE", "false").lower() == "true"
 # MCP_OAUTH_ENABLED determines whether to enable MCP OAuth 2.1 flow
 MCP_OAUTH_ENABLED = os.getenv("MCP_OAUTH_ENABLED", "false").lower() == "true"
 
+# Configure logging for all modes (STDIO and HTTP)
+# In STDIO mode, logs go to stderr (stdout is reserved for JSON-RPC)
+# In HTTP mode (Cloud Run), logs go to stdout (captured by Cloud Logging)
+log_level_str = os.getenv('LOG_LEVEL', 'INFO').upper()
+log_level = getattr(logging, log_level_str, logging.INFO)
+log_stream = sys.stderr if not PUBLIC_MODE else sys.stdout
+logging.basicConfig(
+    level=log_level,
+    format='%(message)s' if PUBLIC_MODE else '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(log_stream)],
+    force=True  # Override any existing configuration
+)
+
 # Conditional imports for HTTP mode (PUBLIC_MODE)
 # In STDIO mode, starlette is not needed and may not be installed
 if PUBLIC_MODE:
@@ -497,6 +510,63 @@ PROFILES = {
         "get_sku_definitions",
     },
 }
+
+def safe_dict_items(obj: Any, default_key_extractor: callable = None):
+    """
+    Safely iterate over SDK responses that might be dict, list, or None.
+
+    This utility function handles type inconsistencies in LimaCharlie SDK responses
+    where methods may return dicts, lists, or None depending on API conditions.
+
+    Args:
+        obj: The response object from SDK (dict, list, or None)
+        default_key_extractor: Optional callable to extract keys from list items
+
+    Yields:
+        Tuples of (key, value) for iteration, mimicking dict.items() behavior
+
+    Examples:
+        # For dict responses (normal case)
+        for k, v in safe_dict_items({'a': 1, 'b': 2}):
+            print(k, v)  # a 1, b 2
+
+        # For list responses (error case)
+        for k, v in safe_dict_items([{'sid': 'x'}, {'sid': 'y'}]):
+            print(k, v)  # x {'sid': 'x'}, y {'sid': 'y'}
+
+        # For None responses (empty case)
+        for k, v in safe_dict_items(None):
+            pass  # No iteration
+    """
+    if isinstance(obj, dict):
+        # Normal case: dict response, yield items directly
+        yield from obj.items()
+    elif isinstance(obj, list):
+        # Error case: list response, try to extract meaningful keys
+        for idx, item in enumerate(obj):
+            if default_key_extractor and callable(default_key_extractor):
+                # Use custom key extractor if provided
+                try:
+                    key = default_key_extractor(item)
+                except (KeyError, TypeError, AttributeError):
+                    key = str(idx)
+            elif isinstance(item, dict) and 'sid' in item:
+                # Common case: sensor lists with sid field
+                key = item['sid']
+            elif isinstance(item, dict) and 'id' in item:
+                # Alternative: id field
+                key = item['id']
+            elif isinstance(item, str):
+                # List of strings (like getAllOnlineSensors returns)
+                key = item
+                # Value is the item itself
+                yield (key, item)
+                continue
+            else:
+                # Fallback: use index as key
+                key = str(idx)
+            yield (key, item)
+    # For None or other types, yield nothing (empty iteration)
 
 def get_profile_tools(profile_name: str) -> set[str]:
     """
@@ -1305,11 +1375,15 @@ class RequestContextMiddleware:
 
 def safe_simple_request(sensor: limacharlie.Sensor, cmd: str) -> Any:
     try:
+        logging.info(f"safe_simple_request: Starting simpleRequest() for command: {cmd}")
         ret = sensor.simpleRequest(cmd)
         if ret is None:
+            logging.info(f"safe_simple_request: simpleRequest() returned None (timeout)")
             return {"error": "timeout waiting for sensor response"}
+        logging.info(f"safe_simple_request: simpleRequest() succeeded")
         return ret
     except Exception as e:
+        logging.info(f"safe_simple_request: simpleRequest() raised exception: {e}")
         return {"error": f"Error issuing sensor request: {e}"}
 
 def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
@@ -1319,18 +1393,51 @@ def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
         sdk = get_sdk_from_context(ctx)
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
-        
-        # Make SDK interactive
-        if not sdk._inv_id:
-            sdk._inv_id = f"mcp-{uuid.uuid4()}"
+
+        # CRITICAL: Force a FRESH JWT before making interactive
+        # Spout captures Manager._jwt at creation time and never updates it
+        # If JWT is close to expiring, Spout will keep reconnecting with expired JWT
+        # We MUST get a fresh JWT with full TTL before Spout creation
+        logging.info(f"execute_sensor_command: Forcing fresh JWT refresh before creating Spout")
+        try:
+            sdk._refreshJWT()  # Get brand new JWT with full expiry time
+            logging.info(f"execute_sensor_command: Fresh JWT obtained with full TTL")
+        except Exception as e:
+            logging.info(f"execute_sensor_command: JWT refresh failed: {e}")
+            return {"error": f"Authentication failed: {e}"}
+
+        # Always set a fresh investigation ID for each command
+        # This ensures we get a new Spout connection and Output in LimaCharlie
+        old_inv_id = getattr(sdk, '_inv_id', None)
+        sdk._inv_id = f"mcp-{uuid.uuid4()}"
+        logging.info(f"execute_sensor_command: Setting investigation ID: {sdk._inv_id} (was: {old_inv_id})")
+
+        # Force fresh Spout creation if SDK is already interactive
+        # This prevents reusing stale Spout connections across requests
+        if sdk._is_interactive:
+            logging.info(f"execute_sensor_command: SDK already interactive, forcing Spout refresh")
+            if hasattr(sdk, '_spout') and sdk._spout:
+                try:
+                    sdk._spout.shutdown()
+                except Exception as e:
+                    logging.info(f"execute_sensor_command: Error shutting down old Spout: {e}")
+                sdk._spout = None
+            sdk._is_interactive = False
+
+        # Make SDK interactive (creates new Spout with valid JWT and investigation ID)
+        logging.info(f"execute_sensor_command: Making SDK interactive with inv_id={sdk._inv_id}")
         sdk.make_interactive()
-        
+        logging.info(f"execute_sensor_command: SDK interactive complete, Spout ready")
+
         # Get sensor and execute command
         sensor = sdk.sensor(sid)
-        return safe_simple_request(sensor, cmd)
+        logging.info(f"execute_sensor_command: Sending command '{cmd}' to sensor {sid}")
+        result = safe_simple_request(sensor, cmd)
+        logging.info(f"execute_sensor_command: Command completed")
+        return result
     except Exception as e:
         import traceback
-        logging.info(f"Tool error: {traceback.format_exc()}")
+        logging.info(f"execute_sensor_command: Error: {traceback.format_exc()}")
         return {"error": f"Error issuing sensor request: {e}"}
 
 
@@ -2203,11 +2310,16 @@ def get_detection_rules(ctx: Context) -> dict[str, Any]:
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
         hive = limacharlie.Hive(sdk, "dr-general")
-        genRules = {k: v.toJSON() for k, v in hive.list().items()}
+        genRulesData = hive.list()
+        genRules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(genRulesData)} if genRulesData else {}
+
         hive = limacharlie.Hive(sdk, "dr-managed")
-        managedRules = {k: v.toJSON() for k, v in hive.list().items()}
+        managedRulesData = hive.list()
+        managedRules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(managedRulesData)} if managedRulesData else {}
+
         hive = limacharlie.Hive(sdk, "dr-service")
-        svcRules = {k: v.toJSON() for k, v in hive.list().items()}
+        svcRulesData = hive.list()
+        svcRules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(svcRulesData)} if svcRulesData else {}
         return {"rules": {**genRules, **managedRules, **svcRules}}
     except Exception as e:
         return {"error": f"{e}"}
@@ -2231,7 +2343,8 @@ def get_fp_rules(ctx: Context) -> dict[str, Any]:
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
         hive = limacharlie.Hive(sdk, "fp")
-        rules = {k: v.toJSON() for k, v in hive.list().items()}
+        rulesData = hive.list()
+        rules = {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(rulesData)} if rulesData else {}
         return {"rules": rules}
     except Exception as e:
         return {"error": f"{e}"}
@@ -3086,39 +3199,27 @@ def get_sensor_info(sid: str, ctx: Context) -> dict[str, Any]:
 @mcp_tool_with_gcs()
 def get_online_sensors(ctx: Context) -> dict[str, Any]:
     """List all currently online sensors in the organization
-    
+
     Returns:
         dict[str, Any]: A dictionary containing either:
-            - "sensors" (list): List of online sensor IDs with basic information
+            - "sensors" (list): List of online sensor IDs (strings)
             - "error" (str): On failure, an error message string
     """
     start = time.time()
     logging.info(f"Tool called: get_online_sensors()")
-    
+
     try:
         sdk = get_sdk_from_context(ctx)
         if sdk is None:
             return {"error": "No authentication provided"}
-        
-        # Get all online sensors
-        online_sensors = sdk.getAllOnlineSensors()
-        
-        # Convert to list of dicts with useful info
-        sensor_list = []
-        for sid, sensor_info in online_sensors.items():
-            sensor_data = {
-                'sid': sid,
-                'hostname': sensor_info.get('hostname', 'Unknown'),
-                'platform': sensor_info.get('plat', 'Unknown'),
-                'architecture': sensor_info.get('arch', 'Unknown'),
-                'internal_ip': sensor_info.get('int_ip', 'Unknown'),
-                'external_ip': sensor_info.get('ext_ip', 'Unknown'),
-                'last_seen': sensor_info.get('last_seen', 0)
-            }
-            sensor_list.append(sensor_data)
-        
-        return {"sensors": sensor_list}
-        
+
+        # Get all online sensor IDs
+        # The SDK returns a list of SID strings
+        online_sids = sdk.getAllOnlineSensors()
+
+        # Return the SIDs directly - this is what the API provides
+        return {"sensors": online_sids if online_sids else []}
+
     except Exception as e:
         logging.info(f"Error in get_online_sensors: {str(e)}")
         return {"error": str(e)}
@@ -3148,12 +3249,22 @@ def search_hosts(hostname_expr: str, ctx: Context) -> dict[str, Any]:
         
         # Search for hosts matching the expression
         result = sdk.hosts(hostname_expr, as_dict=True)
-        
+
         # Convert to list format
+        # Note: SDK may return dict, list, or None
         sensor_list = []
-        for sid, sensor_info in result.items():
-            sensor_info['sid'] = sid
-            sensor_list.append(sensor_info)
+        if result:
+            for sid, sensor_info in safe_dict_items(result):
+                # Handle different response types
+                if isinstance(sensor_info, dict):
+                    sensor_info['sid'] = sid
+                    sensor_list.append(sensor_info)
+                elif isinstance(sensor_info, str):
+                    # If sensor_info is just a string (SID), create minimal dict
+                    sensor_list.append({'sid': sensor_info})
+                else:
+                    # Handle other types by creating minimal entry
+                    sensor_list.append({'sid': sid})
         
         return {"sensors": sensor_list}
         
@@ -3589,8 +3700,8 @@ def list_rules(hive_name: str, ctx: Context) -> dict[str, Any]:
         
         # List all rules
         rules = hive.list()
-        
-        return {"rules": {k: v.toJSON() for k, v in rules.items()} if rules else {}}
+
+        return {"rules": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(rules)} if rules else {}}
         
     except Exception as e:
         logging.info(f"Error in list_rules: {str(e)}")
@@ -3903,9 +4014,21 @@ def batch_search_iocs(
         if sdk is None:
             return {"error": "No authentication provided"}
         
+        # Transform list of dicts to dict of lists format expected by SDK
+        # Input: [{"type": "hash", "name": "hash1", "info": "summary"}, ...]
+        # Output: {"hash": ["hash1", "hash2"], "domain": ["dom1", "dom2"]}
+        transformed_objects = {}
+        for obj in objects:
+            obj_type = obj.get('type')
+            obj_name = obj.get('name')
+            if obj_type and obj_name:
+                if obj_type not in transformed_objects:
+                    transformed_objects[obj_type] = []
+                transformed_objects[obj_type].append(obj_name)
+
         # Perform batch IOC search
         results = sdk.getBatchObjectInformation(
-            objects=objects,
+            objects=transformed_objects,
             isCaseSensitive=False
         )
         
@@ -3996,7 +4119,7 @@ def list_user_orgs(ctx: Context) -> dict[str, Any]:
             return {"error": "No authentication provided"}
 
         # Call the user-level API to get all accessible orgs
-        orgs = sdk.userAccessibleOrgs()
+        orgs = sdk.userAccessibleOrgs(offset=0, limit=10000)
         return {"orgs": orgs if orgs else {}}
 
     except Exception as e:
@@ -4388,8 +4511,8 @@ def list_yara_rules(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "yara")
         rules = hive.list()
-        
-        return {"rules": {k: v.toJSON() for k, v in rules.items()} if rules else {}}
+
+        return {"rules": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(rules)} if rules else {}}
         
     except Exception as e:
         logging.info(f"Error in list_yara_rules: {str(e)}")
@@ -4600,8 +4723,8 @@ def list_lookups(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "lookup")
         lookups = hive.list()
-        
-        return {"lookups": {k: v.toJSON() for k, v in lookups.items()} if lookups else {}}
+
+        return {"lookups": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(lookups)} if lookups else {}}
         
     except Exception as e:
         logging.info(f"Error in list_lookups: {str(e)}")
@@ -4803,8 +4926,8 @@ def list_saved_queries(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "query")
         queries = hive.list()
-        
-        return {"queries": {k: v.toJSON() for k, v in queries.items()} if queries else {}}
+
+        return {"queries": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(queries)} if queries else {}}
         
     except Exception as e:
         logging.info(f"Error in list_saved_queries: {str(e)}")
@@ -5168,8 +5291,8 @@ def list_playbooks(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "playbook")
         playbooks = hive.list()
-        
-        return {"playbooks": {k: v.toJSON() for k, v in playbooks.items()} if playbooks else {}}
+
+        return {"playbooks": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(playbooks)} if playbooks else {}}
         
     except Exception as e:
         logging.info(f"Error in list_playbooks: {str(e)}")
@@ -5316,8 +5439,8 @@ def list_cloud_sensors(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "cloud_sensor")
         cloud_sensors = hive.list()
-        
-        return {"cloud_sensors": {k: v.toJSON() for k, v in cloud_sensors.items()} if cloud_sensors else {}}
+
+        return {"cloud_sensors": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(cloud_sensors)} if cloud_sensors else {}}
         
     except Exception as e:
         logging.info(f"Error in list_cloud_sensors: {str(e)}")
@@ -5464,8 +5587,8 @@ def list_external_adapters(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "external_adapter")
         adapters = hive.list()
-        
-        return {"adapters": {k: v.toJSON() for k, v in adapters.items()} if adapters else {}}
+
+        return {"adapters": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(adapters)} if adapters else {}}
         
     except Exception as e:
         logging.info(f"Error in list_external_adapters: {str(e)}")
@@ -5612,8 +5735,8 @@ def list_extension_configs(ctx: Context) -> dict[str, Any]:
         from limacharlie import Hive
         hive = Hive(sdk, "extension_config")
         configs = hive.list()
-        
-        return {"configs": {k: v.toJSON() for k, v in configs.items()} if configs else {}}
+
+        return {"configs": {k: v.toJSON() if hasattr(v, 'toJSON') else v for k, v in safe_dict_items(configs)} if configs else {}}
         
     except Exception as e:
         logging.info(f"Error in list_extension_configs: {str(e)}")
