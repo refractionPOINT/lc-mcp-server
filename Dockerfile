@@ -1,41 +1,69 @@
-# Use the official Python slim image
-FROM python:3.11-slim
+# Build stage
+FROM golang:1.23-alpine AS builder
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=8080
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
 
-# Set the working directory
+# Set working directory
+WORKDIR /build
+
+# Enable automatic Go toolchain downloading for dependency requirements
+ENV GOTOOLCHAIN=auto
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download && go mod verify
+
+# Copy source code
+COPY . .
+
+# Build the application
+# CGO_ENABLED=0 for static binary compatible with distroless
+# -ldflags="-w -s" to strip debug info and reduce binary size
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -ldflags="-w -s -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo 'dev')" \
+    -a -installsuffix cgo \
+    -o /build/lc-mcp-server \
+    ./cmd/server
+
+# Run tests to ensure binary is valid
+RUN CGO_ENABLED=0 go test -v ./...
+
+# Runtime stage - distroless for minimal attack surface
+FROM gcr.io/distroless/static-debian12:nonroot
+
+# Copy CA certificates from builder for HTTPS connections
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+# Copy timezone data for time-related functions
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
+
+# Copy the binary from builder
+COPY --from=builder /build/lc-mcp-server /app/lc-mcp-server
+
+# Set working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Distroless runs as nonroot user (uid=65532) by default
+# No need to explicitly set USER as it's built into the image
 
-# Install Python dependencies (includes MCP 1.19.0 from PyPI)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && python -c "import mcp; print('MCP package imported successfully')"
+# Environment variables
+ENV MCP_MODE=stdio \
+    MCP_PROFILE=all \
+    LOG_LEVEL=info \
+    SDK_CACHE_TTL=5m \
+    PORT=8080
 
-# Copy the application code and prompts
-COPY server.py .
-COPY prompts/ ./prompts/
-
-# Copy OAuth modules (optional, enabled via MCP_OAUTH_ENABLED env var)
-# SECURITY: Include rate_limiter.py and token_encryption.py for OAuth security features
-COPY oauth_*.py firebase_auth_bridge.py rate_limiter.py token_encryption.py ./
-
-# Copy OAuth HTML templates for provider selection
-COPY templates/ ./templates/
-
-# Copy audit logging modules and UID auth class
-COPY audit_logger.py audit_decorator.py uid_auth.py ./
-
-# Expose the application port
+# Health check metadata (Cloud Run will use this port)
 EXPOSE 8080
-ENV PORT=8080
 
-# Start the server
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--loop", "asyncio", "--log-level", "debug", "--limit-concurrency", "1000", "--limit-max-requests", "10000"]
+# Entrypoint
+ENTRYPOINT ["/app/lc-mcp-server"]
+
+# Labels for container metadata
+LABEL org.opencontainers.image.source="https://github.com/refractionPOINT/lc-mcp-server" \
+      org.opencontainers.image.description="LimaCharlie MCP Server - Go Implementation" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      maintainer="refractionPOINT"
