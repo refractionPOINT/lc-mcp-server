@@ -1394,6 +1394,18 @@ def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
         if not sdk:
             return {"error": "Authentication failed - no SDK available"}
 
+        # CRITICAL: Force JWT population before making interactive
+        # The Manager._jwt is initialized as None and only populated on first API call
+        # Spout will capture whatever _jwt value exists when make_interactive() is called
+        # So we MUST ensure JWT is populated first to avoid auth failures
+        logging.info(f"execute_sensor_command: Ensuring JWT is populated before creating Spout")
+        try:
+            sdk.testAuth()  # This calls _apiCall() which triggers _refreshJWT()
+            logging.info(f"execute_sensor_command: JWT is now populated and valid")
+        except Exception as e:
+            logging.info(f"execute_sensor_command: testAuth() failed: {e}")
+            return {"error": f"Authentication failed: {e}"}
+
         # Always set a fresh investigation ID for each command
         # This ensures we get a new Spout connection and Output in LimaCharlie
         old_inv_id = getattr(sdk, '_inv_id', None)
@@ -1412,15 +1424,9 @@ def execute_sensor_command(ctx: Context, sid: str, cmd: str) -> dict[str, Any]:
                 sdk._spout = None
             sdk._is_interactive = False
 
-        # Make SDK interactive (creates new Spout with investigation ID)
+        # Make SDK interactive (creates new Spout with valid JWT and investigation ID)
         logging.info(f"execute_sensor_command: Making SDK interactive with inv_id={sdk._inv_id}")
         sdk.make_interactive()
-
-        # Wait for Spout thread to initialize and start listening for responses
-        # The background thread needs time to: start executing, open stream connection,
-        # and enter the iter_lines() loop before we send tasks
-        logging.info(f"execute_sensor_command: Waiting 2 seconds for Spout thread to initialize...")
-        time.sleep(2)
         logging.info(f"execute_sensor_command: SDK interactive complete, Spout ready")
 
         # Get sensor and execute command
