@@ -4119,7 +4119,7 @@ def list_user_orgs(ctx: Context) -> dict[str, Any]:
             return {"error": "No authentication provided"}
 
         # Call the user-level API to get all accessible orgs
-        orgs = sdk.userAccessibleOrgs()
+        orgs = sdk.userAccessibleOrgs(offset=0, limit=10000)
         return {"orgs": orgs if orgs else {}}
 
     except Exception as e:
