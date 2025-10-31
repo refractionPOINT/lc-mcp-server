@@ -308,9 +308,9 @@ func TestWithOID(t *testing.T) {
 
 		// Test various invalid OIDs
 		invalidOIDs := []string{
-			"",                          // empty
-			"org!@#$",                   // invalid characters
-			string(make([]byte, 200)),   // too long
+			"",                        // empty
+			"org!@#$",                 // invalid characters
+			string(make([]byte, 200)), // too long
 		}
 
 		for _, invalidOID := range invalidOIDs {

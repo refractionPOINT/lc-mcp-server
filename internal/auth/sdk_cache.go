@@ -26,7 +26,7 @@ type SDKCache struct {
 	mu            sync.RWMutex
 	cache         map[string]*CachedSDK
 	ttl           time.Duration
-	maxSize       int                    // Maximum number of cached SDK instances
+	maxSize       int // Maximum number of cached SDK instances
 	logger        *logrus.Logger
 	cancelCleanup context.CancelFunc // For stopping the cleanup goroutine
 	metrics       struct {
@@ -107,8 +107,8 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 					c.mu.Unlock()
 					atomic.AddUint64(&c.metrics.evictions, 1)
 					c.logger.WithFields(logrus.Fields{
-						"cache_key": cacheKey[:8] + "...",
-						"expired_at": tokenExpiry.Format(time.RFC3339),
+						"cache_key":        cacheKey[:8] + "...",
+						"expired_at":       tokenExpiry.Format(time.RFC3339),
 						"age_since_expiry": time.Since(tokenExpiry),
 					}).Info("Invalidated cache entry: JWT token expired")
 

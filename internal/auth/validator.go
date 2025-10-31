@@ -23,11 +23,11 @@ var (
 	ErrSuspiciousUID = errors.New("UID appears to be a token or secret")
 
 	// Regular expressions for detecting suspicious patterns
-	jwtPattern     = regexp.MustCompile(`^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$`)
-	hexPattern     = regexp.MustCompile(`^[0-9a-fA-F]{32,}$`)
-	base64Pattern  = regexp.MustCompile(`^[A-Za-z0-9+/]{32,}={0,2}$`)
-	uidPattern     = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
-	emailPattern   = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+	jwtPattern    = regexp.MustCompile(`^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$`)
+	hexPattern    = regexp.MustCompile(`^[0-9a-fA-F]{32,}$`)
+	base64Pattern = regexp.MustCompile(`^[A-Za-z0-9+/]{32,}={0,2}$`)
+	uidPattern    = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+	emailPattern  = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 )
 
 // ValidateUID validates a UID to prevent security issues

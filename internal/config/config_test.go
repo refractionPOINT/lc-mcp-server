@@ -12,12 +12,12 @@ import (
 func TestLoad(t *testing.T) {
 	// Save original env vars
 	origEnv := map[string]string{
-		"MCP_MODE":      os.Getenv("MCP_MODE"),
-		"MCP_PROFILE":   os.Getenv("MCP_PROFILE"),
-		"LOG_LEVEL":     os.Getenv("LOG_LEVEL"),
-		"LC_OID":        os.Getenv("LC_OID"),
-		"LC_API_KEY":    os.Getenv("LC_API_KEY"),
-		"LC_UID":        os.Getenv("LC_UID"),
+		"MCP_MODE":       os.Getenv("MCP_MODE"),
+		"MCP_PROFILE":    os.Getenv("MCP_PROFILE"),
+		"LOG_LEVEL":      os.Getenv("LOG_LEVEL"),
+		"LC_OID":         os.Getenv("LC_OID"),
+		"LC_API_KEY":     os.Getenv("LC_API_KEY"),
+		"LC_UID":         os.Getenv("LC_UID"),
 		"LC_CURRENT_ENV": os.Getenv("LC_CURRENT_ENV"),
 	}
 

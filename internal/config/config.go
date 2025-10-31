@@ -164,14 +164,14 @@ func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
 func (c *Config) Validate() error {
 	// Validate profile
 	validProfiles := map[string]bool{
-		"core":              true,
-		"historical_data":   true,
-		"live_investigation": true,
-		"threat_response":   true,
-		"fleet_management":  true,
+		"core":                  true,
+		"historical_data":       true,
+		"live_investigation":    true,
+		"threat_response":       true,
+		"fleet_management":      true,
 		"detection_engineering": true,
-		"platform_admin":    true,
-		"all":               true,
+		"platform_admin":        true,
+		"all":                   true,
 	}
 
 	if !validProfiles[c.Profile] {
