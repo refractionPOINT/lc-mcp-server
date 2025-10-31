@@ -556,10 +556,8 @@ func RegisterCreateAPIKey() {
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
-				"key":         key.Key, // Only returned on creation
-				"key_hash":    key.KeyHash,
-				"description": key.Description,
-				"permissions": key.Permissions,
+				"key":      key.Key,     // Only returned on creation
+				"key_hash": key.KeyHash, // Use this to retrieve full key details later
 			}), nil
 		},
 	})
