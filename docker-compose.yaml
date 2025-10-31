@@ -1,0 +1,123 @@
+# Docker Compose for local development and testing
+#
+# Usage:
+#   docker-compose up --build
+#   docker-compose run --rm app go test ./...
+
+version: '3.8'
+
+services:
+  # LimaCharlie MCP Server
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: lc-mcp-server:local
+    container_name: lc-mcp-server
+
+    # Environment variables
+    environment:
+      # Server configuration
+      - MCP_MODE=${MCP_MODE:-stdio}
+      - MCP_PROFILE=${MCP_PROFILE:-all}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - SDK_CACHE_TTL=${SDK_CACHE_TTL:-5m}
+
+      # Authentication (Normal mode)
+      - LC_OID=${LC_OID:-}
+      - LC_API_KEY=${LC_API_KEY:-}
+
+      # Authentication (UID mode)
+      - LC_UID=${LC_UID:-}
+
+      # OAuth configuration
+      - LC_JWT=${LC_JWT:-}
+      - LC_CURRENT_ENV=${LC_CURRENT_ENV:-}
+      - LC_JWT_ISSUER=${LC_JWT_ISSUER:-}
+      - LC_JWT_AUDIENCE=${LC_JWT_AUDIENCE:-}
+      - LC_JWT_SKIP_SIGNATURE=${LC_JWT_SKIP_SIGNATURE:-false}
+
+      # Optional audit logging
+      - AUDIT_LOG_ENABLED=${AUDIT_LOG_ENABLED:-false}
+      - AUDIT_LOG_LEVEL=${AUDIT_LOG_LEVEL:-MEDIUM}
+
+    # Ports (if running in HTTP mode)
+    ports:
+      - "8080:8080"
+
+    # Volume mounts for local development
+    volumes:
+      # Mount local code for development (comment out for production)
+      # - ./:/app:ro
+
+      # Mount config directory if needed
+      - ${HOME}/.config/lc-mcp:/config:ro
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "/app/lc-mcp-server", "version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Read-only root filesystem (distroless best practice)
+    read_only: true
+
+    # User (nonroot from distroless)
+    user: "65532:65532"
+
+    # Tmpfs for writable temp directories
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+
+  # Development container with Go tools
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: builder
+    image: lc-mcp-server:dev
+    container_name: lc-mcp-server-dev
+
+    environment:
+      - CGO_ENABLED=0
+      - GOOS=linux
+      - GOARCH=amd64
+
+    volumes:
+      - ./:/build:rw
+      - go-mod-cache:/go/pkg/mod
+
+    command: ["sh", "-c", "go test -v ./... && go build -o /build/server ./cmd/server"]
+
+    working_dir: /build
+
+# Volumes for caching
+volumes:
+  go-mod-cache:
+    driver: local
+
+# Network configuration
+networks:
+  default:
+    driver: bridge
