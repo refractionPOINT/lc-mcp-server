@@ -16,7 +16,6 @@ func init() {
 	RegisterGetUsageStats()
 	RegisterGetBillingDetails()
 	RegisterGetOrgInvoiceURL()
-	RegisterGetSKUDefinitions()
 	RegisterCreateOrg()
 	RegisterListUserOrgs()
 	RegisterGetOrgErrors()
@@ -209,50 +208,18 @@ func RegisterGetOrgInvoiceURL() {
 				return tools.ErrorResultf("failed to get invoice URL: %v", err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
-				"url":    invoiceURL.URL,
-				"year":   invoiceURL.Year,
-				"month":  invoiceURL.Month,
-				"format": invoiceURL.Format,
-			}), nil
-		},
-	})
-}
-
-// RegisterGetSKUDefinitions registers the get_sku_definitions tool
-func RegisterGetSKUDefinitions() {
-	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "get_sku_definitions",
-		Description: "Get SKU pricing definitions for the organization",
-		Profile:     "platform_admin",
-		RequiresOID: true,
-		Schema: mcp.NewTool("get_sku_definitions",
-			mcp.WithDescription("Get SKU pricing definitions for the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
-		),
-		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
+			// Add year, month, format for convenience
+			result := make(map[string]interface{})
+			for k, v := range invoiceURL {
+				result[k] = v
+			}
+			result["year"] = int(year)
+			result["month"] = int(month)
+			if format != "" {
+				result["format"] = format
 			}
 
-			org, err := getOrganization(ctx)
-			if err != nil {
-				return tools.ErrorResultf("failed to get organization: %v", err), nil
-			}
-
-			skus, err := org.GetSKUDefinitions()
-			if err != nil {
-				return tools.ErrorResultf("failed to get SKU definitions: %v", err), nil
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"definitions": skus,
-			}), nil
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

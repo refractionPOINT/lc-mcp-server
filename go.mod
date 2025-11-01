@@ -5,7 +5,7 @@ go 1.24
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/mark3labs/mcp-go v0.42.0
-	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251030235259-d3e1400ac499
+	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251101221658-8d880b746e89
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 )
