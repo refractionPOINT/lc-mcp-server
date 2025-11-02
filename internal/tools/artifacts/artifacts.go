@@ -135,7 +135,7 @@ func RegisterGetArtifact() {
 				// We'll use the GenericGETRequest to get the artifact metadata which includes the URL
 				metadata := lc.Dict{}
 				path := fmt.Sprintf("insight/%s/artifacts/%s", org.GetOID(), artifactID)
-				if err := org.GenericGETRequest(path, nil, &metadata); err != nil {
+				if err := org.GenericGETRequest(path, lc.Dict{}, &metadata); err != nil {
 					return tools.ErrorResultf("failed to get artifact URL: %v", err), nil
 				}
 

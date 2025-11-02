@@ -1,0 +1,37 @@
+{
+  "mcpServers": {
+    "limacharlie": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
+      "env": {
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "all",
+        "LC_OID": "your-organization-id",
+        "LC_API_KEY": "your-api-key",
+        "LOG_LEVEL": "info"
+      }
+    },
+    "limacharlie-readonly": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
+      "env": {
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "historical_data_readonly",
+        "LC_OID": "your-organization-id",
+        "LC_API_KEY": "your-api-key",
+        "LOG_LEVEL": "info"
+      }
+    },
+    "limacharlie-uid-mode": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
+      "env": {
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "all",
+        "LC_UID": "your-user-email@example.com",
+        "LC_API_KEY": "your-api-key",
+        "LOG_LEVEL": "info"
+      }
+    }
+  }
+}

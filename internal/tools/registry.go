@@ -42,6 +42,31 @@ var ProfileDefinitions = map[string][]string{
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
+		// Event schemas
+		"get_event_schema",
+		"get_event_schemas_batch",
+		"get_event_types_with_schemas",
+		"get_event_types_with_schemas_for_platform",
+		// Platform info
+		"get_platform_names",
+		"list_with_platform",
+	},
+	"historical_data_readonly": {
+		// Same as historical_data but conceptually read-only
+		"run_lcql_query",
+		"get_historic_events",
+		"get_historic_detections",
+		"search_iocs",
+		"batch_search_iocs",
+		"get_time_when_sensor_has_data",
+		// Event schemas (read-only)
+		"get_event_schema",
+		"get_event_schemas_batch",
+		"get_event_types_with_schemas",
+		"get_event_types_with_schemas_for_platform",
+		// Platform info (read-only)
+		"get_platform_names",
+		"list_with_platform",
 	},
 	"live_investigation": {
 		"get_processes",
@@ -60,6 +85,9 @@ var ProfileDefinitions = map[string][]string{
 		"get_packages",
 		"get_registry_keys",
 		"find_strings",
+		// Artifacts
+		"list_artifacts",
+		"get_artifact",
 	},
 	"threat_response": {
 		"isolate_network",
@@ -79,45 +107,107 @@ var ProfileDefinitions = map[string][]string{
 		"get_cloud_sensor",
 		"set_cloud_sensor",
 		"delete_cloud_sensor",
+		// Platform info
+		"get_platform_names",
+		"list_with_platform",
 	},
 	"detection_engineering": {
 		"get_detection_rules",
+		// D&R General Rules
 		"list_dr_general_rules",
 		"get_dr_general_rule",
 		"set_dr_general_rule",
 		"delete_dr_general_rule",
+		// D&R Managed Rules
+		"list_dr_managed_rules",
+		"get_dr_managed_rule",
+		"set_dr_managed_rule",
+		"delete_dr_managed_rule",
+		// YARA Rules
 		"list_yara_rules",
 		"get_yara_rule",
 		"set_yara_rule",
 		"delete_yara_rule",
 		"validate_yara_rule",
+		// False Positive Rules
 		"get_fp_rules",
 		"get_fp_rule",
 		"set_fp_rule",
 		"delete_fp_rule",
+		// MITRE ATT&CK
 		"get_mitre_report",
+		// Event schemas (for rule creation)
+		"get_event_schema",
+		"get_event_schemas_batch",
+		"get_event_types_with_schemas",
+		"get_event_types_with_schemas_for_platform",
 	},
 	"platform_admin": {
+		// Organization Management
 		"get_org_info",
 		"get_usage_stats",
 		"get_billing_details",
+		"get_org_errors",
+		"dismiss_org_error",
+		"get_org_invoice_url",
+		"get_sku_definitions",
 		"create_org",
 		"list_user_orgs",
+		// Outputs
 		"list_outputs",
 		"add_output",
 		"delete_output",
+		// Secrets
 		"list_secrets",
 		"get_secret",
 		"set_secret",
 		"delete_secret",
+		// Lookups
 		"list_lookups",
 		"get_lookup",
 		"set_lookup",
 		"delete_lookup",
 		"query_lookup",
+		// Playbooks
+		"list_playbooks",
+		"get_playbook",
+		"set_playbook",
+		"delete_playbook",
+		// External Adapters
+		"list_external_adapters",
+		"get_external_adapter",
+		"set_external_adapter",
+		"delete_external_adapter",
+		// Extensions
+		"list_extension_configs",
+		"get_extension_config",
+		"set_extension_config",
+		"delete_extension_config",
+		"subscribe_to_extension",
+		"unsubscribe_from_extension",
+		// Hive Rules
+		"list_rules",
+		"get_rule",
+		"set_rule",
+		"delete_rule",
+		// Saved Queries
+		"list_saved_queries",
+		"get_saved_query",
+		"set_saved_query",
+		"delete_saved_query",
+		// API Keys
 		"list_api_keys",
 		"create_api_key",
 		"delete_api_key",
+	},
+	"ai_powered": {
+		// AI-powered generation tools (to be implemented)
+		"generate_lcql_query",
+		"generate_dr_rule_detection",
+		"generate_dr_rule_respond",
+		"generate_sensor_selector",
+		"generate_python_playbook",
+		"generate_detection_summary",
 	},
 }
 

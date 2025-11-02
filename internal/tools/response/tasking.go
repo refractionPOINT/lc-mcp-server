@@ -100,7 +100,7 @@ func RegisterListReliableTasks() {
 
 			// List reliable tasks using GenericGETRequest
 			resp := lc.Dict{}
-			if err := org.GenericGETRequest("reliable_tasking", nil, &resp); err != nil {
+			if err := org.GenericGETRequest("reliable_tasking", lc.Dict{}, &resp); err != nil {
 				return tools.ErrorResultf("failed to list reliable tasks: %v", err), nil
 			}
 
@@ -141,11 +141,12 @@ func RegisterDeleteSensor() {
 				return tools.ErrorResultf("sensor not found: %s", sid), nil
 			}
 
-			// Use GenericDELETERequest to delete the sensor
-			resp := lc.Dict{}
-			if err := org.GenericDELETERequest(sid, &resp); err != nil {
+			// Delete the sensor using the SDK method
+			if err := sensor.Delete(); err != nil {
 				return tools.ErrorResultf("failed to delete sensor: %v", err), nil
 			}
+
+			resp := map[string]interface{}{}
 
 			return tools.SuccessResult(map[string]interface{}{
 				"status":  "success",
