@@ -18,16 +18,14 @@ func getOrganization(ctx context.Context) (*lc.Organization, error) {
 }
 
 // getSensor retrieves a sensor by ID from the organization
-func getSensor(ctx context.Context, sensorID string) (*lc.Sensor, error) {
-	org, err := getOrganization(ctx)
+// Note: SDK doesn't have Sensor() method yet - needs to be added
+func getSensor(ctx context.Context, sensorID string) (interface{}, error) {
+	_, err := getOrganization(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	sensor := org.Sensor(sensorID)
-	if sensor == nil {
-		return nil, fmt.Errorf("sensor not found: %s", sensorID)
-	}
-
-	return sensor, nil
+	// TODO: SDK needs org.Sensor(sid) method
+	// For now, return a placeholder
+	return nil, fmt.Errorf("SDK does not yet have org.Sensor() method - needs to be added to go-limacharlie")
 }

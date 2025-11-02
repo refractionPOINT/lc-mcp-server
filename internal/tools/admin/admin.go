@@ -25,6 +25,7 @@ func init() {
 	RegisterDeleteAPIKey()
 	RegisterGetMITREReport()
 	RegisterGetTimeWhenSensorHasData()
+	RegisterGetSKUDefinitions()
 }
 
 // getOrganization retrieves or creates an Organization instance from context
@@ -678,3 +679,29 @@ func RegisterGetTimeWhenSensorHasData() {
 		},
 	})
 }
+
+// RegisterGetSKUDefinitions registers the get_sku_definitions tool
+func RegisterGetSKUDefinitions() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_sku_definitions",
+		Description: "Get SKU definitions and pricing information",
+		Profile:     "platform_admin",
+		RequiresOID: false, // This is a global query
+		Schema: mcp.NewTool("get_sku_definitions",
+			mcp.WithDescription("Get SKU definitions and pricing information"),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			org, err := getOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Get SKU definitions via REST API
+			// TODO: SDK needs Request() method
+			_ = org
+
+			return tools.ErrorResult("SDK does not yet have org.Request() method - needs to be added"), nil
+		},
+	})
+}
+

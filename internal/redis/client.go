@@ -114,6 +114,21 @@ func (c *Client) Delete(ctx context.Context, keys ...string) error {
 	return c.client.Del(ctx, keys...).Err()
 }
 
+// Del is an alias for Delete
+func (c *Client) Del(ctx context.Context, keys ...string) error {
+	return c.Delete(ctx, keys...)
+}
+
+// Incr increments a key's value atomically and returns the new value
+func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
+	return c.client.Incr(ctx, key).Result()
+}
+
+// Expire sets a timeout on a key
+func (c *Client) Expire(ctx context.Context, key string, expiration time.Duration) error {
+	return c.client.Expire(ctx, key, expiration).Err()
+}
+
 // Exists checks if keys exist
 func (c *Client) Exists(ctx context.Context, keys ...string) (int64, error) {
 	return c.client.Exists(ctx, keys...).Result()

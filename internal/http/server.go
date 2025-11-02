@@ -2,11 +2,14 @@ package http
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
 	"github.com/refractionpoint/lc-mcp-go/internal/crypto"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/endpoints"
@@ -14,7 +17,9 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/token"
+	"github.com/refractionpoint/lc-mcp-go/internal/ratelimit"
 	"github.com/refractionpoint/lc-mcp-go/internal/redis"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 	"github.com/sirupsen/logrus"
 )
 
@@ -29,10 +34,13 @@ type Server struct {
 	tokenManager    *token.Manager
 	metadataProvider *metadata.Provider
 	oauthHandlers   *endpoints.Handlers
+	sdkCache        *auth.SDKCache
+	profile         string
+	rateLimiter     *ratelimit.Limiter
 }
 
 // New creates a new HTTP server instance using standard library
-func New(cfg *config.Config, logger *logrus.Logger) (*Server, error) {
+func New(cfg *config.Config, logger *logrus.Logger, sdkCache *auth.SDKCache, profile string) (*Server, error) {
 	// Build Redis URL from components
 	redisURL := fmt.Sprintf("redis://%s/%d", cfg.RedisAddress, cfg.RedisDB)
 	if cfg.RedisPassword != "" {
@@ -75,6 +83,9 @@ func New(cfg *config.Config, logger *logrus.Logger) (*Server, error) {
 	// Initialize metadata provider
 	metadataProvider := metadata.NewProvider(logger)
 
+	// Initialize rate limiter
+	rateLimiter := ratelimit.NewLimiter(redisClient, logger)
+
 	// Initialize OAuth handlers
 	oauthHandlers, err := endpoints.NewHandlers(
 		stateManager,
@@ -98,6 +109,9 @@ func New(cfg *config.Config, logger *logrus.Logger) (*Server, error) {
 		tokenManager:    tokenManager,
 		metadataProvider: metadataProvider,
 		oauthHandlers:   oauthHandlers,
+		sdkCache:        sdkCache,
+		profile:         profile,
+		rateLimiter:     rateLimiter,
 	}
 
 	// Setup routes
@@ -326,7 +340,198 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	s.writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "MCP handler not yet implemented"})
+
+	// Parse JSON-RPC request
+	var req struct {
+		JSONRPC string                 `json:"jsonrpc"`
+		ID      interface{}            `json:"id"`
+		Method  string                 `json:"method"`
+		Params  map[string]interface{} `json:"params"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeJSONRPCError(w, nil, -32700, "Parse error", err.Error())
+		return
+	}
+
+	// Validate JSON-RPC version
+	if req.JSONRPC != "2.0" {
+		s.writeJSONRPCError(w, req.ID, -32600, "Invalid Request", "jsonrpc must be '2.0'")
+		return
+	}
+
+	// Handle different MCP methods
+	switch req.Method {
+	case "tools/call":
+		s.handleToolCall(w, r, req.ID, req.Params)
+	case "tools/list":
+		s.handleToolsList(w, r, req.ID)
+	default:
+		s.writeJSONRPCError(w, req.ID, -32601, "Method not found", fmt.Sprintf("Unknown method: %s", req.Method))
+	}
+}
+
+func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id interface{}, params map[string]interface{}) {
+	// Extract tool name and arguments
+	toolName, ok := params["name"].(string)
+	if !ok {
+		s.writeJSONRPCError(w, id, -32602, "Invalid params", "Missing or invalid 'name' parameter")
+		return
+	}
+
+	arguments, ok := params["arguments"].(map[string]interface{})
+	if !ok {
+		arguments = make(map[string]interface{})
+	}
+
+	// Extract authentication from Bearer token
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Missing Authorization header")
+		return
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Invalid Authorization header format")
+		return
+	}
+
+	bearerToken := parts[1]
+
+	// Verify and extract UID from token
+	// For now, we'll decode the JWT to extract the UID
+	// In production, this should validate the signature
+	uid, err := s.extractUIDFromToken(bearerToken)
+	if err != nil {
+		s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
+		return
+	}
+
+	// Extract OID from arguments if present (for UID mode)
+	oid := ""
+	if oidVal, ok := arguments["oid"].(string); ok {
+		oid = oidVal
+	}
+
+	// Create auth context
+	authCtx := &auth.AuthContext{
+		Mode:     auth.AuthModeUIDOAuth,
+		UID:      uid,
+		JWTToken: bearerToken,
+		OID:      oid,
+	}
+
+	// Create request context with auth
+	ctx := r.Context()
+	ctx = auth.WithAuthContext(ctx, authCtx)
+	ctx = auth.WithSDKCache(ctx, s.sdkCache)
+
+	// Look up the tool
+	tool, ok := tools.GetTool(toolName)
+	if !ok {
+		s.writeJSONRPCError(w, id, -32601, "Tool not found", fmt.Sprintf("Unknown tool: %s", toolName))
+		return
+	}
+
+	// Call the tool handler
+	result, err := tool.Handler(ctx, arguments)
+	if err != nil {
+		s.writeJSONRPCError(w, id, -32000, "Tool execution error", err.Error())
+		return
+	}
+
+	// Return success response
+	s.writeJSONRPCSuccess(w, id, result)
+}
+
+func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id interface{}) {
+	// Get tools for the configured profile
+	toolNames := tools.GetToolsForProfile(s.profile)
+
+	toolList := make([]map[string]interface{}, 0, len(toolNames))
+	for _, name := range toolNames {
+		tool, ok := tools.GetTool(name)
+		if !ok {
+			continue
+		}
+
+		toolList = append(toolList, map[string]interface{}{
+			"name":        tool.Name,
+			"description": tool.Description,
+			"inputSchema": tool.Schema.InputSchema,
+		})
+	}
+
+	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
+		"tools": toolList,
+	})
+}
+
+func (s *Server) extractUIDFromToken(token string) (string, error) {
+	// Simple JWT parsing (HS256/RS256)
+	// In production, use a proper JWT library
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT format")
+	}
+
+	// Decode payload (second part)
+	payload, err := s.base64Decode(parts[1])
+	if err != nil {
+		return "", fmt.Errorf("failed to decode JWT payload: %w", err)
+	}
+
+	var claims struct {
+		UID   string `json:"uid"`
+		Email string `json:"email"`
+		Sub   string `json:"sub"`
+	}
+
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return "", fmt.Errorf("failed to parse JWT claims: %w", err)
+	}
+
+	// Try UID field first, then email, then sub
+	if claims.UID != "" {
+		return claims.UID, nil
+	}
+	if claims.Email != "" {
+		return claims.Email, nil
+	}
+	if claims.Sub != "" {
+		return claims.Sub, nil
+	}
+
+	return "", fmt.Errorf("no UID found in token")
+}
+
+func (s *Server) base64Decode(str string) ([]byte, error) {
+	// JWT uses base64url encoding (RFC 4648) without padding
+	// Go's base64.RawURLEncoding handles this correctly
+	return base64.RawURLEncoding.DecodeString(str)
+}
+
+func (s *Server) writeJSONRPCSuccess(w http.ResponseWriter, id interface{}, result interface{}) {
+	response := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"result":  result,
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) writeJSONRPCError(w http.ResponseWriter, id interface{}, code int, message string, data string) {
+	response := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]interface{}{
+			"code":    code,
+			"message": message,
+			"data":    data,
+		},
+	}
+	s.writeJSON(w, http.StatusOK, response)
 }
 
 // writeJSON writes a JSON response

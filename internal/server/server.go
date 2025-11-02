@@ -60,7 +60,7 @@ func New(cfg *config.Config, logger *logrus.Logger) (*Server, error) {
 
 	case "http":
 		// Create HTTP server for OAuth mode
-		httpSrv, err := httpserver.New(cfg, logger)
+		httpSrv, err := httpserver.New(cfg, logger, sdkCache, cfg.Profile)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create HTTP server: %w", err)
 		}

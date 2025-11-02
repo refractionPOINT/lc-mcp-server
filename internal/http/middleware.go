@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/refractionpoint/lc-mcp-go/internal/ratelimit"
 	"github.com/sirupsen/logrus"
 )
 
@@ -23,6 +24,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	// Chain middleware (executes in order)
 	handler := next
 	handler = s.requestIDMiddleware(handler)
+	handler = s.rateLimitMiddleware(handler)
 	handler = s.corsMiddleware(handler)
 	handler = s.loggingMiddleware(handler)
 	handler = s.recoveryMiddleware(handler)
@@ -132,6 +134,64 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// rateLimitMiddleware implements rate limiting for endpoints
+func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Determine endpoint type for rate limiting
+		endpointType := getEndpointType(r.URL.Path)
+
+		// Get rate limit config for this endpoint
+		cfg, ok := ratelimit.DefaultConfigs[endpointType]
+		if !ok {
+			cfg = ratelimit.DefaultConfigs["default"]
+		}
+
+		// Use client IP as rate limit key
+		clientIP := getClientIP(r)
+		rateLimitKey := clientIP + ":" + endpointType
+
+		// Check rate limit
+		allowed, err := s.rateLimiter.Allow(r.Context(), rateLimitKey, cfg)
+		if err != nil {
+			// Log error but continue (fail open)
+			s.logger.WithError(err).Warn("Rate limit check error")
+		}
+
+		if !allowed {
+			// Return 429 Too Many Requests
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Retry-After", "60")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"rate_limit_exceeded","error_description":"Too many requests. Please try again later."}`))
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// getEndpointType determines the rate limit category for a path
+func getEndpointType(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/authorize"):
+		return "oauth_authorize"
+	case strings.HasPrefix(path, "/token"):
+		return "oauth_token"
+	case strings.HasPrefix(path, "/oauth/callback"):
+		return "oauth_callback"
+	case strings.HasPrefix(path, "/mcp") ||
+		 strings.Contains(path, "historical_data") ||
+		 strings.Contains(path, "live_investigation") ||
+		 strings.Contains(path, "threat_response") ||
+		 strings.Contains(path, "fleet_management") ||
+		 strings.Contains(path, "detection_engineering") ||
+		 strings.Contains(path, "platform_admin"):
+		return "mcp_request"
+	default:
+		return "default"
+	}
 }
 
 // authMiddleware validates OAuth Bearer tokens (will be implemented in Phase 4)

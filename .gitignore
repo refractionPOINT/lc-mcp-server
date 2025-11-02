@@ -49,3 +49,4 @@ bin/
 .env
 .env.local
 lc-mcp-server
+__pycache__/

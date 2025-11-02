@@ -14,6 +14,8 @@ func init() {
 	RegisterRunLCQLQuery()
 	RegisterGetHistoricDetections()
 	RegisterSearchIOCs()
+	RegisterBatchSearchIOCs()
+	RegisterGetTimeWhenSensorHasData()
 }
 
 // getSDKCache retrieves the SDK cache from context
@@ -239,6 +241,99 @@ func RegisterSearchIOCs() {
 			}
 
 			return tools.SuccessResult(result), nil
+		},
+	})
+}
+
+// RegisterBatchSearchIOCs registers the batch_search_iocs tool
+func RegisterBatchSearchIOCs() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "batch_search_iocs",
+		Description: "Batch search for multiple IOCs at once",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("batch_search_iocs",
+			mcp.WithDescription("Batch search for multiple IOCs at once"),
+			mcp.WithString("iocs",
+				mcp.Required(),
+				mcp.Description("JSON array of IOC objects with type and value fields")),
+			mcp.WithString("info_type",
+				mcp.Required(),
+				mcp.Description("Type of information to retrieve: 'summary', 'locations', etc.")),
+			mcp.WithString("oid",
+				mcp.Description("Organization ID (required in UID mode)")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Handle OID switching for UID mode
+			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
+				var err error
+				ctx, err = auth.WithOID(ctx, oidParam)
+				if err != nil {
+					return tools.ErrorResultf("failed to switch OID: %v", err), nil
+				}
+			}
+
+			// Get organization
+			org, err := getOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Note: Using InsightObjectsBatch from SDK
+			_ = org
+
+			result := map[string]interface{}{
+				"error":   "not_implemented",
+				"message": "Go SDK needs InsightObjectsBatch() method. Need to add to go-limacharlie SDK.",
+			}
+
+			return tools.SuccessResult(result), nil
+		},
+	})
+}
+
+// RegisterGetTimeWhenSensorHasData registers the get_time_when_sensor_has_data tool
+func RegisterGetTimeWhenSensorHasData() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_time_when_sensor_has_data",
+		Description: "Get the time range when a sensor has telemetry data",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("get_time_when_sensor_has_data",
+			mcp.WithDescription("Get the time range when a sensor has telemetry data"),
+			mcp.WithString("sid",
+				mcp.Required(),
+				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithString("oid",
+				mcp.Description("Organization ID (required in UID mode)")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			sid, ok := args["sid"].(string)
+			if !ok {
+				return tools.ErrorResult("sid parameter is required"), nil
+			}
+
+			// Handle OID switching for UID mode
+			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
+				var err error
+				ctx, err = auth.WithOID(ctx, oidParam)
+				if err != nil {
+					return tools.ErrorResultf("failed to switch OID: %v", err), nil
+				}
+			}
+
+			// Get organization
+			org, err := getOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Use REST API to get sensor data time range
+			// TODO: SDK needs Request() method
+			_ = sid
+			_ = org
+
+			return tools.ErrorResult("SDK does not yet have org.Request() method - needs to be added"), nil
 		},
 	})
 }
