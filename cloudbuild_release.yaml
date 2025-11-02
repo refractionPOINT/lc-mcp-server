@@ -1,0 +1,15 @@
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args:
+  - build
+  - --network
+  - cloudbuild
+  - --build-arg
+  - VERSION=$TAG_NAME
+  - -t
+  - gcr.io/$PROJECT_ID/github.com/refractionpoint/lc-mcp-server:$TAG_NAME
+  - .
+images:
+  - gcr.io/$PROJECT_ID/github.com/refractionpoint/lc-mcp-server:$TAG_NAME
+options:
+ machineType: 'E2_HIGHCPU_8'
