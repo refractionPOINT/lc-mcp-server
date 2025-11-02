@@ -2,6 +2,7 @@ package historical
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -328,12 +329,14 @@ func RegisterGetTimeWhenSensorHasData() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Use REST API to get sensor data time range
-			// TODO: SDK needs Request() method
-			_ = sid
-			_ = org
+			// Use GenericGETRequest to get sensor data time range
+			resp := lc.Dict{}
+			path := fmt.Sprintf("insight/%s/timeline/%s", org.GetOID(), sid)
+			if err := org.GenericGETRequest(path, nil, &resp); err != nil {
+				return tools.ErrorResultf("failed to get sensor timeline: %v", err), nil
+			}
 
-			return tools.ErrorResult("SDK does not yet have org.Request() method - needs to be added"), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

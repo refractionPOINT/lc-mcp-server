@@ -2,6 +2,10 @@ package artifacts
 
 import (
 	"context"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -70,12 +74,14 @@ func RegisterListArtifacts() {
 				params["end"] = int64(end)
 			}
 
-			// List artifacts via REST API
-			// TODO: SDK needs Request() method or ListArtifacts() method
-			_ = params
-			_ = org
+			// List artifacts via GenericGETRequest
+			resp := lc.Dict{}
+			path := fmt.Sprintf("insight/%s/artifacts", org.GetOID())
+			if err := org.GenericGETRequest(path, params, &resp); err != nil {
+				return tools.ErrorResultf("failed to list artifacts: %v", err), nil
+			}
 
-			return tools.ErrorResult("SDK does not yet have org.Request() method - needs to be added"), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }
@@ -113,13 +119,43 @@ func RegisterGetArtifact() {
 				getURLOnly = val
 			}
 
-			// Export artifact
-			// TODO: SDK ExportArtifact needs time.Time parameter
-			_ = artifactID
-			_ = org
-			_ = getURLOnly
+			// Export artifact using the SDK method
+			// Use a deadline 5 minutes from now
+			deadline := time.Now().Add(5 * time.Minute)
 
-			return tools.ErrorResult("SDK ExportArtifact method signature mismatch - needs update"), nil
+			reader, err := org.ExportArtifact(artifactID, deadline)
+			if err != nil {
+				return tools.ErrorResultf("failed to export artifact: %v", err), nil
+			}
+			defer reader.Close()
+
+			if getURLOnly {
+				// For URL-only mode, we need to use a different approach
+				// The SDK returns a reader, but we want just the URL
+				// We'll use the GenericGETRequest to get the artifact metadata which includes the URL
+				metadata := lc.Dict{}
+				path := fmt.Sprintf("insight/%s/artifacts/%s", org.GetOID(), artifactID)
+				if err := org.GenericGETRequest(path, nil, &metadata); err != nil {
+					return tools.ErrorResultf("failed to get artifact URL: %v", err), nil
+				}
+
+				return tools.SuccessResult(map[string]interface{}{
+					"artifact_id": artifactID,
+					"metadata":    metadata,
+				}), nil
+			}
+
+			// Read the artifact data
+			data, err := io.ReadAll(reader)
+			if err != nil {
+				return tools.ErrorResultf("failed to read artifact data: %v", err), nil
+			}
+
+			return tools.SuccessResult(map[string]interface{}{
+				"artifact_id": artifactID,
+				"size":        len(data),
+				"data":        base64.StdEncoding.EncodeToString(data),
+			}), nil
 		},
 	})
 }

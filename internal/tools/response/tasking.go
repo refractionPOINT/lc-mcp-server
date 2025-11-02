@@ -2,6 +2,7 @@ package response
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -68,12 +69,13 @@ func RegisterReliableTasking() {
 				params["retention"] = 86400 // Default 24 hours
 			}
 
-			// Submit reliable task
-			// TODO: SDK needs Request() method or ReliableTasking() method
-			_ = params
-			_ = org
+			// Submit reliable task using GenericPOSTRequest
+			resp := lc.Dict{}
+			if err := org.GenericPOSTRequest("reliable_tasking", params, &resp); err != nil {
+				return tools.ErrorResultf("failed to create reliable task: %v", err), nil
+			}
 
-			return tools.ErrorResult("SDK does not yet have org.Request() method - needs to be added"), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }
@@ -96,11 +98,13 @@ func RegisterListReliableTasks() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// List reliable tasks
-			// TODO: SDK needs Request() method or ListReliableTasks() method
-			_ = org
+			// List reliable tasks using GenericGETRequest
+			resp := lc.Dict{}
+			if err := org.GenericGETRequest("reliable_tasking", nil, &resp); err != nil {
+				return tools.ErrorResultf("failed to list reliable tasks: %v", err), nil
+			}
 
-			return tools.ErrorResult("SDK does not yet have org.Request() method - needs to be added"), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }
@@ -131,12 +135,23 @@ func RegisterDeleteSensor() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Delete sensor
-			// TODO: SDK needs org.Sensor() method
-			_ = sid
-			_ = org
+			// Get sensor and delete it
+			sensor := org.GetSensor(sid)
+			if sensor == nil {
+				return tools.ErrorResultf("sensor not found: %s", sid), nil
+			}
 
-			return tools.ErrorResult("SDK does not yet have org.Sensor() method - needs to be added"), nil
+			// Use GenericDELETERequest to delete the sensor
+			resp := lc.Dict{}
+			if err := org.GenericDELETERequest(sid, &resp); err != nil {
+				return tools.ErrorResultf("failed to delete sensor: %v", err), nil
+			}
+
+			return tools.SuccessResult(map[string]interface{}{
+				"status":  "success",
+				"message": fmt.Sprintf("Sensor %s deleted successfully", sid),
+				"details": resp,
+			}), nil
 		},
 	})
 }

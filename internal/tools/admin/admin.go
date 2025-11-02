@@ -696,11 +696,13 @@ func RegisterGetSKUDefinitions() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get SKU definitions via REST API
-			// TODO: SDK needs Request() method
-			_ = org
+			// Get SKU definitions via GenericGETRequest
+			resp := lc.Dict{}
+			if err := org.GenericGETRequest("billing/sku", nil, &resp); err != nil {
+				return tools.ErrorResultf("failed to get SKU definitions: %v", err), nil
+			}
 
-			return tools.ErrorResult("SDK does not yet have org.Request() method - needs to be added"), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

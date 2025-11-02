@@ -26,15 +26,13 @@ func init() {
 // Note: getOrganization and getSensor are defined in common.go
 
 // sendSensorCommand sends a command to a sensor and returns the response
-// Note: This requires SDK methods that don't exist yet
 func sendSensorCommand(ctx context.Context, sid string, command string, params map[string]interface{}) (interface{}, error) {
-	_, err := getOrganization(ctx)
+	sensor, err := getSensor(ctx, sid)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get sensor: %w", err)
 	}
 
-	// TODO: SDK needs org.Sensor(sid).Request() methods
-	// Build command parameters for when SDK is updated
+	// Build command parameters
 	req := lc.Dict{
 		"command": command,
 	}
@@ -42,10 +40,13 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 		req[k] = v
 	}
 
-	_ = req
-	_ = sid
+	// Use SimpleRequest with a 30-second timeout
+	result, err := sensor.SimpleRequest(req)
+	if err != nil {
+		return nil, fmt.Errorf("sensor command failed: %w", err)
+	}
 
-	return nil, fmt.Errorf("SDK does not yet have sensor.Request() method - needs to be added to go-limacharlie")
+	return result, nil
 }
 
 // RegisterGetProcessModules registers the get_process_modules tool
@@ -430,13 +431,34 @@ func RegisterGetHistoricEvents() {
 				params["event_type"] = eventType
 			}
 
-			// Get historic events
-			// TODO: SDK GetHistoricEvents signature is different
-			// Need: org.GetHistoricEvents(sid, start, end)
-			_ = params
-			_ = org
+			// Get historic events using the SDK method
+			req := lc.HistoricEventsRequest{
+				Start: int64(start),
+				End:   int64(end),
+			}
 
-			return tools.ErrorResult("SDK GetHistoricEvents method signature mismatch - needs update"), nil
+			if limit, ok := params["limit"].(int); ok {
+				limitPtr := limit
+				req.Limit = &limitPtr
+			}
+
+			if eventType, ok := params["event_type"].(string); ok {
+				req.EventType = eventType
+			}
+
+			eventChan, closeFunc, err := org.GetHistoricEvents(sid, req)
+			if err != nil {
+				return tools.ErrorResultf("failed to get historic events: %v", err), nil
+			}
+			defer closeFunc()
+
+			// Collect events from channel
+			events := []lc.IteratedEvent{}
+			for event := range eventChan {
+				events = append(events, event)
+			}
+
+			return tools.SuccessResult(events), nil
 		},
 	})
 }
