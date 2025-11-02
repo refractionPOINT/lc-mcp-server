@@ -106,14 +106,14 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 		// Store OAuth params
 		paramsMap := map[string]string{
-			"response_type":          responseType,
-			"client_id":              clientID,
-			"redirect_uri":           redirectURI,
-			"state":                  stateParam,
-			"code_challenge":         codeChallenge,
-			"code_challenge_method":  codeChallengeMethod,
-			"scope":                  scope,
-			"resource":               resource,
+			"response_type":         responseType,
+			"client_id":             clientID,
+			"redirect_uri":          redirectURI,
+			"state":                 stateParam,
+			"code_challenge":        codeChallenge,
+			"code_challenge_method": codeChallengeMethod,
+			"scope":                 scope,
+			"resource":              resource,
 		}
 
 		if err := h.stateManager.StoreSelectionSession(r.Context(), sessionID, paramsMap); err != nil {

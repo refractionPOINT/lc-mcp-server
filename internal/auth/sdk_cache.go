@@ -103,11 +103,11 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 					delete(c.cache, cacheKey)
 					c.mu.Unlock()
 					atomic.AddUint64(&c.metrics.evictions, 1)
-// // 					c.logger.WithFields(map[string]interface{}{
-// 						"cache_key":        cacheKey[:8] + "...",
-// 						"expired_at":       tokenExpiry.Format(time.RFC3339),
-// 						"age_since_expiry": time.Since(tokenExpiry),
-// 					}).Info("Invalidated cache entry: JWT token expired")
+					// // 					c.logger.WithFields(map[string]interface{}{
+					// 						"cache_key":        cacheKey[:8] + "...",
+					// 						"expired_at":       tokenExpiry.Format(time.RFC3339),
+					// 						"age_since_expiry": time.Since(tokenExpiry),
+					// 					}).Info("Invalidated cache entry: JWT token expired")
 
 					// Return error to force re-authentication
 					return nil, fmt.Errorf("JWT token expired at %s", tokenExpiry.Format(time.RFC3339))
@@ -123,11 +123,11 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 			// Increment hit counter atomically
 			atomic.AddUint64(&c.metrics.hits, 1)
 
-// // 			c.logger.WithFields(map[string]interface{}{
-// 				"cache_key": cacheKey[:8] + "...", // Reduced to 8 chars per security review
-// 				"mode":      auth.Mode.String(),
-// 				"age":       time.Since(cached.CreatedAt),
-// 			}).Debug("SDK cache hit")
+			// // 			c.logger.WithFields(map[string]interface{}{
+			// 				"cache_key": cacheKey[:8] + "...", // Reduced to 8 chars per security review
+			// 				"mode":      auth.Mode.String(),
+			// 				"age":       time.Since(cached.CreatedAt),
+			// 			}).Debug("SDK cache hit")
 
 			return cached.Org, nil
 		}
@@ -140,19 +140,19 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 		// Increment eviction counter atomically
 		atomic.AddUint64(&c.metrics.evictions, 1)
 
-// // 		c.logger.WithFields(map[string]interface{}{
-// 			"cache_key": cacheKey[:8] + "...",
-// 			"age":       time.Since(cached.CreatedAt),
-// 		}).Debug("SDK cache entry expired")
+		// // 		c.logger.WithFields(map[string]interface{}{
+		// 			"cache_key": cacheKey[:8] + "...",
+		// 			"age":       time.Since(cached.CreatedAt),
+		// 		}).Debug("SDK cache entry expired")
 	}
 
 	// Cache miss - create new SDK instance
 	atomic.AddUint64(&c.metrics.misses, 1)
 
-// // 	c.logger.WithFields(map[string]interface{}{
-// 		"cache_key": cacheKey[:8] + "...",
-// 		"mode":      auth.Mode.String(),
-// 	}).Debug("SDK cache miss - creating new client")
+	// // 	c.logger.WithFields(map[string]interface{}{
+	// 		"cache_key": cacheKey[:8] + "...",
+	// 		"mode":      auth.Mode.String(),
+	// 	}).Debug("SDK cache miss - creating new client")
 
 	// Create new client
 	opts := auth.GetClientOptions()
@@ -201,10 +201,10 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 	c.cache[cacheKey] = cached
 	c.mu.Unlock()
 
-// // 	c.logger.WithFields(map[string]interface{}{
-// 		"cache_key": cacheKey[:8] + "...",
-// 		"mode":      auth.Mode.String(),
-// 	}).Info("Created and cached new SDK client")
+	// // 	c.logger.WithFields(map[string]interface{}{
+	// 		"cache_key": cacheKey[:8] + "...",
+	// 		"mode":      auth.Mode.String(),
+	// 	}).Info("Created and cached new SDK client")
 
 	return org, nil
 }
@@ -275,11 +275,11 @@ func (c *SDKCache) evictOldestLocked() {
 		delete(c.cache, oldestKey)
 		atomic.AddUint64(&c.metrics.evictions, 1)
 
-// // 		c.logger.WithFields(map[string]interface{}{
-// 			"cache_key": oldestKey[:8] + "...",
-// 			"age":       time.Since(oldestTime),
-// 			"reason":    "cache_full",
-// 		}).Debug("Evicted LRU cache entry")
+		// // 		c.logger.WithFields(map[string]interface{}{
+		// 			"cache_key": oldestKey[:8] + "...",
+		// 			"age":       time.Since(oldestTime),
+		// 			"reason":    "cache_full",
+		// 		}).Debug("Evicted LRU cache entry")
 	}
 }
 
@@ -326,11 +326,11 @@ func (c *SDKCache) cleanup() {
 		// Increment evictions counter atomically
 		atomic.AddUint64(&c.metrics.evictions, uint64(expired))
 
-// // 		c.logger.WithFields(map[string]interface{}{
-// 			"expired":         expired,
-// 			"remaining":       len(c.cache),
-// 			"total_evictions": atomic.LoadUint64(&c.metrics.evictions),
-// 		}).Debug("Cleaned up expired SDK cache entries")
+		// // 		c.logger.WithFields(map[string]interface{}{
+		// 			"expired":         expired,
+		// 			"remaining":       len(c.cache),
+		// 			"total_evictions": atomic.LoadUint64(&c.metrics.evictions),
+		// 		}).Debug("Cleaned up expired SDK cache entries")
 	}
 }
 

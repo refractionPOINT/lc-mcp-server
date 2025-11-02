@@ -14,11 +14,11 @@ import (
 
 	// Import tool packages to trigger init() registration
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/admin"
-	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/ai"         // AI-powered generation tools
-	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/artifacts"  // Artifact tools
-	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"     // Platform configuration tools
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/ai"        // AI-powered generation tools
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/artifacts" // Artifact tools
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"    // Platform configuration tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
-	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/forensics"      // Forensics and YARA tools
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/forensics" // Forensics and YARA tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/historical"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/investigation"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/response"

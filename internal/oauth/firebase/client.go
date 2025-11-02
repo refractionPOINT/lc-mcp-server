@@ -20,10 +20,10 @@ const (
 	identityToolkitBase = "https://identitytoolkit.googleapis.com/v1"
 	secureTokenBase     = "https://securetoken.googleapis.com/v1"
 
-	createAuthURIEndpoint    = identityToolkitBase + "/accounts:createAuthUri"
-	signInWithIdpEndpoint    = identityToolkitBase + "/accounts:signInWithIdp"
-	finalizeMFAEndpoint      = "https://identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize"
-	refreshTokenEndpoint     = secureTokenBase + "/token"
+	createAuthURIEndpoint = identityToolkitBase + "/accounts:createAuthUri"
+	signInWithIdpEndpoint = identityToolkitBase + "/accounts:signInWithIdp"
+	finalizeMFAEndpoint   = "https://identitytoolkit.googleapis.com/v2/accounts/mfaSignIn:finalize"
+	refreshTokenEndpoint  = secureTokenBase + "/token"
 
 	// Default timeout for HTTP requests
 	defaultTimeout = 10 * time.Second

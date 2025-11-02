@@ -4,33 +4,33 @@ import "time"
 
 // OAuthState represents OAuth authorization request state (CSRF protection)
 type OAuthState struct {
-	State                 string `json:"state"`
-	CodeChallenge         string `json:"code_challenge"`
-	CodeChallengeMethod   string `json:"code_challenge_method"`
-	RedirectURI           string `json:"redirect_uri"`
-	ClientID              string `json:"client_id"`
-	Scope                 string `json:"scope"`
-	Resource              string `json:"resource"`
-	Provider              string `json:"provider"` // e.g., "google.com", "microsoft.com"
-	CreatedAt             int64  `json:"created_at"`
+	State               string `json:"state"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
+	RedirectURI         string `json:"redirect_uri"`
+	ClientID            string `json:"client_id"`
+	Scope               string `json:"scope"`
+	Resource            string `json:"resource"`
+	Provider            string `json:"provider"` // e.g., "google.com", "microsoft.com"
+	CreatedAt           int64  `json:"created_at"`
 }
 
 // AuthorizationCode represents an authorization code with associated data
 // SECURITY: Stores OAuth security parameters for validation during token exchange
 type AuthorizationCode struct {
-	Code                  string  `json:"code"`
-	State                 string  `json:"state"`
-	UID                   string  `json:"uid"`
-	FirebaseIDToken       string  `json:"firebase_id_token"`       // Encrypted in Redis
-	FirebaseRefreshToken  string  `json:"firebase_refresh_token"`  // Encrypted in Redis
-	FirebaseExpiresAt     int64   `json:"firebase_expires_at"`
-	CreatedAt             int64   `json:"created_at"`
+	Code                 string `json:"code"`
+	State                string `json:"state"`
+	UID                  string `json:"uid"`
+	FirebaseIDToken      string `json:"firebase_id_token"`      // Encrypted in Redis
+	FirebaseRefreshToken string `json:"firebase_refresh_token"` // Encrypted in Redis
+	FirebaseExpiresAt    int64  `json:"firebase_expires_at"`
+	CreatedAt            int64  `json:"created_at"`
 	// OAuth security parameters for token exchange validation
-	RedirectURI           string  `json:"redirect_uri"`
-	ClientID              string  `json:"client_id"`
-	Scope                 string  `json:"scope"`
-	CodeChallenge         *string `json:"code_challenge,omitempty"`
-	CodeChallengeMethod   *string `json:"code_challenge_method,omitempty"`
+	RedirectURI         string  `json:"redirect_uri"`
+	ClientID            string  `json:"client_id"`
+	Scope               string  `json:"scope"`
+	CodeChallenge       *string `json:"code_challenge,omitempty"`
+	CodeChallengeMethod *string `json:"code_challenge_method,omitempty"`
 }
 
 // AccessTokenData represents an access token with Firebase token mapping
@@ -77,13 +77,13 @@ type MFASession struct {
 
 // TTL constants (in seconds)
 const (
-	StateTTL           = 600     // 10 minutes
-	CodeTTL            = 300     // 5 minutes
-	TokenTTL           = 3600    // 1 hour (access token)
-	RefreshTTL         = 2592000 // 30 days (refresh token)
-	SelectionTTL       = 300     // 5 minutes (provider selection)
-	MFATTL             = 300     // 5 minutes (MFA challenge)
-	MaxMFAAttempts     = 3       // Maximum failed MFA attempts
+	StateTTL       = 600     // 10 minutes
+	CodeTTL        = 300     // 5 minutes
+	TokenTTL       = 3600    // 1 hour (access token)
+	RefreshTTL     = 2592000 // 30 days (refresh token)
+	SelectionTTL   = 300     // 5 minutes (provider selection)
+	MFATTL         = 300     // 5 minutes (MFA challenge)
+	MaxMFAAttempts = 3       // Maximum failed MFA attempts
 )
 
 // Key prefixes for Redis
@@ -95,8 +95,8 @@ const (
 	ClientPrefix    = "oauth:client:"
 	SelectionPrefix = "oauth:selection:"
 	MFAPrefix       = "oauth:mfa:"
-	SessionPrefix   = "oauth:session:"     // OAuth state -> Firebase state mapping
-	FBSessionPrefix = "oauth:fbsession:"   // Firebase state -> session ID mapping
+	SessionPrefix   = "oauth:session:"   // OAuth state -> Firebase state mapping
+	FBSessionPrefix = "oauth:fbsession:" // Firebase state -> session ID mapping
 )
 
 // Token validation result

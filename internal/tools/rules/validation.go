@@ -99,14 +99,14 @@ func validateDetectComponent(detect interface{}) error {
 
 	// Validate op type
 	validOps := map[string]bool{
-		"and":           true,
-		"or":            true,
-		"exists":        true,
-		"is":            true,
-		"contains":      true,
-		"starts with":   true,
-		"ends with":     true,
-		"matches":       true,
+		"and":             true,
+		"or":              true,
+		"exists":          true,
+		"is":              true,
+		"contains":        true,
+		"starts with":     true,
+		"ends with":       true,
+		"matches":         true,
 		"is greater than": true,
 		"is less than":    true,
 		"length is":       true,
@@ -184,13 +184,13 @@ func validateRespondComponent(respond interface{}) error {
 
 		// Validate common action types
 		validActions := map[string]bool{
-			"report":           true,
-			"task":             true,
-			"add tag":          true,
-			"remove tag":       true,
-			"isolate network":  true,
-			"rejoin network":   true,
-			"service request":  true,
+			"report":          true,
+			"task":            true,
+			"add tag":         true,
+			"remove tag":      true,
+			"isolate network": true,
+			"rejoin network":  true,
+			"service request": true,
 		}
 
 		if !validActions[actionStr] {

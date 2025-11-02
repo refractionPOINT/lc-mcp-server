@@ -59,8 +59,8 @@ func (p *Provider) GetProtectedResourceMetadata() map[string]interface{} {
 		"bearer_methods_supported": []string{"header"},
 
 		// Additional resource-specific metadata
-		"resource_documentation":                   p.serverURL + "/docs",
-		"resource_signing_alg_values_supported":    []string{"RS256"},
+		"resource_documentation":                p.serverURL + "/docs",
+		"resource_signing_alg_values_supported": []string{"RS256"},
 	}
 }
 
@@ -107,7 +107,7 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 		"response_modes_supported": []string{"query", "fragment"},
 
 		// OAuth 2.0 features
-		"require_request_uri_registration":       false,
+		"require_request_uri_registration":      false,
 		"require_pushed_authorization_requests": false,
 
 		// Additional metadata

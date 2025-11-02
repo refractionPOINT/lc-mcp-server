@@ -344,7 +344,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Dynamic client registration (OAuth 2.0 DCR)
 	// Not critical for initial implementation - return not implemented
 	s.writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error": "not_implemented",
+		"error":             "not_implemented",
 		"error_description": "Dynamic client registration not yet supported",
 	})
 }

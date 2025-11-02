@@ -18,10 +18,10 @@ type CreateAuthURIResponse struct {
 
 // SignInWithIdpRequest represents the Firebase signInWithIdp request
 type SignInWithIdpRequest struct {
-	RequestURI         string `json:"requestUri"`
-	PostBody           string `json:"postBody"`
-	SessionID          string `json:"sessionId"`
-	ReturnSecureToken  bool   `json:"returnSecureToken"`
+	RequestURI          string `json:"requestUri"`
+	PostBody            string `json:"postBody"`
+	SessionID           string `json:"sessionId"`
+	ReturnSecureToken   bool   `json:"returnSecureToken"`
 	ReturnIdpCredential bool   `json:"returnIdpCredential"`
 }
 
@@ -64,9 +64,9 @@ type RefreshTokenResponse struct {
 
 // FinalizeMFARequest represents the Firebase MFA finalization request
 type FinalizeMFARequest struct {
-	MFAPendingCredential string                   `json:"mfaPendingCredential"`
-	MFAEnrollmentID      string                   `json:"mfaEnrollmentId"`
-	TOTPVerificationInfo *TOTPVerificationInfo    `json:"totpVerificationInfo,omitempty"`
+	MFAPendingCredential string                `json:"mfaPendingCredential"`
+	MFAEnrollmentID      string                `json:"mfaEnrollmentId"`
+	TOTPVerificationInfo *TOTPVerificationInfo `json:"totpVerificationInfo,omitempty"`
 }
 
 // TOTPVerificationInfo represents TOTP verification data

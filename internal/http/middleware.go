@@ -213,12 +213,12 @@ func getEndpointType(path string) string {
 	case strings.HasPrefix(path, "/oauth/callback"):
 		return "oauth_callback"
 	case strings.HasPrefix(path, "/mcp") ||
-		 strings.Contains(path, "historical_data") ||
-		 strings.Contains(path, "live_investigation") ||
-		 strings.Contains(path, "threat_response") ||
-		 strings.Contains(path, "fleet_management") ||
-		 strings.Contains(path, "detection_engineering") ||
-		 strings.Contains(path, "platform_admin"):
+		strings.Contains(path, "historical_data") ||
+		strings.Contains(path, "live_investigation") ||
+		strings.Contains(path, "threat_response") ||
+		strings.Contains(path, "fleet_management") ||
+		strings.Contains(path, "detection_engineering") ||
+		strings.Contains(path, "platform_admin"):
 		return "mcp_request"
 	default:
 		return "default"

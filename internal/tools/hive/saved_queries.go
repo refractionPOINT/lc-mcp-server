@@ -348,8 +348,8 @@ func RegisterRunSavedQuery() {
 
 			// Extract events from response
 			events := make([]interface{}, 0)
-			if queryResp.Events != nil {
-				for _, evt := range queryResp.Events {
+			if queryResp.Results != nil {
+				for _, evt := range queryResp.Results {
 					events = append(events, evt)
 				}
 			}

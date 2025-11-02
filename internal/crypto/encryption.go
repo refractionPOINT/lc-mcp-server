@@ -22,11 +22,11 @@ const (
 )
 
 var (
-	ErrInvalidKeySize      = errors.New("encryption key must be 32 bytes (256 bits)")
-	ErrInvalidCiphertext   = errors.New("ciphertext is too short or invalid")
-	ErrEncryptionDisabled  = errors.New("encryption is disabled")
-	ErrEncryptionFailed    = errors.New("encryption failed")
-	ErrDecryptionFailed    = errors.New("decryption failed")
+	ErrInvalidKeySize     = errors.New("encryption key must be 32 bytes (256 bits)")
+	ErrInvalidCiphertext  = errors.New("ciphertext is too short or invalid")
+	ErrEncryptionDisabled = errors.New("encryption is disabled")
+	ErrEncryptionFailed   = errors.New("encryption failed")
+	ErrDecryptionFailed   = errors.New("decryption failed")
 )
 
 // TokenEncryption handles AES-256-GCM encryption/decryption for tokens

@@ -270,16 +270,16 @@ func (m *Manager) GetTokenInfoForRequest(ctx context.Context, accessToken string
 	}
 
 	if !validation.Valid {
-		return nil, fmt.Errorf(validation.Error)
+		return nil, fmt.Errorf("%s", validation.Error)
 	}
 
 	return map[string]interface{}{
-		"uid":                   validation.UID,
-		"firebase_id_token":     validation.FirebaseIDToken,
+		"uid":                    validation.UID,
+		"firebase_id_token":      validation.FirebaseIDToken,
 		"firebase_refresh_token": validation.FirebaseRefreshToken,
-		"mode":                  "oauth", // Always OAuth mode for MCP tokens
-		"scope":                 validation.Scope,
-		"refreshed":             validation.Refreshed,
+		"mode":                   "oauth", // Always OAuth mode for MCP tokens
+		"scope":                  validation.Scope,
+		"refreshed":              validation.Refreshed,
 	}, nil
 }
 

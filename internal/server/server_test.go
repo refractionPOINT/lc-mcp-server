@@ -1,14 +1,15 @@
 package server
 
 import (
+	"io"
 	"testing"
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
-	"log/slog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"log/slog"
 
 	// Import tools to register them
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
@@ -31,8 +32,7 @@ func TestNew(t *testing.T) {
 			},
 		}
 
-		logger := slog.New()
-		logger.SetLevel(slog.ErrorLevel)
+		logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
 		srv, err := New(cfg, logger)
 
@@ -76,8 +76,7 @@ func TestNew(t *testing.T) {
 			},
 		}
 
-		logger := slog.New()
-		logger.SetLevel(slog.ErrorLevel)
+		logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
 		srv, err := New(cfg, logger)
 
@@ -100,8 +99,7 @@ func TestGetters(t *testing.T) {
 		},
 	}
 
-	logger := slog.New()
-	logger.SetLevel(slog.ErrorLevel)
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	srv, err := New(cfg, logger)
 	require.NoError(t, err)
@@ -136,8 +134,7 @@ func TestServerIntegration(t *testing.T) {
 			},
 		}
 
-		logger := slog.New()
-		logger.SetLevel(slog.ErrorLevel)
+		logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
 		srv, err := New(cfg, logger)
 		require.NoError(t, err)

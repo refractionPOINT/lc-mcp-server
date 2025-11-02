@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"log/slog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"log/slog"
 )
 
 func TestAuthMode_String(t *testing.T) {
@@ -422,8 +423,7 @@ func TestCredentialIsolation_CacheKeys(t *testing.T) {
 }
 
 func TestSDKCache_Basic(t *testing.T) {
-	logger := slog.Default()
-	logger.SetLevel(slog.LevelDebug)
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	cache := NewSDKCache(5*time.Second, logger)
 
@@ -479,8 +479,7 @@ func TestSDKCache_Basic(t *testing.T) {
 
 func TestSDKCache_CredentialIsolation(t *testing.T) {
 	t.Run("different credentials get different cache keys", func(t *testing.T) {
-		logger := slog.Default()
-		logger.SetLevel(slog.LevelError)
+		logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 		cache := NewSDKCache(5*time.Minute, logger)
 
 		auth1 := &AuthContext{
@@ -917,8 +916,7 @@ func createTestJWT(t *testing.T, claims map[string]interface{}) string {
 }
 
 func TestSDKCache_RespectJWTExpiration(t *testing.T) {
-	logger := slog.Default()
-	logger.SetLevel(slog.LevelError)
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 	cache := NewSDKCache(5*time.Minute, logger)
 	defer cache.Close()
 

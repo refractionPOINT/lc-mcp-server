@@ -15,11 +15,11 @@ import (
 
 // Config holds GCS configuration
 type Config struct {
-	BucketName         string
-	TokenThreshold     int
-	URLExpiryHours     int
-	SignerServiceAcct  string
-	Enabled            bool
+	BucketName        string
+	TokenThreshold    int
+	URLExpiryHours    int
+	SignerServiceAcct string
+	Enabled           bool
 }
 
 // LoadConfig loads GCS configuration from environment variables
