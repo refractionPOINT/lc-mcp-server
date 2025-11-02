@@ -1,4 +1,16 @@
 steps:
+# Run tests
+- name: 'golang:latest'
+  args:
+  - go
+  - test
+  - -v
+  - ./...
+  env:
+  - 'GO111MODULE=on'
+  - 'CGO_ENABLED=0'
+
+# Build Docker image
 - name: 'gcr.io/cloud-builders/docker'
   args:
   - build
