@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
 	"github.com/refractionpoint/lc-mcp-go/internal/server"
-	"github.com/sirupsen/logrus"
 
 	// Import tool packages to trigger init() registration
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/admin"
@@ -25,48 +26,58 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/schemas" // Event schema tools
 )
 
-func main() {
-	// Setup logger
-	logger := logrus.New()
-	logger.SetFormatter(&logrus.TextFormatter{
-		FullTimestamp: true,
-	})
+// parseLogLevel converts a string log level to slog.Level
+func parseLogLevel(level string) slog.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
 
-	// Load configuration
+func main() {
+	// Load configuration first to determine log level
 	cfg, err := config.Load()
 	if err != nil {
-		logger.WithError(err).Fatal("Failed to load configuration")
+		slog.Error("Failed to load configuration", "error", err)
+		os.Exit(1)
 	}
 
-	// Set log level
-	level, err := logrus.ParseLevel(cfg.LogLevel)
-	if err != nil {
-		logger.WithError(err).Warn("Invalid log level, using info")
-		level = logrus.InfoLevel
-	}
-	logger.SetLevel(level)
+	// Setup logger with configured level
+	level := parseLogLevel(cfg.LogLevel)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: level,
+	}))
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		logger.WithError(err).Fatal("Invalid configuration")
+		logger.Error("Invalid configuration", "error", err)
+		os.Exit(1)
 	}
 
-	logger.WithFields(logrus.Fields{
-		"mode":      cfg.Mode,
-		"profile":   cfg.Profile,
-		"auth_mode": cfg.Auth.Mode.String(),
-	}).Info("Starting LimaCharlie MCP Server")
+	logger.Info("Starting LimaCharlie MCP Server",
+		"mode", cfg.Mode,
+		"profile", cfg.Profile,
+		"auth_mode", cfg.Auth.Mode.String())
 
 	// Create server
 	srv, err := server.New(cfg, logger)
 	if err != nil {
-		logger.WithError(err).Fatal("Failed to create server")
+		logger.Error("Failed to create server", "error", err)
+		os.Exit(1)
 	}
 
 	// Ensure cleanup happens on exit
 	defer func() {
 		if err := srv.Close(); err != nil {
-			logger.WithError(err).Error("Error during server cleanup")
+			logger.Error("Error during server cleanup", "error", err)
 		}
 	}()
 
@@ -86,7 +97,8 @@ func main() {
 	// Start server
 	logger.Info("Server starting...")
 	if err := srv.Serve(ctx); err != nil {
-		logger.WithError(err).Fatal("Server error")
+		logger.Error("Server error", "error", err)
+		os.Exit(1)
 	}
 
 	logger.Info("Server stopped")

@@ -7,14 +7,14 @@ import (
 
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 // Manager manages OAuth token validation and lifecycle
 type Manager struct {
 	stateManager   *state.Manager
 	firebaseClient *firebase.Client
-	logger         *logrus.Logger
+	logger         *slog.Logger
 }
 
 // ValidationResult represents the result of token validation
@@ -49,7 +49,7 @@ type IntrospectionResponse struct {
 }
 
 // NewManager creates a new OAuth token manager
-func NewManager(stateManager *state.Manager, firebaseClient *firebase.Client, logger *logrus.Logger) *Manager {
+func NewManager(stateManager *state.Manager, firebaseClient *firebase.Client, logger *slog.Logger) *Manager {
 	return &Manager{
 		stateManager:   stateManager,
 		firebaseClient: firebaseClient,
@@ -66,7 +66,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	}
 
 	if tokenData == nil {
-		m.logger.WithField("token", accessToken[:10]+"...").Debug("Access token not found or expired")
+		m.logger.Debug("")
 		return &ValidationResult{
 			Valid: false,
 			Error: "invalid or expired access token",
@@ -78,22 +78,21 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	needsRefresh := firebaseExpiresIn < 300 // Refresh if < 5 minutes remaining
 
 	if needsRefresh && autoRefresh && tokenData.FirebaseRefreshToken != "" {
-		m.logger.WithFields(logrus.Fields{
-			"token":      accessToken[:10] + "...",
-			"expires_in": firebaseExpiresIn,
-		}).Info("Firebase token expiring soon, refreshing...")
+		m.logger.Info("Firebase token expiring soon, refreshing...",
+			"token", accessToken[:10]+"...",
+			"expires_in", firebaseExpiresIn)
 
 		// Refresh Firebase token
 		newIDToken, newExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, tokenData.FirebaseRefreshToken)
 		if err != nil {
-			m.logger.WithError(err).Error("Failed to refresh Firebase token")
+			m.logger.Error("")
 			// Continue with existing token if refresh fails (might still be valid for a short time)
 		} else {
 			// Update token data in Redis
 			if err := m.stateManager.UpdateAccessTokenFirebaseTokens(ctx, accessToken, newIDToken, newExpiresAt); err != nil {
-				m.logger.WithError(err).Error("Failed to update Redis with refreshed token")
+				m.logger.Error("")
 			} else {
-				m.logger.WithField("token", accessToken[:10]+"...").Info("Successfully refreshed Firebase token")
+				m.logger.Info("")
 				tokenData.FirebaseIDToken = newIDToken
 				tokenData.FirebaseExpiresAt = newExpiresAt
 
@@ -185,20 +184,19 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (
 
 	// SECURITY: Revoke old refresh token (critical for rotation)
 	if err := m.stateManager.RevokeRefreshToken(ctx, refreshToken); err != nil {
-		m.logger.WithError(err).Warn("Failed to revoke old refresh token")
+		m.logger.Warn("")
 	}
 
 	// Revoke old access token (optional - could keep for grace period)
 	if oldAccessToken != "" {
 		if err := m.stateManager.RevokeAccessToken(ctx, oldAccessToken); err != nil {
-			m.logger.WithError(err).Warn("Failed to revoke old access token")
+			m.logger.Warn("")
 		}
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"uid":      uid,
-		"rotated":  true,
-	}).Info("Issued new tokens via refresh")
+	m.logger.Info("Issued new tokens via refresh",
+		"uid", uid,
+		"rotated", true)
 
 	return &TokenResponse{
 		AccessToken:  newAccessToken,
@@ -216,7 +214,7 @@ func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint s
 	// Try to revoke as access token
 	if tokenTypeHint != "refresh_token" {
 		if err := m.stateManager.RevokeAccessToken(ctx, token); err == nil {
-			m.logger.WithField("token", token[:10]+"...").Info("Revoked access token")
+			m.logger.Info("")
 			revoked = true
 		}
 	}
@@ -224,13 +222,13 @@ func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint s
 	// Try to revoke as refresh token
 	if tokenTypeHint != "access_token" {
 		if err := m.stateManager.RevokeRefreshToken(ctx, token); err == nil {
-			m.logger.WithField("token", token[:10]+"...").Info("Revoked refresh token")
+			m.logger.Info("")
 			revoked = true
 		}
 	}
 
 	if !revoked {
-		m.logger.WithField("token", token[:10]+"...").Warn("Token not found for revocation")
+		m.logger.Warn("")
 	}
 
 	return nil // Always return success per OAuth 2.0 spec
@@ -325,7 +323,7 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}
 
-	m.logger.WithField("uid", uid).Info("Created token response")
+	m.logger.Info("")
 
 	return &TokenResponse{
 		AccessToken:  accessToken,

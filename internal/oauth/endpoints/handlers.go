@@ -7,27 +7,28 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"strings"
+	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/token"
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 // Handlers contains all OAuth endpoint handlers
 type Handlers struct {
-	stateManager     *state.Manager
-	tokenManager     *token.Manager
-	firebaseClient   *firebase.Client
-	metadataProvider *metadata.Provider
-	logger           *logrus.Logger
-	templates        *template.Template
+	stateManager        *state.Manager
+	tokenManager        *token.Manager
+	firebaseClient      *firebase.Client
+	metadataProvider    *metadata.Provider
+	logger              *slog.Logger
+	templates           *template.Template
+	allowedRedirectURIs []string // SECURITY: Allowlist of permitted redirect URIs
 }
 
 // NewHandlers creates new OAuth endpoint handlers
-func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, logger *logrus.Logger) (*Handlers, error) {
+func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, allowedRedirectURIs []string, logger *slog.Logger) (*Handlers, error) {
 	// Load templates (will create simple inline templates)
 	tmpl, err := template.New("oauth").Parse(providerSelectionHTML + mfaChallengeHTML + errorPageHTML)
 	if err != nil {
@@ -35,12 +36,13 @@ func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, fireb
 	}
 
 	return &Handlers{
-		stateManager:     stateManager,
-		tokenManager:     tokenManager,
-		firebaseClient:   firebaseClient,
-		metadataProvider: metadataProvider,
-		logger:           logger,
-		templates:        tmpl,
+		stateManager:        stateManager,
+		tokenManager:        tokenManager,
+		firebaseClient:      firebaseClient,
+		metadataProvider:    metadataProvider,
+		logger:              logger,
+		templates:           tmpl,
+		allowedRedirectURIs: allowedRedirectURIs,
 	}, nil
 }
 
@@ -78,9 +80,10 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate redirect URI
-	if !strings.HasPrefix(redirectURI, "http://localhost") && !strings.HasPrefix(redirectURI, "http://127.0.0.1") && !strings.HasPrefix(redirectURI, "https://") {
-		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri must be localhost or HTTPS", http.StatusBadRequest))
+	// SECURITY: Validate redirect URI against allowlist (exact match)
+	if !h.isRedirectURIAllowed(redirectURI) {
+		h.logger.Warn("Rejected unauthorized redirect_uri", "uri", redirectURI)
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri not allowed", http.StatusBadRequest))
 		return
 	}
 
@@ -96,7 +99,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		// Redirect to provider selection page
 		sessionID, err := h.stateManager.GenerateSelectionSessionID()
 		if err != nil {
-			h.logger.WithError(err).Error("Failed to generate selection session ID")
+			h.logger.Error("")
 			WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to generate session", http.StatusInternalServerError))
 			return
 		}
@@ -114,7 +117,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := h.stateManager.StoreSelectionSession(r.Context(), sessionID, paramsMap); err != nil {
-			h.logger.WithError(err).Error("Failed to store selection session")
+			h.logger.Error("")
 			WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store session", http.StatusInternalServerError))
 			return
 		}
@@ -139,7 +142,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	oauthState := state.NewOAuthState(stateParam, codeChallenge, codeChallengeMethod, redirectURI, clientID, scope, resource, providerID)
 	if err := h.stateManager.StoreOAuthState(r.Context(), oauthState); err != nil {
-		h.logger.WithError(err).Error("Failed to store OAuth state")
+		h.logger.Error("")
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store state", http.StatusInternalServerError))
 		return
 	}
@@ -150,7 +153,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, firebaseAuthURI, err := h.firebaseClient.CreateAuthURI(r.Context(), providerID, callbackURL, []string{"openid", "email", "profile"})
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to create Firebase auth URI")
+		h.logger.Error("")
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to initiate authentication", http.StatusInternalServerError))
 		return
 	}
@@ -174,7 +177,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Validate callback
 	queryString, err := h.firebaseClient.ValidateProviderCallback(r.URL.RequestURI())
 	if err != nil {
-		h.logger.WithError(err).Error("Invalid provider callback")
+		h.logger.Error("")
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>Invalid callback</p>")
 		return
 	}
@@ -229,7 +232,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to sign in with IdP")
+		h.logger.Error("")
 		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
 		return
 	}
@@ -237,12 +240,12 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Generate authorization code
 	code, _ := h.stateManager.GenerateAuthorizationCode()
 
-	// Parse expires_in
+	// Parse expires_in and calculate absolute expiration time
 	expiresIn := int64(3600)
 	if resp.ExpiresIn != "" {
 		fmt.Sscanf(resp.ExpiresIn, "%d", &expiresIn)
 	}
-	expiresAt := expiresIn // TODO: calculate properly
+	expiresAt := time.Now().Unix() + expiresIn
 
 	authCode := state.NewAuthorizationCode(code, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
 	h.stateManager.StoreAuthorizationCode(r.Context(), authCode)
@@ -299,7 +302,7 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 	// Create token response
 	tokenResp, err := h.tokenManager.CreateTokenResponse(r.Context(), authCode.UID, authCode.FirebaseIDToken, authCode.FirebaseRefreshToken, authCode.FirebaseExpiresAt, authCode.Scope)
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to create token response")
+		h.logger.Error("")
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to issue tokens", http.StatusInternalServerError))
 		return
 	}
@@ -390,6 +393,16 @@ func (h *Handlers) validatePKCE(verifier, challenge string) bool {
 	return computed == challenge
 }
 
+func (h *Handlers) isRedirectURIAllowed(redirectURI string) bool {
+	// SECURITY: Exact match validation - no wildcards, no prefix matching
+	for _, allowed := range h.allowedRedirectURIs {
+		if redirectURI == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 // HTML templates (inline for simplicity)
 const providerSelectionHTML = `{{define "provider_selection"}}
 <!DOCTYPE html>
@@ -465,7 +478,7 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	// Verify MFA code
 	resp, err := h.firebaseClient.FinalizeMFASignIn(r.Context(), mfaSession.MFAPendingCredential, mfaSession.MFAEnrollmentID, code)
 	if err != nil {
-		h.logger.WithError(err).Error("MFA verification failed")
+		h.logger.Error("")
 		writeHTML(w, http.StatusBadRequest, "<h1>MFA Error</h1><p>Invalid code</p>")
 		return
 	}
@@ -483,8 +496,9 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	if resp.ExpiresIn != "" {
 		fmt.Sscanf(resp.ExpiresIn, "%d", &expiresIn)
 	}
+	expiresAt := time.Now().Unix() + expiresIn
 
-	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresIn, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
+	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
 	h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData)
 
 	redirectURL := oauthState.RedirectURI + "?code=" + authCode + "&state=" + oauthState.State

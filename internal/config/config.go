@@ -21,6 +21,14 @@ type Config struct {
 	ServerURL          string   // Public server URL for OAuth metadata
 	CORSAllowedOrigins []string // Allowed CORS origins
 
+	// TLS/HTTPS configuration
+	EnableTLS bool   // Enable HTTPS with TLS
+	TLSCert   string // Path to TLS certificate file
+	TLSKey    string // Path to TLS private key file
+
+	// OAuth security configuration
+	AllowedRedirectURIs []string // Allowed OAuth redirect URIs (exact match)
+
 	// Redis configuration (for OAuth state management)
 	RedisAddress  string // Redis server address (host:port)
 	RedisPassword string // Redis password (optional)
@@ -55,7 +63,18 @@ func Load() (*Config, error) {
 		// HTTP server configuration
 		HTTPPort:           getIntEnv("HTTP_PORT", 8080),
 		ServerURL:          getEnv("MCP_SERVER_URL", "http://localhost:8080"),
-		CORSAllowedOrigins: getSliceEnv("CORS_ALLOWED_ORIGINS", []string{"*"}),
+		CORSAllowedOrigins: getSliceEnv("CORS_ALLOWED_ORIGINS", []string{}),
+
+		// TLS configuration
+		EnableTLS: getBoolEnv("ENABLE_TLS", false),
+		TLSCert:   getEnv("TLS_CERT_FILE", ""),
+		TLSKey:    getEnv("TLS_KEY_FILE", ""),
+
+		// OAuth security configuration
+		AllowedRedirectURIs: getSliceEnv("ALLOWED_REDIRECT_URIS", []string{
+			"http://localhost/callback",
+			"http://127.0.0.1/callback",
+		}),
 
 		// Redis configuration
 		RedisAddress:  getEnv("REDIS_ADDRESS", "localhost:6379"),
@@ -63,7 +82,7 @@ func Load() (*Config, error) {
 		RedisDB:       getIntEnv("REDIS_DB", 0),
 
 		// OAuth configuration
-		FirebaseAPIKey: getEnv("FIREBASE_API_KEY", "AIzaSyB5VyO6qS-XlnVD3zOIuEVNBD5JFn22_1w"), // Default Firebase API key
+		FirebaseAPIKey: getEnv("FIREBASE_API_KEY", ""),
 		EncryptionKey:  getEnv("ENCRYPTION_KEY", ""),
 	}
 
@@ -79,6 +98,13 @@ func Load() (*Config, error) {
 		}
 		if len(cfg.EncryptionKey) != 64 {
 			return nil, fmt.Errorf("ENCRYPTION_KEY must be 64 hex characters (32 bytes)")
+		}
+
+		// Validate TLS configuration if enabled
+		if cfg.EnableTLS {
+			if cfg.TLSCert == "" || cfg.TLSKey == "" {
+				return nil, fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE are required when ENABLE_TLS=true")
+			}
 		}
 	}
 

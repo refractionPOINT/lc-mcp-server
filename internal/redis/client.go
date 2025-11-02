@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 // Client wraps the Redis client with additional functionality
 type Client struct {
 	client *redis.Client
-	logger *logrus.Logger
+	logger *slog.Logger
 
 	// Lua scripts for atomic operations
 	atomicGetAndDelete      *redis.Script
@@ -25,7 +25,7 @@ type Config struct {
 }
 
 // New creates a new Redis client
-func New(cfg *Config, logger *logrus.Logger) (*Client, error) {
+func New(cfg *Config, logger *slog.Logger) (*Client, error) {
 	// Parse Redis URL
 	opt, err := redis.ParseURL(cfg.URL)
 	if err != nil {
@@ -59,7 +59,7 @@ func New(cfg *Config, logger *logrus.Logger) (*Client, error) {
 	// Load Lua scripts
 	c.loadScripts()
 
-	logger.WithField("url", cfg.URL).Info("Redis client initialized")
+	logger.Info("Redis client initialized")
 
 	return c, nil
 }

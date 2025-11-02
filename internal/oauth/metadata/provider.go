@@ -5,18 +5,18 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 // Provider provides OAuth metadata for MCP server discovery
 // Implements RFC 8414 (Authorization Server Metadata) and RFC 9728 (Protected Resource Metadata)
 type Provider struct {
 	serverURL string
-	logger    *logrus.Logger
+	logger    *slog.Logger
 }
 
 // NewProvider creates a new OAuth metadata provider
-func NewProvider(logger *logrus.Logger) *Provider {
+func NewProvider(logger *slog.Logger) *Provider {
 	serverURL := os.Getenv("MCP_SERVER_URL")
 	if serverURL == "" {
 		serverURL = "http://localhost:8080"
@@ -25,7 +25,7 @@ func NewProvider(logger *logrus.Logger) *Provider {
 	// Ensure no trailing slash
 	serverURL = strings.TrimSuffix(serverURL, "/")
 
-	logger.WithField("server_url", serverURL).Info("OAuth metadata provider initialized")
+	logger.Info("OAuth metadata provider initialized")
 
 	return &Provider{
 		serverURL: serverURL,
@@ -150,7 +150,7 @@ func (p *Provider) GenerateWWWAuthenticateHeader(error, errorDescription, scope 
 	// Join all parts
 	header := strings.Join(parts, ", ")
 
-	p.logger.WithField("header", header[:min(100, len(header))]).Debug("Generated WWW-Authenticate header")
+	// p.logger.WithField("header", header[:min(100, len(header))]).Debug("Generated WWW-Authenticate header")
 
 	return header
 }

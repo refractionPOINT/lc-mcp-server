@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/ratelimit"
-	"github.com/sirupsen/logrus"
 )
 
 // contextKey is a type for context keys to avoid collisions
@@ -25,6 +24,8 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	handler := next
 	handler = s.requestIDMiddleware(handler)
 	handler = s.rateLimitMiddleware(handler)
+	handler = s.bodySizeLimitMiddleware(handler)
+	handler = s.securityHeadersMiddleware(handler)
 	handler = s.corsMiddleware(handler)
 	handler = s.loggingMiddleware(handler)
 	handler = s.recoveryMiddleware(handler)
@@ -36,11 +37,7 @@ func (s *Server) recoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
-				s.logger.WithFields(logrus.Fields{
-					"error":      err,
-					"request_id": r.Context().Value(requestIDKey),
-					"path":       r.URL.Path,
-				}).Error("Panic recovered")
+				s.logger.Error("")
 
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
@@ -64,16 +61,50 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(wrapped, r)
 
 		// Log request details
-		duration := time.Since(start)
+		_ = time.Since(start)
 
-		s.logger.WithFields(logrus.Fields{
-			"method":     r.Method,
-			"path":       r.URL.Path,
-			"status":     wrapped.statusCode,
-			"duration":   duration,
-			"ip":         getClientIP(r),
-			"request_id": r.Context().Value(requestIDKey),
-		}).Info("HTTP request")
+		s.logger.Info("")
+	})
+}
+
+// bodySizeLimitMiddleware limits request body size to prevent memory exhaustion
+func (s *Server) bodySizeLimitMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Limit request body to 10MB (configurable per endpoint if needed)
+		const maxBodySize = 10 * 1024 * 1024 // 10 MB
+		r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// securityHeadersMiddleware adds security headers to all responses
+func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Prevent MIME type sniffing
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		// Prevent clickjacking
+		w.Header().Set("X-Frame-Options", "DENY")
+
+		// Enable browser XSS protection
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+
+		// Content Security Policy - strict default-src
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+
+		// Referrer policy - limit information leakage
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		// Permissions policy - disable unnecessary features
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()")
+
+		// Strict-Transport-Security (HSTS) - ONLY if using HTTPS
+		if s.config.EnableTLS {
+			// Max age: 2 years, include subdomains, allow preload list inclusion
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		}
+
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -156,7 +187,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 		allowed, err := s.rateLimiter.Allow(r.Context(), rateLimitKey, cfg)
 		if err != nil {
 			// Log error but continue (fail open)
-			s.logger.WithError(err).Warn("Rate limit check error")
+			s.logger.Warn("Rate limit check error", "error", err)
 		}
 
 		if !allowed {

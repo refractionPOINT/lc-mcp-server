@@ -2,7 +2,7 @@ package http
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +12,7 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
 	"github.com/refractionpoint/lc-mcp-go/internal/crypto"
+	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/endpoints"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
@@ -20,27 +21,28 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/ratelimit"
 	"github.com/refractionpoint/lc-mcp-go/internal/redis"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 // Server represents the HTTP server for MCP OAuth mode
 type Server struct {
-	config          *config.Config
-	logger          *logrus.Logger
-	mux             *http.ServeMux
-	server          *http.Server
-	redisClient     *redis.Client
-	stateManager    *state.Manager
-	tokenManager    *token.Manager
+	config           *config.Config
+	logger           *slog.Logger
+	mux              *http.ServeMux
+	server           *http.Server
+	redisClient      *redis.Client
+	stateManager     *state.Manager
+	tokenManager     *token.Manager
 	metadataProvider *metadata.Provider
-	oauthHandlers   *endpoints.Handlers
-	sdkCache        *auth.SDKCache
-	profile         string
-	rateLimiter     *ratelimit.Limiter
+	oauthHandlers    *endpoints.Handlers
+	sdkCache         *auth.SDKCache
+	gcsManager       *gcs.Manager
+	profile          string
+	rateLimiter      *ratelimit.Limiter
 }
 
 // New creates a new HTTP server instance using standard library
-func New(cfg *config.Config, logger *logrus.Logger, sdkCache *auth.SDKCache, profile string) (*Server, error) {
+func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsManager *gcs.Manager, profile string) (*Server, error) {
 	// Build Redis URL from components
 	redisURL := fmt.Sprintf("redis://%s/%d", cfg.RedisAddress, cfg.RedisDB)
 	if cfg.RedisPassword != "" {
@@ -92,6 +94,7 @@ func New(cfg *config.Config, logger *logrus.Logger, sdkCache *auth.SDKCache, pro
 		tokenManager,
 		firebaseClient,
 		metadataProvider,
+		cfg.AllowedRedirectURIs,
 		logger,
 	)
 	if err != nil {
@@ -101,17 +104,18 @@ func New(cfg *config.Config, logger *logrus.Logger, sdkCache *auth.SDKCache, pro
 	mux := http.NewServeMux()
 
 	s := &Server{
-		config:          cfg,
-		logger:          logger,
-		mux:             mux,
-		redisClient:     redisClient,
-		stateManager:    stateManager,
-		tokenManager:    tokenManager,
+		config:           cfg,
+		logger:           logger,
+		mux:              mux,
+		redisClient:      redisClient,
+		stateManager:     stateManager,
+		tokenManager:     tokenManager,
 		metadataProvider: metadataProvider,
-		oauthHandlers:   oauthHandlers,
-		sdkCache:        sdkCache,
-		profile:         profile,
-		rateLimiter:     rateLimiter,
+		oauthHandlers:    oauthHandlers,
+		sdkCache:         sdkCache,
+		gcsManager:       gcsManager,
+		profile:          profile,
+		rateLimiter:      rateLimiter,
 	}
 
 	// Setup routes
@@ -128,7 +132,15 @@ func New(cfg *config.Config, logger *logrus.Logger, sdkCache *auth.SDKCache, pro
 		MaxHeaderBytes:    1 << 20, // 1 MB
 	}
 
-	logger.WithField("port", cfg.HTTPPort).Info("HTTP server initialized with OAuth support")
+	// Configure TLS if enabled
+	if cfg.EnableTLS {
+		s.server.TLSConfig = s.createTLSConfig()
+		logger.Info("TLS/HTTPS enabled for HTTP server")
+	} else {
+		logger.Warn("⚠️  TLS/HTTPS DISABLED - This is insecure for production! Enable TLS with ENABLE_TLS=true")
+	}
+
+	logger.Info("HTTP server initialized", "port", cfg.HTTPPort, "tls_enabled", cfg.EnableTLS)
 
 	return s, nil
 }
@@ -170,14 +182,51 @@ func (s *Server) setupRoutes() {
 	}
 }
 
+// createTLSConfig creates a secure TLS configuration
+func (s *Server) createTLSConfig() *tls.Config {
+	return &tls.Config{
+		// Minimum TLS 1.3 for maximum security
+		MinVersion: tls.VersionTLS13,
+
+		// Prefer server cipher suites
+		PreferServerCipherSuites: true,
+
+		// Strong cipher suites for TLS 1.3
+		CipherSuites: []uint16{
+			tls.TLS_AES_128_GCM_SHA256,
+			tls.TLS_AES_256_GCM_SHA384,
+			tls.TLS_CHACHA20_POLY1305_SHA256,
+		},
+
+		// Curve preferences
+		CurvePreferences: []tls.CurveID{
+			tls.X25519,
+			tls.CurveP256,
+		},
+	}
+}
+
 // Serve starts the HTTP server
 func (s *Server) Serve(ctx context.Context) error {
-	s.logger.WithField("addr", s.server.Addr).Info("Starting HTTP server")
+	protocol := "HTTP"
+	if s.config.EnableTLS {
+		protocol = "HTTPS"
+	}
+	s.logger.Info(fmt.Sprintf("Starting %s server", protocol), "port", s.config.HTTPPort)
 
 	// Start server in goroutine
 	errCh := make(chan error, 1)
 	go func() {
-		if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		var err error
+		if s.config.EnableTLS {
+			// Start HTTPS server with TLS
+			err = s.server.ListenAndServeTLS(s.config.TLSCert, s.config.TLSKey)
+		} else {
+			// Start HTTP server (insecure - dev only)
+			err = s.server.ListenAndServe()
+		}
+
+		if err != nil && err != http.ErrServerClosed {
 			errCh <- err
 		}
 	}()
@@ -210,7 +259,7 @@ func (s *Server) Close() error {
 	// Close Redis client
 	if s.redisClient != nil {
 		if err := s.redisClient.Close(); err != nil {
-			s.logger.WithError(err).Error("Failed to close Redis client")
+			s.logger.Error("Failed to close Redis client", "error", err)
 			return fmt.Errorf("failed to close Redis client: %w", err)
 		}
 	}
@@ -426,6 +475,9 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	ctx := r.Context()
 	ctx = auth.WithAuthContext(ctx, authCtx)
 	ctx = auth.WithSDKCache(ctx, s.sdkCache)
+	if s.gcsManager != nil {
+		ctx = gcs.WithGCSManager(ctx, s.gcsManager)
+	}
 
 	// Look up the tool
 	tool, ok := tools.GetTool(toolName)
@@ -469,47 +521,26 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 }
 
 func (s *Server) extractUIDFromToken(token string) (string, error) {
-	// Simple JWT parsing (HS256/RS256)
-	// In production, use a proper JWT library
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return "", fmt.Errorf("invalid JWT format")
-	}
+	// SECURITY: Validate MCP OAuth access token (NOT Firebase token directly)
+	// The Bearer token here is the MCP-issued access token from /token endpoint
 
-	// Decode payload (second part)
-	payload, err := s.base64Decode(parts[1])
+	// Validate the MCP access token using token manager
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Validate and get token info
+	validation, err := s.tokenManager.ValidateAccessToken(ctx, token, true)
 	if err != nil {
-		return "", fmt.Errorf("failed to decode JWT payload: %w", err)
+		s.logger.Error("Token validation error", "error", err)
+		return "", fmt.Errorf("token validation failed: %w", err)
 	}
 
-	var claims struct {
-		UID   string `json:"uid"`
-		Email string `json:"email"`
-		Sub   string `json:"sub"`
+	if !validation.Valid {
+		return "", fmt.Errorf("invalid or expired token: %s", validation.Error)
 	}
 
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return "", fmt.Errorf("failed to parse JWT claims: %w", err)
-	}
-
-	// Try UID field first, then email, then sub
-	if claims.UID != "" {
-		return claims.UID, nil
-	}
-	if claims.Email != "" {
-		return claims.Email, nil
-	}
-	if claims.Sub != "" {
-		return claims.Sub, nil
-	}
-
-	return "", fmt.Errorf("no UID found in token")
-}
-
-func (s *Server) base64Decode(str string) ([]byte, error) {
-	// JWT uses base64url encoding (RFC 4648) without padding
-	// Go's base64.RawURLEncoding handles this correctly
-	return base64.RawURLEncoding.DecodeString(str)
+	// Return the Firebase UID from validated token
+	return validation.UID, nil
 }
 
 func (s *Server) writeJSONRPCSuccess(w http.ResponseWriter, id interface{}, result interface{}) {
@@ -539,6 +570,6 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, data interface{}) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		s.logger.WithError(err).Error("Failed to encode JSON response")
+		s.logger.Error("Failed to encode JSON response", "error", err)
 	}
 }

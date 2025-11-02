@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 const (
@@ -33,18 +33,17 @@ const (
 type Client struct {
 	apiKey     string
 	httpClient *http.Client
-	logger     *logrus.Logger
+	logger     *slog.Logger
 }
 
 // NewClient creates a new Firebase authentication client
-func NewClient(logger *logrus.Logger) (*Client, error) {
+func NewClient(logger *slog.Logger) (*Client, error) {
 	// Get Firebase API key from environment
 	// NOTE: Firebase Web API keys are designed to be public and exposed in client apps
 	// Security is enforced through Firebase Security Rules, not API key secrecy
 	apiKey := os.Getenv("FIREBASE_API_KEY")
 	if apiKey == "" {
-		// Default to LimaCharlie's public Firebase Web API key
-		apiKey = "AIzaSyB5VyO6qS-XlnVD3zOIuEVNBD5JFn22_1w"
+		return nil, fmt.Errorf("FIREBASE_API_KEY environment variable is required")
 	}
 
 	client := &Client{
@@ -55,7 +54,7 @@ func NewClient(logger *logrus.Logger) (*Client, error) {
 		logger: logger,
 	}
 
-	logger.WithField("api_key", apiKey[:20]+"...").Info("Firebase client initialized")
+	logger.Info("Firebase client initialized")
 
 	return client, nil
 }
@@ -86,10 +85,7 @@ func (c *Client) CreateAuthURI(ctx context.Context, providerID, redirectURI stri
 		return "", "", fmt.Errorf("createAuthUri failed: %w", err)
 	}
 
-	c.logger.WithFields(logrus.Fields{
-		"provider":   providerID,
-		"session_id": resp.SessionID[:12] + "...",
-	}).Debug("Created Firebase auth URI")
+	c.logger.Debug("Created Firebase auth URI")
 
 	return resp.SessionID, resp.AuthURI, nil
 }
@@ -114,7 +110,7 @@ func (c *Client) SignInWithIdp(ctx context.Context, requestURI, queryString, ses
 		// Extract first MFA method (usually TOTP)
 		mfaMethod := resp.MFAInfo[0]
 
-		c.logger.WithField("email", resp.Email).Info("MFA required")
+		c.logger.Info("MFA required")
 
 		return nil, &MFARequiredError{
 			MFAPendingCredential: resp.MFAPendingCredential,
@@ -134,7 +130,7 @@ func (c *Client) SignInWithIdp(ctx context.Context, requestURI, queryString, ses
 		return nil, fmt.Errorf("missing tokens in Firebase response")
 	}
 
-	c.logger.WithField("uid", resp.LocalID).Info("Successfully signed in via Firebase")
+	c.logger.Info("Successfully signed in via Firebase")
 
 	return &resp, nil
 }
@@ -216,7 +212,7 @@ func (c *Client) FinalizeMFASignIn(ctx context.Context, mfaPendingCredential, mf
 		return nil, fmt.Errorf("missing tokens in MFA finalization response")
 	}
 
-	c.logger.WithField("uid", resp.LocalID).Info("Successfully completed MFA sign-in")
+	c.logger.Info("Successfully completed MFA sign-in")
 
 	return &resp, nil
 }
@@ -262,7 +258,7 @@ func (c *Client) ValidateProviderCallback(callbackPath string) (string, error) {
 		return "", fmt.Errorf("OAuth error: %s - %s", errCode, errDesc)
 	}
 
-	c.logger.WithField("params", len(params)).Debug("Validated provider callback")
+	// c.logger.WithField("params", len(params)).Debug("Validated provider callback")
 
 	return queryString, nil
 }
@@ -307,7 +303,7 @@ func (c *Client) doRequest(ctx context.Context, method, endpoint string, reqBody
 	if resp.StatusCode != http.StatusOK {
 		var fbErr FirebaseError
 		if json.Unmarshal(respData, &fbErr) == nil && fbErr.ErrorDetails.Message != "" {
-			c.logger.WithField("error", fbErr.ErrorDetails.Message).Error("Firebase API error")
+			c.logger.Error("Firebase API error")
 			return &fbErr
 		}
 		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(respData))

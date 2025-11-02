@@ -6,13 +6,13 @@ import (
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/redis"
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 // Limiter implements Redis-based rate limiting using token bucket algorithm
 type Limiter struct {
 	redis  *redis.Client
-	logger *logrus.Logger
+	logger *slog.Logger
 }
 
 // Config holds rate limit configuration for an endpoint
@@ -22,7 +22,7 @@ type Config struct {
 }
 
 // NewLimiter creates a new rate limiter
-func NewLimiter(redisClient *redis.Client, logger *logrus.Logger) *Limiter {
+func NewLimiter(redisClient *redis.Client, logger *slog.Logger) *Limiter {
 	return &Limiter{
 		redis:  redisClient,
 		logger: logger,
@@ -42,14 +42,14 @@ func (l *Limiter) Allow(ctx context.Context, key string, cfg Config) (bool, erro
 	count, err := l.redis.Incr(ctx, bucketKey)
 	if err != nil {
 		// On Redis error, allow the request (fail open)
-		l.logger.WithError(err).Warn("Rate limit check failed, allowing request")
+		l.logger.Warn("Rate limit check failed, allowing request")
 		return true, err
 	}
 
 	// Set expiration on first increment
 	if count == 1 {
 		if err := l.redis.Expire(ctx, bucketKey, cfg.Window); err != nil {
-			l.logger.WithError(err).Warn("Failed to set rate limit expiration")
+			l.logger.Warn("Failed to set rate limit expiration")
 		}
 	}
 
@@ -57,12 +57,7 @@ func (l *Limiter) Allow(ctx context.Context, key string, cfg Config) (bool, erro
 	allowed := count <= int64(cfg.MaxRequests)
 
 	if !allowed {
-		l.logger.WithFields(logrus.Fields{
-			"key":          key,
-			"count":        count,
-			"max_requests": cfg.MaxRequests,
-			"window":       cfg.Window,
-		}).Info("Rate limit exceeded")
+		l.logger.Info("Rate limit exceeded")
 	}
 
 	return allowed, nil

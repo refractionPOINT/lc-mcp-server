@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"log/slog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -422,8 +422,8 @@ func TestCredentialIsolation_CacheKeys(t *testing.T) {
 }
 
 func TestSDKCache_Basic(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
+	logger := slog.Default()
+	logger.SetLevel(slog.LevelDebug)
 
 	cache := NewSDKCache(5*time.Second, logger)
 
@@ -479,8 +479,8 @@ func TestSDKCache_Basic(t *testing.T) {
 
 func TestSDKCache_CredentialIsolation(t *testing.T) {
 	t.Run("different credentials get different cache keys", func(t *testing.T) {
-		logger := logrus.New()
-		logger.SetLevel(logrus.ErrorLevel)
+		logger := slog.Default()
+		logger.SetLevel(slog.LevelError)
 		cache := NewSDKCache(5*time.Minute, logger)
 
 		auth1 := &AuthContext{
@@ -917,8 +917,8 @@ func createTestJWT(t *testing.T, claims map[string]interface{}) string {
 }
 
 func TestSDKCache_RespectJWTExpiration(t *testing.T) {
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := slog.Default()
+	logger.SetLevel(slog.LevelError)
 	cache := NewSDKCache(5*time.Minute, logger)
 	defer cache.Close()
 

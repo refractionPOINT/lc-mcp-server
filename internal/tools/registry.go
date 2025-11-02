@@ -42,6 +42,12 @@ var ProfileDefinitions = map[string][]string{
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
+		// Saved queries
+		"list_saved_queries",
+		"get_saved_query",
+		"run_saved_query",
+		"set_saved_query",
+		"delete_saved_query",
 		// Event schemas
 		"get_event_schema",
 		"get_event_schemas_batch",
@@ -59,6 +65,10 @@ var ProfileDefinitions = map[string][]string{
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
+		// Saved queries (read-only - excludes set/delete)
+		"list_saved_queries",
+		"get_saved_query",
+		"run_saved_query",
 		// Event schemas (read-only)
 		"get_event_schema",
 		"get_event_schemas_batch",
@@ -113,6 +123,7 @@ var ProfileDefinitions = map[string][]string{
 	},
 	"detection_engineering": {
 		"get_detection_rules",
+		"get_historic_detections",
 		// D&R General Rules
 		"list_dr_general_rules",
 		"get_dr_general_rule",
@@ -123,6 +134,8 @@ var ProfileDefinitions = map[string][]string{
 		"get_dr_managed_rule",
 		"set_dr_managed_rule",
 		"delete_dr_managed_rule",
+		// D&R validation
+		"validate_dr_rule_components",
 		// YARA Rules
 		"list_yara_rules",
 		"get_yara_rule",
@@ -193,6 +206,7 @@ var ProfileDefinitions = map[string][]string{
 		// Saved Queries
 		"list_saved_queries",
 		"get_saved_query",
+		"run_saved_query",
 		"set_saved_query",
 		"delete_saved_query",
 		// API Keys

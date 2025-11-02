@@ -6,7 +6,7 @@ import (
 
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
-	"github.com/sirupsen/logrus"
+	"log/slog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,8 +31,8 @@ func TestNew(t *testing.T) {
 			},
 		}
 
-		logger := logrus.New()
-		logger.SetLevel(logrus.ErrorLevel)
+		logger := slog.New()
+		logger.SetLevel(slog.ErrorLevel)
 
 		srv, err := New(cfg, logger)
 
@@ -76,8 +76,8 @@ func TestNew(t *testing.T) {
 			},
 		}
 
-		logger := logrus.New()
-		logger.SetLevel(logrus.ErrorLevel)
+		logger := slog.New()
+		logger.SetLevel(slog.ErrorLevel)
 
 		srv, err := New(cfg, logger)
 
@@ -100,8 +100,8 @@ func TestGetters(t *testing.T) {
 		},
 	}
 
-	logger := logrus.New()
-	logger.SetLevel(logrus.ErrorLevel)
+	logger := slog.New()
+	logger.SetLevel(slog.ErrorLevel)
 
 	srv, err := New(cfg, logger)
 	require.NoError(t, err)
@@ -136,8 +136,8 @@ func TestServerIntegration(t *testing.T) {
 			},
 		}
 
-		logger := logrus.New()
-		logger.SetLevel(logrus.ErrorLevel)
+		logger := slog.New()
+		logger.SetLevel(slog.ErrorLevel)
 
 		srv, err := New(cfg, logger)
 		require.NoError(t, err)

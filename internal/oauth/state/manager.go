@@ -10,18 +10,18 @@ import (
 
 	"github.com/refractionpoint/lc-mcp-go/internal/crypto"
 	"github.com/refractionpoint/lc-mcp-go/internal/redis"
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 // Manager manages OAuth state and token storage in Redis
 type Manager struct {
 	redis      *redis.Client
 	encryption *crypto.TokenEncryption
-	logger     *logrus.Logger
+	logger     *slog.Logger
 }
 
 // NewManager creates a new OAuth state manager
-func NewManager(redisClient *redis.Client, encryption *crypto.TokenEncryption, logger *logrus.Logger) *Manager {
+func NewManager(redisClient *redis.Client, encryption *crypto.TokenEncryption, logger *slog.Logger) *Manager {
 	return &Manager{
 		redis:      redisClient,
 		encryption: encryption,
@@ -53,11 +53,7 @@ func (m *Manager) StoreOAuthState(ctx context.Context, state *OAuthState) error 
 		return fmt.Errorf("failed to store OAuth state: %w", err)
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"state":     state.State[:10] + "...",
-		"client_id": state.ClientID,
-		"provider":  state.Provider,
-	}).Debug("Stored OAuth state")
+	m.logger.Debug("Stored OAuth state")
 
 	return nil
 }
@@ -102,7 +98,7 @@ func (m *Manager) ConsumeOAuthState(ctx context.Context, state string) (*OAuthSt
 		return nil, fmt.Errorf("failed to unmarshal OAuth state: %w", err)
 	}
 
-	m.logger.WithField("state", state[:10]+"...").Debug("Consumed OAuth state")
+	m.logger.Debug("Consumed OAuth state")
 
 	return &oauthState, nil
 }
@@ -164,11 +160,7 @@ func (m *Manager) StoreAuthorizationCode(ctx context.Context, code *Authorizatio
 		return fmt.Errorf("failed to store authorization code: %w", err)
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"code":      code.Code[:10] + "...",
-		"uid":       code.UID,
-		"encrypted": m.encryption.IsEnabled(),
-	}).Debug("Stored authorization code")
+	m.logger.Debug("Stored authorization code")
 
 	return nil
 }
@@ -203,10 +195,7 @@ func (m *Manager) ConsumeAuthorizationCode(ctx context.Context, code string) (*A
 		return nil, fmt.Errorf("failed to decrypt refresh token: %w", err)
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"code":      code[:10] + "...",
-		"decrypted": m.encryption.IsEnabled(),
-	}).Debug("Consumed authorization code")
+	m.logger.Debug("Consumed authorization code")
 
 	return &authCode, nil
 }
@@ -256,11 +245,7 @@ func (m *Manager) StoreAccessToken(ctx context.Context, token *AccessTokenData) 
 		return fmt.Errorf("failed to store access token: %w", err)
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"token":     token.AccessToken[:10] + "...",
-		"uid":       token.UID,
-		"encrypted": m.encryption.IsEnabled(),
-	}).Debug("Stored access token")
+	m.logger.Debug("Stored access token")
 
 	return nil
 }
@@ -326,7 +311,7 @@ func (m *Manager) RevokeAccessToken(ctx context.Context, accessToken string) err
 		return fmt.Errorf("failed to revoke access token: %w", err)
 	}
 
-	m.logger.WithField("token", accessToken[:10]+"...").Info("Revoked access token")
+	m.logger.Info("Revoked access token")
 
 	return nil
 }
@@ -365,11 +350,7 @@ func (m *Manager) StoreRefreshToken(ctx context.Context, token *RefreshTokenData
 		return fmt.Errorf("failed to store refresh token: %w", err)
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"token":     token.RefreshToken[:10] + "...",
-		"uid":       token.UID,
-		"encrypted": m.encryption.IsEnabled(),
-	}).Debug("Stored refresh token")
+	m.logger.Debug("Stored refresh token")
 
 	return nil
 }
@@ -409,7 +390,7 @@ func (m *Manager) RevokeRefreshToken(ctx context.Context, refreshToken string) e
 		return fmt.Errorf("failed to revoke refresh token: %w", err)
 	}
 
-	m.logger.WithField("token", refreshToken[:10]+"...").Info("Revoked refresh token")
+	m.logger.Info("Revoked refresh token")
 
 	return nil
 }
@@ -439,10 +420,7 @@ func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientReg
 		return fmt.Errorf("failed to store client registration: %w", err)
 	}
 
-	m.logger.WithFields(logrus.Fields{
-		"client_id":   client.ClientID,
-		"client_name": client.ClientName,
-	}).Info("Stored client registration")
+	m.logger.Info("Stored client registration")
 
 	return nil
 }
@@ -492,7 +470,7 @@ func (m *Manager) StoreSelectionSession(ctx context.Context, sessionID string, p
 		return fmt.Errorf("failed to store selection session: %w", err)
 	}
 
-	m.logger.WithField("session_id", sessionID[:10]+"...").Debug("Stored selection session")
+	m.logger.Debug("Stored selection session")
 
 	return nil
 }
@@ -542,7 +520,7 @@ func (m *Manager) StoreMFASession(ctx context.Context, sessionID string, session
 		return fmt.Errorf("failed to store MFA session: %w", err)
 	}
 
-	m.logger.WithField("session_id", sessionID[:20]+"...").Debug("Stored MFA session")
+	m.logger.Debug("Stored MFA session")
 
 	return nil
 }
@@ -569,25 +547,37 @@ func (m *Manager) GetMFASession(ctx context.Context, sessionID string) (*MFASess
 }
 
 // IncrementMFAAttempts atomically increments the MFA attempt counter
+// SECURITY: Uses Redis INCR for atomic increment to prevent race conditions
 func (m *Manager) IncrementMFAAttempts(ctx context.Context, sessionID string) (int, error) {
+	// Verify session exists first
 	session, err := m.GetMFASession(ctx, sessionID)
 	if err != nil || session == nil {
 		return 0, fmt.Errorf("MFA session not found: %w", err)
 	}
 
-	session.AttemptCount++
+	// Use separate counter key for atomic increment
+	counterKey := MFAPrefix + sessionID + ":attempts"
 
-	// Store updated session
-	if err := m.StoreMFASession(ctx, sessionID, session); err != nil {
-		return 0, err
+	// Atomically increment the counter
+	attempts, err := m.redis.Incr(ctx, counterKey)
+	if err != nil {
+		return 0, fmt.Errorf("failed to increment MFA attempts: %w", err)
 	}
 
-	return session.AttemptCount, nil
+	// Set expiration on first increment
+	if attempts == 1 {
+		if err := m.redis.Expire(ctx, counterKey, time.Duration(MFATTL)*time.Second); err != nil {
+			m.logger.Warn("Failed to set MFA attempt counter expiration")
+		}
+	}
+
+	return int(attempts), nil
 }
 
 // ConsumeMFASession atomically retrieves and deletes an MFA session
 func (m *Manager) ConsumeMFASession(ctx context.Context, sessionID string) (*MFASession, error) {
 	key := MFAPrefix + sessionID
+	counterKey := MFAPrefix + sessionID + ":attempts"
 
 	data, err := m.redis.AtomicGetAndDelete(ctx, key)
 	if err != nil {
@@ -603,7 +593,10 @@ func (m *Manager) ConsumeMFASession(ctx context.Context, sessionID string) (*MFA
 		return nil, fmt.Errorf("failed to unmarshal MFA session: %w", err)
 	}
 
-	m.logger.WithField("session_id", sessionID[:20]+"...").Debug("Consumed MFA session")
+	// Also delete the attempt counter
+	m.redis.Delete(ctx, counterKey)
+
+	m.logger.Debug("Consumed MFA session")
 
 	return &session, nil
 }

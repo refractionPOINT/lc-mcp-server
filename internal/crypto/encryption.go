@@ -10,7 +10,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/sirupsen/logrus"
+	"log/slog"
 )
 
 const (
@@ -33,11 +33,11 @@ var (
 type TokenEncryption struct {
 	gcm     cipher.AEAD
 	enabled bool
-	logger  *logrus.Logger
+	logger  *slog.Logger
 }
 
 // NewTokenEncryption creates a new token encryption instance
-func NewTokenEncryption(logger *logrus.Logger) (*TokenEncryption, error) {
+func NewTokenEncryption(logger *slog.Logger) (*TokenEncryption, error) {
 	// Get encryption key from environment
 	keyB64 := os.Getenv("REDIS_ENCRYPTION_KEY")
 
