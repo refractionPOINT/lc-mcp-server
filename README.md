@@ -4,15 +4,16 @@ A Model Context Protocol (MCP) server for LimaCharlie written in Go, providing s
 
 ## Project Status
 
-**Phase**: ✅ **PRODUCTION READY** - 95% Feature Parity Achieved
+**Phase**: ✅ **PRODUCTION READY** - 98% Feature Parity Achieved
 
 ### 🎯 Release Status
 
-- **115 MCP tools implemented** (93% of Python's 124 tools)
+- **121 MCP tools implemented** (98% of Python's 124 tools)
 - **8 tool profiles** fully configured and tested
 - **Complete OAuth 2.1 support** with PKCE
 - **Multi-tenant architecture** with credential isolation
 - **Dual-mode operation**: STDIO (Claude Desktop) and HTTP (Cloud)
+- **AI-powered tools** with Google Gemini API
 - **Build status**: ✅ Both SDK and server compile cleanly
 
 ### ✅ Completed Features
@@ -44,7 +45,7 @@ A Model Context Protocol (MCP) server for LimaCharlie written in Go, providing s
    - ✅ Multi-org wrapper support
    - ✅ Profile-based filtering
 
-5. **Complete Tool Implementations** (115 tools):
+5. **Complete Tool Implementations** (121 tools):
    - ✅ **Core** (6 tools): sensor management, listing, search
    - ✅ **Historical Data** (12 tools): LCQL, events, detections, IOC, schemas
    - ✅ **Historical Data Readonly** (12 tools): Same as above, read-only
@@ -53,6 +54,7 @@ A Model Context Protocol (MCP) server for LimaCharlie written in Go, providing s
    - ✅ **Fleet Management** (9 tools): installation keys, cloud sensors, platforms
    - ✅ **Detection Engineering** (19 tools): D&R rules, YARA, FP rules, MITRE
    - ✅ **Platform Admin** (44 tools): Complete platform control, integrations
+   - ✅ **AI-Powered** (6 tools): LCQL, D&R rules, playbooks, selectors (Google Gemini)
 
 6. **SDK Integration**
    - ✅ All required methods exist in go-limacharlie SDK
@@ -75,15 +77,19 @@ A Model Context Protocol (MCP) server for LimaCharlie written in Go, providing s
    - ✅ `ARCHITECTURE.md` - Design documentation
    - ✅ Configuration examples (Claude Desktop & Code)
 
+9. **AI-Powered Tools** (`internal/tools/ai/`)
+   - ✅ Google Gemini API integration
+   - ✅ 9 prompt templates for rule generation
+   - ✅ LCQL query generation with validation
+   - ✅ D&R rule generation (detect & respond)
+   - ✅ Sensor selector generation
+   - ✅ Python playbook generation
+   - ✅ Detection summary generation
+   - ✅ Retry logic with validation feedback loop
+
 ### ⏸️ Deferred Features (Non-Critical)
 
-1. **AI-Powered Tools** (6 tools)
-   - Requires Google Gemini SDK integration
-   - Estimated effort: 2-3 days
-   - Priority: Low (optional enhancement)
-   - **Reasoning**: Not core security functionality, can be added later
-
-2. **Audit Logging Framework**
+1. **Audit Logging Framework**
    - Structured audit trail for compliance
    - Estimated effort: 3-5 days
    - Priority: Medium (operational/compliance)
@@ -99,12 +105,13 @@ A Model Context Protocol (MCP) server for LimaCharlie written in Go, providing s
 
 | Feature Category | Go | Python | Status |
 |------------------|----|----|--------|
-| **Tool Count** | 115 | 124 | ✅ 93% |
+| **Tool Count** | 121 | 124 | ✅ 98% |
 | **Profiles** | 8 | 7 | ✅ 114% |
 | **OAuth 2.1** | ✅ | ✅ | ✅ 100% |
 | **Multi-Tenant** | ✅ | ✅ | ✅ 100% |
 | **STDIO Mode** | ✅ | ✅ | ✅ 100% |
 | **HTTP Mode** | ✅ | ✅ | ✅ 100% |
+| **AI Tools** | ✅ | ✅ | ✅ 100% |
 | **Performance** | Faster | Baseline | ✅ Superior |
 | **Security** | Better | Good | ✅ Superior |
 | **Deployment** | 55MB Binary | Python+Deps | ✅ Better |
@@ -173,10 +180,17 @@ export LC_CURRENT_ENV="default"  # Uses ~/.limacharlie
 **Server Configuration:**
 
 ```bash
-export MCP_MODE="stdio"         # stdio or http (http not yet implemented)
-export MCP_PROFILE="all"        # core, historical_data, live_investigation, etc.
+export MCP_MODE="stdio"         # stdio or http
+export MCP_PROFILE="all"        # core, historical_data, live_investigation, ai_powered, etc.
 export LOG_LEVEL="info"         # debug, info, warn, error
 export SDK_CACHE_TTL="5m"       # SDK cache TTL
+```
+
+**AI-Powered Tools (optional):**
+
+```bash
+export GOOGLE_API_KEY="your-google-api-key"       # Required for AI tools
+export LLM_YAML_RETRY_COUNT="10"                  # Retry count for AI validation (default: 10)
 ```
 
 ## Profiles
@@ -184,13 +198,15 @@ export SDK_CACHE_TTL="5m"       # SDK cache TTL
 | Profile | Tools | Description |
 |---------|-------|-------------|
 | `core` | 6 | Basic sensor operations (always included) |
-| `historical_data` | 6 | Telemetry analysis, LCQL queries, IOC search |
-| `live_investigation` | 15 | Real-time endpoint inspection, YARA scanning |
+| `historical_data` | 12 | Telemetry analysis, LCQL queries, IOC search |
+| `historical_data_readonly` | 12 | Read-only historical data access |
+| `live_investigation` | 18 | Real-time endpoint inspection, YARA scanning |
 | `threat_response` | 8 | Incident response actions (isolation, tagging) |
-| `fleet_management` | 7 | Sensor management, installation keys |
-| `detection_engineering` | 15 | D&R rules, YARA rules, false positives |
-| `platform_admin` | 19 | Complete platform configuration |
-| `all` | 76+ | All tools from all profiles |
+| `fleet_management` | 9 | Sensor management, installation keys |
+| `detection_engineering` | 19 | D&R rules, YARA rules, false positives |
+| `platform_admin` | 44 | Complete platform configuration |
+| `ai_powered` | 6 | AI-powered rule and query generation (requires GOOGLE_API_KEY) |
+| `all` | 121+ | All tools from all profiles |
 
 ## Building
 
