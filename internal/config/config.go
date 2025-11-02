@@ -12,9 +12,23 @@ import (
 // Config holds all configuration for the MCP server
 type Config struct {
 	// Server configuration
-	Mode     string // "stdio" or "http" (future)
+	Mode     string // "stdio" or "http"
 	Profile  string // Profile to expose: "core", "all", etc.
 	LogLevel string // "debug", "info", "warn", "error"
+
+	// HTTP server configuration (for OAuth mode)
+	HTTPPort           int      // HTTP server port
+	ServerURL          string   // Public server URL for OAuth metadata
+	CORSAllowedOrigins []string // Allowed CORS origins
+
+	// Redis configuration (for OAuth state management)
+	RedisAddress  string // Redis server address (host:port)
+	RedisPassword string // Redis password (optional)
+	RedisDB       int    // Redis database number
+
+	// OAuth configuration
+	FirebaseAPIKey string // Firebase API key for authentication
+	EncryptionKey  string // 32-byte hex-encoded key for token encryption
 
 	// Authentication (loaded from environment or config file)
 	Auth *auth.AuthContext
@@ -37,11 +51,35 @@ func Load() (*Config, error) {
 		EnableAudit: getBoolEnv("AUDIT_LOG_ENABLED", false),
 		AuditLevel:  getEnv("AUDIT_LOG_LEVEL", "MEDIUM"),
 		SDKCacheTTL: getDurationEnv("SDK_CACHE_TTL", 5*time.Minute),
+
+		// HTTP server configuration
+		HTTPPort:           getIntEnv("HTTP_PORT", 8080),
+		ServerURL:          getEnv("MCP_SERVER_URL", "http://localhost:8080"),
+		CORSAllowedOrigins: getSliceEnv("CORS_ALLOWED_ORIGINS", []string{"*"}),
+
+		// Redis configuration
+		RedisAddress:  getEnv("REDIS_ADDRESS", "localhost:6379"),
+		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisDB:       getIntEnv("REDIS_DB", 0),
+
+		// OAuth configuration
+		FirebaseAPIKey: getEnv("FIREBASE_API_KEY", "AIzaSyB5VyO6qS-XlnVD3zOIuEVNBD5JFn22_1w"), // Default Firebase API key
+		EncryptionKey:  getEnv("ENCRYPTION_KEY", ""),
 	}
 
 	// Validate mode
 	if cfg.Mode != "stdio" && cfg.Mode != "http" {
 		return nil, fmt.Errorf("invalid MCP_MODE: %s (must be 'stdio' or 'http')", cfg.Mode)
+	}
+
+	// For HTTP mode, validate OAuth-specific configuration
+	if cfg.Mode == "http" {
+		if cfg.EncryptionKey == "" {
+			return nil, fmt.Errorf("ENCRYPTION_KEY is required for HTTP mode (32-byte hex string)")
+		}
+		if len(cfg.EncryptionKey) != 64 {
+			return nil, fmt.Errorf("ENCRYPTION_KEY must be 64 hex characters (32 bytes)")
+		}
 	}
 
 	// Load authentication configuration
@@ -147,6 +185,20 @@ func getBoolEnv(key string, defaultValue bool) bool {
 	return value == "true" || value == "1" || value == "yes"
 }
 
+// getIntEnv gets an integer environment variable
+func getIntEnv(key string, defaultValue int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	var intValue int
+	_, err := fmt.Sscanf(value, "%d", &intValue)
+	if err != nil {
+		return defaultValue
+	}
+	return intValue
+}
+
 // getDurationEnv gets a duration environment variable
 func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
 	value := os.Getenv(key)
@@ -158,6 +210,26 @@ func getDurationEnv(key string, defaultValue time.Duration) time.Duration {
 		return defaultValue
 	}
 	return duration
+}
+
+// getSliceEnv gets a comma-separated list environment variable
+func getSliceEnv(key string, defaultValue []string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	if len(result) == 0 {
+		return defaultValue
+	}
+	return result
 }
 
 // Validate validates the configuration

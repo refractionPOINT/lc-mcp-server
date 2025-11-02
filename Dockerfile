@@ -54,7 +54,12 @@ ENV MCP_MODE=stdio \
     MCP_PROFILE=all \
     LOG_LEVEL=info \
     SDK_CACHE_TTL=5m \
-    PORT=8080
+    PORT=8080 \
+    HTTP_PORT=8080 \
+    MCP_SERVER_URL=http://localhost:8080 \
+    REDIS_ADDRESS=localhost:6379 \
+    REDIS_DB=0 \
+    FIREBASE_API_KEY=AIzaSyB5VyO6qS-XlnVD3zOIuEVNBD5JFn22_1w
 
 # Health check metadata (Cloud Run will use this port)
 EXPOSE 8080

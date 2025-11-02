@@ -1,0 +1,337 @@
+package token
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
+	"github.com/sirupsen/logrus"
+)
+
+// Manager manages OAuth token validation and lifecycle
+type Manager struct {
+	stateManager   *state.Manager
+	firebaseClient *firebase.Client
+	logger         *logrus.Logger
+}
+
+// ValidationResult represents the result of token validation
+type ValidationResult struct {
+	Valid                bool
+	UID                  string
+	FirebaseIDToken      string
+	FirebaseRefreshToken string
+	Scope                string
+	Error                string
+	Refreshed            bool
+}
+
+// TokenResponse represents an OAuth 2.0 token response
+type TokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+	Scope        string `json:"scope,omitempty"`
+}
+
+// IntrospectionResponse represents an OAuth 2.0 token introspection response (RFC 7662)
+type IntrospectionResponse struct {
+	Active    bool   `json:"active"`
+	Scope     string `json:"scope,omitempty"`
+	ClientID  string `json:"client_id,omitempty"`
+	TokenType string `json:"token_type,omitempty"`
+	Exp       int64  `json:"exp,omitempty"`
+	Iat       int64  `json:"iat,omitempty"`
+	Sub       string `json:"sub,omitempty"` // Firebase UID
+}
+
+// NewManager creates a new OAuth token manager
+func NewManager(stateManager *state.Manager, firebaseClient *firebase.Client, logger *logrus.Logger) *Manager {
+	return &Manager{
+		stateManager:   stateManager,
+		firebaseClient: firebaseClient,
+		logger:         logger,
+	}
+}
+
+// ValidateAccessToken validates an MCP access token and optionally refreshes Firebase tokens
+func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, autoRefresh bool) (*ValidationResult, error) {
+	// Look up token in Redis
+	tokenData, err := m.stateManager.GetAccessTokenData(ctx, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token data: %w", err)
+	}
+
+	if tokenData == nil {
+		m.logger.WithField("token", accessToken[:10]+"...").Debug("Access token not found or expired")
+		return &ValidationResult{
+			Valid: false,
+			Error: "invalid or expired access token",
+		}, nil
+	}
+
+	// Check if Firebase token needs refresh
+	firebaseExpiresIn := tokenData.FirebaseExpiresAt - time.Now().Unix()
+	needsRefresh := firebaseExpiresIn < 300 // Refresh if < 5 minutes remaining
+
+	if needsRefresh && autoRefresh && tokenData.FirebaseRefreshToken != "" {
+		m.logger.WithFields(logrus.Fields{
+			"token":      accessToken[:10] + "...",
+			"expires_in": firebaseExpiresIn,
+		}).Info("Firebase token expiring soon, refreshing...")
+
+		// Refresh Firebase token
+		newIDToken, newExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, tokenData.FirebaseRefreshToken)
+		if err != nil {
+			m.logger.WithError(err).Error("Failed to refresh Firebase token")
+			// Continue with existing token if refresh fails (might still be valid for a short time)
+		} else {
+			// Update token data in Redis
+			if err := m.stateManager.UpdateAccessTokenFirebaseTokens(ctx, accessToken, newIDToken, newExpiresAt); err != nil {
+				m.logger.WithError(err).Error("Failed to update Redis with refreshed token")
+			} else {
+				m.logger.WithField("token", accessToken[:10]+"...").Info("Successfully refreshed Firebase token")
+				tokenData.FirebaseIDToken = newIDToken
+				tokenData.FirebaseExpiresAt = newExpiresAt
+
+				return &ValidationResult{
+					Valid:                true,
+					UID:                  tokenData.UID,
+					FirebaseIDToken:      newIDToken,
+					FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
+					Scope:                tokenData.Scope,
+					Refreshed:            true,
+				}, nil
+			}
+		}
+	}
+
+	// Return validation result
+	return &ValidationResult{
+		Valid:                true,
+		UID:                  tokenData.UID,
+		FirebaseIDToken:      tokenData.FirebaseIDToken,
+		FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
+		Scope:                tokenData.Scope,
+		Refreshed:            false,
+	}, nil
+}
+
+// RefreshAccessToken issues a new access token using a refresh token
+// SECURITY: Implements refresh token rotation to detect token theft
+func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (*TokenResponse, error) {
+	// Look up refresh token
+	refreshData, err := m.stateManager.GetRefreshTokenData(ctx, refreshToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get refresh token data: %w", err)
+	}
+
+	if refreshData == nil {
+		m.logger.Warn("Refresh token not found or already used")
+		return nil, fmt.Errorf("invalid or expired refresh token")
+	}
+
+	uid := refreshData.UID
+	firebaseRefreshToken := refreshData.FirebaseRefreshToken
+	scope := refreshData.Scope
+	oldAccessToken := refreshData.AccessToken
+
+	// Refresh Firebase token first
+	newFirebaseIDToken, newFirebaseExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, firebaseRefreshToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh Firebase token: %w", err)
+	}
+
+	// Generate new MCP access token
+	newAccessToken, err := m.stateManager.GenerateAccessToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate access token: %w", err)
+	}
+
+	// SECURITY: Generate NEW refresh token (rotation for theft detection)
+	newRefreshToken, err := m.stateManager.GenerateRefreshToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
+	}
+
+	// Store new access token with refreshed Firebase tokens
+	accessTokenData := state.NewAccessTokenData(
+		newAccessToken,
+		uid,
+		newFirebaseIDToken,
+		firebaseRefreshToken,
+		newFirebaseExpiresAt,
+		scope,
+		state.TokenTTL,
+	)
+	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
+		return nil, fmt.Errorf("failed to store access token: %w", err)
+	}
+
+	// SECURITY: Store new refresh token mapping
+	refreshTokenData := state.NewRefreshTokenData(
+		newRefreshToken,
+		newAccessToken,
+		uid,
+		firebaseRefreshToken,
+		scope,
+	)
+	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
+		return nil, fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	// SECURITY: Revoke old refresh token (critical for rotation)
+	if err := m.stateManager.RevokeRefreshToken(ctx, refreshToken); err != nil {
+		m.logger.WithError(err).Warn("Failed to revoke old refresh token")
+	}
+
+	// Revoke old access token (optional - could keep for grace period)
+	if oldAccessToken != "" {
+		if err := m.stateManager.RevokeAccessToken(ctx, oldAccessToken); err != nil {
+			m.logger.WithError(err).Warn("Failed to revoke old access token")
+		}
+	}
+
+	m.logger.WithFields(logrus.Fields{
+		"uid":      uid,
+		"rotated":  true,
+	}).Info("Issued new tokens via refresh")
+
+	return &TokenResponse{
+		AccessToken:  newAccessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    state.TokenTTL,
+		RefreshToken: newRefreshToken, // NEW TOKEN (rotated for security)
+		Scope:        scope,
+	}, nil
+}
+
+// RevokeToken revokes an access or refresh token
+func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint string) error {
+	revoked := false
+
+	// Try to revoke as access token
+	if tokenTypeHint != "refresh_token" {
+		if err := m.stateManager.RevokeAccessToken(ctx, token); err == nil {
+			m.logger.WithField("token", token[:10]+"...").Info("Revoked access token")
+			revoked = true
+		}
+	}
+
+	// Try to revoke as refresh token
+	if tokenTypeHint != "access_token" {
+		if err := m.stateManager.RevokeRefreshToken(ctx, token); err == nil {
+			m.logger.WithField("token", token[:10]+"...").Info("Revoked refresh token")
+			revoked = true
+		}
+	}
+
+	if !revoked {
+		m.logger.WithField("token", token[:10]+"...").Warn("Token not found for revocation")
+	}
+
+	return nil // Always return success per OAuth 2.0 spec
+}
+
+// IntrospectToken gets token metadata (OAuth 2.0 Token Introspection - RFC 7662)
+func (m *Manager) IntrospectToken(ctx context.Context, token string) (*IntrospectionResponse, error) {
+	tokenData, err := m.stateManager.GetAccessTokenData(ctx, token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get token data: %w", err)
+	}
+
+	if tokenData == nil {
+		return &IntrospectionResponse{
+			Active: false,
+		}, nil
+	}
+
+	// Check expiration
+	isActive := tokenData.ExpiresAt > time.Now().Unix()
+
+	return &IntrospectionResponse{
+		Active:    isActive,
+		Scope:     tokenData.Scope,
+		ClientID:  "mcp", // We don't track client_id per token currently
+		TokenType: "Bearer",
+		Exp:       tokenData.ExpiresAt,
+		Iat:       tokenData.CreatedAt,
+		Sub:       tokenData.UID, // Firebase UID as subject
+	}, nil
+}
+
+// GetTokenInfoForRequest gets token information for authenticating LimaCharlie API requests
+// This is the main method used by request middleware
+func (m *Manager) GetTokenInfoForRequest(ctx context.Context, accessToken string) (map[string]interface{}, error) {
+	validation, err := m.ValidateAccessToken(ctx, accessToken, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if !validation.Valid {
+		return nil, fmt.Errorf(validation.Error)
+	}
+
+	return map[string]interface{}{
+		"uid":                   validation.UID,
+		"firebase_id_token":     validation.FirebaseIDToken,
+		"firebase_refresh_token": validation.FirebaseRefreshToken,
+		"mode":                  "oauth", // Always OAuth mode for MCP tokens
+		"scope":                 validation.Scope,
+		"refreshed":             validation.Refreshed,
+	}, nil
+}
+
+// CreateTokenResponse creates OAuth token response with new MCP tokens
+// Called after successful authorization to issue tokens
+func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken, firebaseRefreshToken string, firebaseExpiresAt int64, scope string) (*TokenResponse, error) {
+	// Generate MCP tokens
+	accessToken, err := m.stateManager.GenerateAccessToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate access token: %w", err)
+	}
+
+	refreshToken, err := m.stateManager.GenerateRefreshToken()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
+	}
+
+	// Store access token
+	accessTokenData := state.NewAccessTokenData(
+		accessToken,
+		uid,
+		firebaseIDToken,
+		firebaseRefreshToken,
+		firebaseExpiresAt,
+		scope,
+		state.TokenTTL,
+	)
+	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
+		return nil, fmt.Errorf("failed to store access token: %w", err)
+	}
+
+	// Store refresh token
+	refreshTokenData := state.NewRefreshTokenData(
+		refreshToken,
+		accessToken,
+		uid,
+		firebaseRefreshToken,
+		scope,
+	)
+	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
+		return nil, fmt.Errorf("failed to store refresh token: %w", err)
+	}
+
+	m.logger.WithField("uid", uid).Info("Created token response")
+
+	return &TokenResponse{
+		AccessToken:  accessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    state.TokenTTL,
+		RefreshToken: refreshToken,
+		Scope:        scope,
+	}, nil
+}

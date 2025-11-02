@@ -13,10 +13,13 @@ import (
 
 	// Import tool packages to trigger init() registration
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/admin"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"  // Platform configuration tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/historical"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/investigation"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/response"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/rules"   // Detection engineering tools
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/schemas" // Event schema tools
 )
 
 func main() {
