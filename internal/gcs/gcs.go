@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	credentials "cloud.google.com/go/iam/credentials/apiv1"
+	"cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 )
@@ -174,16 +176,36 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 		return nil, fmt.Errorf("failed to close GCS writer: %w", err)
 	}
 
-	// Generate signed URL using bucket method (automatically uses IAM Credentials API)
+	// Generate signed URL using IAM Credentials API for signing
 	expiryTime := time.Now().Add(time.Duration(m.config.URLExpiryHours) * time.Hour)
 
-	// Use bucket.SignedURL method which automatically detects service account
-	// and uses IAM Credentials API for signing in Cloud Run environment
+	// Create IAM Credentials client for signing
+	iamClient, err := credentials.NewIamCredentialsClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create IAM credentials client: %w", err)
+	}
+	defer iamClient.Close()
+
+	// Build service account resource name for IAM API
+	serviceAccountResource := fmt.Sprintf("projects/-/serviceAccounts/%s", m.config.SignerServiceAcct)
+
+	// Use bucket.SignedURL with SignBytes function that uses IAM Credentials API
 	opts := &storage.SignedURLOptions{
-		GoogleAccessID: m.config.SignerServiceAcct, // Service account email for signing
+		GoogleAccessID: m.config.SignerServiceAcct,
 		Method:         "GET",
 		Expires:        expiryTime,
 		Scheme:         storage.SigningSchemeV4,
+		SignBytes: func(b []byte) ([]byte, error) {
+			// Use IAM Credentials API to sign the blob
+			resp, err := iamClient.SignBlob(ctx, &credentialspb.SignBlobRequest{
+				Name:    serviceAccountResource,
+				Payload: b,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("signBlob failed: %w", err)
+			}
+			return resp.SignedBlob, nil
+		},
 	}
 
 	signedURL, err := bucket.SignedURL(filename, opts)
