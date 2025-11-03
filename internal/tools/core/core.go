@@ -211,13 +211,6 @@ func RegisterListSensors() {
 			// Format results
 			sensorList := make([]map[string]interface{}, len(filtered))
 			for i, sensor := range filtered {
-				// Get tags for this sensor
-				tags, _ := sensor.GetTags()
-				tagStrings := make([]string, len(tags))
-				for j, tag := range tags {
-					tagStrings[j] = tag.Tag
-				}
-
 				sensorList[i] = map[string]interface{}{
 					"sid":         sensor.SID,
 					"hostname":    sensor.Hostname,
@@ -225,7 +218,6 @@ func RegisterListSensors() {
 					"last_seen":   sensor.AliveTS,
 					"internal_ip": sensor.InternalIP,
 					"external_ip": sensor.ExternalIP,
-					"tags":        tagStrings,
 				}
 			}
 
@@ -412,13 +404,6 @@ func RegisterSearchHosts() {
 			for _, sensor := range sensors {
 				hostname := sensor.Hostname
 				if matchHostname(hostname, hostnameExpr) {
-					// Get tags for this sensor
-					tags, _ := sensor.GetTags()
-					tagStrings := make([]string, len(tags))
-					for i, tag := range tags {
-						tagStrings[i] = tag.Tag
-					}
-
 					matches = append(matches, map[string]interface{}{
 						"sid":         sensor.SID,
 						"hostname":    hostname,
@@ -426,7 +411,6 @@ func RegisterSearchHosts() {
 						"last_seen":   sensor.AliveTS,
 						"internal_ip": sensor.InternalIP,
 						"external_ip": sensor.ExternalIP,
-						"tags":        tagStrings,
 					})
 				}
 			}
