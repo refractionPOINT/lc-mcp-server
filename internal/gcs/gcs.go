@@ -104,8 +104,49 @@ type UploadResult struct {
 	IsTemp   bool // true if saved to temp file instead of GCS
 }
 
+// uploadToTempFile saves data to a temporary file and returns the path
+func (m *Manager) uploadToTempFile(data interface{}, toolName string) (*UploadResult, error) {
+	// Convert data to JSON
+	jsonBytes, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
+	}
+
+	// Create unique filename
+	timestamp := time.Now().UTC().Format("20060102_150405")
+	uniqueID := fmt.Sprintf("%x", time.Now().UnixNano()%0xFFFFFFFF)
+
+	tempFile, err := os.CreateTemp("", fmt.Sprintf("lc-mcp-%s-%s-%s-*.json", toolName, timestamp, uniqueID))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	if _, err := tempFile.Write(jsonBytes); err != nil {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+		return nil, fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	tempFile.Close()
+
+	slog.Info("Saved large result to temp file",
+		"path", tempFile.Name(),
+		"size", len(jsonBytes))
+
+	return &UploadResult{
+		URL:      tempFile.Name(),
+		FileSize: int64(len(jsonBytes)),
+		IsTemp:   true,
+	}, nil
+}
+
 // UploadToGCS uploads data to GCS or saves to temp file and returns URL/path
 func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName string) (*UploadResult, error) {
+	// If GCS not enabled, use temp file
+	if !m.config.Enabled {
+		return m.uploadToTempFile(data, toolName)
+	}
+
 	// Convert data to JSON
 	jsonBytes, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
@@ -116,32 +157,6 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 	timestamp := time.Now().UTC().Format("20060102_150405")
 	uniqueID := fmt.Sprintf("%x", time.Now().UnixNano()%0xFFFFFFFF)
 	filename := fmt.Sprintf("%s_%s_%s.json", toolName, timestamp, uniqueID)
-
-	// If GCS not enabled, use temp file
-	if !m.config.Enabled {
-		tempFile, err := os.CreateTemp("", fmt.Sprintf("lc-mcp-%s-*.json", toolName))
-		if err != nil {
-			return nil, fmt.Errorf("failed to create temp file: %w", err)
-		}
-
-		if _, err := tempFile.Write(jsonBytes); err != nil {
-			tempFile.Close()
-			os.Remove(tempFile.Name())
-			return nil, fmt.Errorf("failed to write temp file: %w", err)
-		}
-
-		tempFile.Close()
-
-		slog.Info("Saved large result to temp file",
-			"path", tempFile.Name(),
-			"size", len(jsonBytes))
-
-		return &UploadResult{
-			URL:      tempFile.Name(),
-			FileSize: int64(len(jsonBytes)),
-			IsTemp:   true,
-		}, nil
-	}
 
 	// Upload to GCS
 	bucket := m.client.Bucket(m.config.BucketName)
@@ -159,18 +174,19 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 		return nil, fmt.Errorf("failed to close GCS writer: %w", err)
 	}
 
-	// Generate signed URL
+	// Generate signed URL using bucket method (automatically uses IAM Credentials API)
 	expiryTime := time.Now().Add(time.Duration(m.config.URLExpiryHours) * time.Hour)
 
-	// Use storage.SignedURL with the bucket and object names
+	// Use bucket.SignedURL method which automatically detects service account
+	// and uses IAM Credentials API for signing in Cloud Run environment
 	opts := &storage.SignedURLOptions{
-		GoogleAccessID: m.config.SignerServiceAcct,
+		GoogleAccessID: m.config.SignerServiceAcct, // Service account email for signing
 		Method:         "GET",
 		Expires:        expiryTime,
 		Scheme:         storage.SigningSchemeV4,
 	}
 
-	signedURL, err := storage.SignedURL(m.config.BucketName, filename, opts)
+	signedURL, err := bucket.SignedURL(filename, opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate signed URL: %w", err)
 	}
@@ -208,17 +224,26 @@ func (m *Manager) WrapResult(ctx context.Context, data interface{}, toolName str
 	}
 
 	if shouldUpload {
-		slog.Info("Tool result exceeds threshold, uploading to GCS",
+		slog.Info("Tool result exceeds threshold, uploading to storage",
 			"tool", toolName,
 			"tokens", tokenCount,
 			"threshold", m.config.TokenThreshold)
 
 		result, err := m.UploadToGCS(ctx, data, toolName)
 		if err != nil {
-			slog.Warn("Failed to upload to GCS, returning result inline",
+			slog.Warn("Failed to upload to GCS, falling back to temp file",
 				"tool", toolName,
 				"error", err)
-			return data, nil
+
+			// Fall back to temp file - don't return inline!
+			result, err = m.uploadToTempFile(data, toolName)
+			if err != nil {
+				// If temp file also fails, return error instead of inline data
+				slog.Error("Failed to save to temp file",
+					"tool", toolName,
+					"error", err)
+				return nil, fmt.Errorf("failed to save large result: %w", err)
+			}
 		}
 
 		// Return alternate response
