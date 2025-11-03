@@ -141,6 +141,9 @@ func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsMa
 
 // setupRoutes configures HTTP routes
 func (s *Server) setupRoutes() {
+	// Root endpoint - handles MCP requests when URL is configured without /mcp suffix
+	s.mux.HandleFunc("/", s.handleRootRequest)
+
 	// Health check endpoints
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/ready", s.handleReady)
@@ -148,6 +151,8 @@ func (s *Server) setupRoutes() {
 	// OAuth discovery endpoints (RFC 8414, RFC 9728)
 	s.mux.HandleFunc("/.well-known/oauth-protected-resource", s.handleProtectedResourceMetadata)
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server", s.handleAuthorizationServerMetadata)
+	// Claude Code also looks for the /mcp variant
+	s.mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", s.handleAuthorizationServerMetadata)
 
 	// OAuth endpoints
 	s.mux.HandleFunc("/authorize", s.handleAuthorize)
@@ -301,6 +306,41 @@ func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
 		"status": status,
 		"checks": checks,
 		"time":   time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+// handleRootRequest handles requests to the root path "/"
+// This allows Claude Code to connect when configured without the /mcp suffix
+func (s *Server) handleRootRequest(w http.ResponseWriter, r *http.Request) {
+	// Only handle the exact root path, not sub-paths
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+
+	// For POST requests, delegate to MCP JSON-RPC handler
+	if r.Method == http.MethodPost {
+		s.handleMCPRequest(w, r)
+		return
+	}
+
+	// For GET requests, return server information
+	if r.Method == http.MethodGet {
+		s.writeJSON(w, http.StatusOK, map[string]interface{}{
+			"type":   "lc-mcp-server",
+			"status": "ok",
+			"endpoints": map[string]string{
+				"mcp":    "/mcp",
+				"health": "/health",
+				"ready":  "/ready",
+			},
+		})
+		return
+	}
+
+	// Reject other HTTP methods
+	s.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{
+		"error": "method not allowed",
 	})
 }
 
