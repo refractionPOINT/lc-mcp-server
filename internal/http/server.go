@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -131,7 +132,10 @@ func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsMa
 		s.server.TLSConfig = s.createTLSConfig()
 		logger.Info("TLS/HTTPS enabled for HTTP server")
 	} else {
-		logger.Warn("⚠️  TLS/HTTPS DISABLED - This is insecure for production! Enable TLS with ENABLE_TLS=true")
+		// Only warn if not running in Cloud Run (which handles TLS termination)
+		if os.Getenv("K_SERVICE") == "" {
+			logger.Warn("⚠️  TLS/HTTPS DISABLED - This is insecure for production! Enable TLS with ENABLE_TLS=true")
+		}
 	}
 
 	logger.Info("HTTP server initialized", "port", cfg.HTTPPort, "tls_enabled", cfg.EnableTLS)
@@ -445,6 +449,16 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Handle different MCP methods
 	switch req.Method {
+	case "ping":
+		// Heartbeat/keepalive - return empty response
+		s.writeJSONRPCSuccess(w, req.ID, map[string]interface{}{})
+	case "initialize":
+		s.handleInitialize(w, r, req.ID, req.Params)
+	case "notifications/initialized":
+		// Client confirms initialization is complete - just log it
+		s.logger.Info("Client initialization complete")
+		// Notifications don't require a response, but we'll send success for compatibility
+		s.writeJSONRPCSuccess(w, req.ID, map[string]interface{}{})
 	case "tools/call":
 		s.handleToolCall(w, r, req.ID, req.Params)
 	case "tools/list":
@@ -452,6 +466,27 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	default:
 		s.writeJSONRPCError(w, req.ID, -32601, "Method not found", fmt.Sprintf("Unknown method: %s", req.Method))
 	}
+}
+
+func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, id interface{}, params map[string]interface{}) {
+	// Log client info if provided
+	if clientInfo, ok := params["clientInfo"].(map[string]interface{}); ok {
+		clientName, _ := clientInfo["name"].(string)
+		clientVersion, _ := clientInfo["version"].(string)
+		s.logger.Info("MCP client initializing", "client", clientName, "version", clientVersion)
+	}
+
+	// Return server capabilities per MCP protocol spec
+	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
+		"protocolVersion": "2024-11-05",
+		"capabilities": map[string]interface{}{
+			"tools": map[string]interface{}{}, // We support tools
+		},
+		"serverInfo": map[string]interface{}{
+			"name":    "LimaCharlie MCP Server",
+			"version": "1.0.0",
+		},
+	})
 }
 
 func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id interface{}, params map[string]interface{}) {
