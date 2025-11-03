@@ -394,8 +394,13 @@ func (s *Server) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProviderSelection(w http.ResponseWriter, r *http.Request) {
-	// Extract session ID from query parameter
+	// Extract session ID from query parameter (GET) or form body (POST)
 	sessionID := r.URL.Query().Get("session")
+	if sessionID == "" {
+		// For POST requests, check form body
+		sessionID = r.FormValue("session")
+	}
+
 	if sessionID == "" {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "invalid_request",
