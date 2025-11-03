@@ -545,10 +545,8 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	bearerToken := parts[1]
 
-	// Verify and extract UID from token
-	// For now, we'll decode the JWT to extract the UID
-	// In production, this should validate the signature
-	uid, err := s.extractUIDFromToken(bearerToken)
+	// Verify and extract UID and Firebase ID token from MCP access token
+	uid, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
 	if err != nil {
 		s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
 		return
@@ -560,11 +558,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		oid = oidVal
 	}
 
-	// Create auth context
+	// Create auth context with Firebase ID token (for LimaCharlie API)
 	authCtx := &auth.AuthContext{
 		Mode:     auth.AuthModeUIDOAuth,
 		UID:      uid,
-		JWTToken: bearerToken,
+		JWTToken: firebaseIDToken, // Use Firebase ID token, not MCP access token
 		OID:      oid,
 	}
 
@@ -617,7 +615,7 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 	})
 }
 
-func (s *Server) extractUIDFromToken(token string) (string, error) {
+func (s *Server) extractUIDFromToken(token string) (string, string, error) {
 	// SECURITY: Validate MCP OAuth access token (NOT Firebase token directly)
 	// The Bearer token here is the MCP-issued access token from /token endpoint
 
@@ -629,15 +627,15 @@ func (s *Server) extractUIDFromToken(token string) (string, error) {
 	validation, err := s.tokenManager.ValidateAccessToken(ctx, token, true)
 	if err != nil {
 		s.logger.Error("Token validation error", "error", err)
-		return "", fmt.Errorf("token validation failed: %w", err)
+		return "", "", fmt.Errorf("token validation failed: %w", err)
 	}
 
 	if !validation.Valid {
-		return "", fmt.Errorf("invalid or expired token: %s", validation.Error)
+		return "", "", fmt.Errorf("invalid or expired token: %s", validation.Error)
 	}
 
-	// Return the Firebase UID from validated token
-	return validation.UID, nil
+	// Return the Firebase UID and Firebase ID token from validated token
+	return validation.UID, validation.FirebaseIDToken, nil
 }
 
 func (s *Server) writeJSONRPCSuccess(w http.ResponseWriter, id interface{}, result interface{}) {
