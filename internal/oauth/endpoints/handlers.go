@@ -20,17 +20,16 @@ import (
 
 // Handlers contains all OAuth endpoint handlers
 type Handlers struct {
-	stateManager        *state.Manager
-	tokenManager        *token.Manager
-	firebaseClient      *firebase.Client
-	metadataProvider    *metadata.Provider
-	logger              *slog.Logger
-	templates           *template.Template
-	allowedRedirectURIs []string // SECURITY: Allowlist of permitted redirect URIs
+	stateManager     *state.Manager
+	tokenManager     *token.Manager
+	firebaseClient   *firebase.Client
+	metadataProvider *metadata.Provider
+	logger           *slog.Logger
+	templates        *template.Template
 }
 
 // NewHandlers creates new OAuth endpoint handlers
-func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, allowedRedirectURIs []string, logger *slog.Logger) (*Handlers, error) {
+func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, logger *slog.Logger) (*Handlers, error) {
 	// Load templates (will create simple inline templates)
 	tmpl, err := template.New("oauth").Parse(providerSelectionHTML + mfaChallengeHTML + errorPageHTML)
 	if err != nil {
@@ -38,13 +37,12 @@ func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, fireb
 	}
 
 	return &Handlers{
-		stateManager:        stateManager,
-		tokenManager:        tokenManager,
-		firebaseClient:      firebaseClient,
-		metadataProvider:    metadataProvider,
-		logger:              logger,
-		templates:           tmpl,
-		allowedRedirectURIs: allowedRedirectURIs,
+		stateManager:     stateManager,
+		tokenManager:     tokenManager,
+		firebaseClient:   firebaseClient,
+		metadataProvider: metadataProvider,
+		logger:           logger,
+		templates:        tmpl,
 	}, nil
 }
 
@@ -82,10 +80,10 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SECURITY: Validate redirect URI against allowlist (exact match)
-	if !h.isRedirectURIAllowed(redirectURI) {
-		h.logger.Warn("Rejected unauthorized redirect_uri", "uri", redirectURI)
-		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri not allowed", http.StatusBadRequest))
+	// Validate redirect URI (must be localhost or HTTPS - matches Python implementation)
+	if !isValidRedirectURI(redirectURI) {
+		h.logger.Warn("Invalid redirect_uri (must be localhost or HTTPS)", "uri", redirectURI)
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri must be localhost or HTTPS", http.StatusBadRequest))
 		return
 	}
 
@@ -393,16 +391,6 @@ func (h *Handlers) validatePKCE(verifier, challenge string) bool {
 	hash := sha256.Sum256([]byte(verifier))
 	computed := base64.RawURLEncoding.EncodeToString(hash[:])
 	return computed == challenge
-}
-
-func (h *Handlers) isRedirectURIAllowed(redirectURI string) bool {
-	// SECURITY: Exact match validation - no wildcards, no prefix matching
-	for _, allowed := range h.allowedRedirectURIs {
-		if redirectURI == allowed {
-			return true
-		}
-	}
-	return false
 }
 
 // HTML templates (inline for simplicity)

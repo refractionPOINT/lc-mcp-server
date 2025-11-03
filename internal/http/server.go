@@ -89,7 +89,6 @@ func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsMa
 		tokenManager,
 		firebaseClient,
 		metadataProvider,
-		cfg.AllowedRedirectURIs,
 		logger,
 	)
 	if err != nil {
