@@ -41,10 +41,9 @@ services:
       REDIS_ADDRESS: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
       REDIS_DB: ${REDIS_DB:-0}
-      
-      # OAuth configuration
-      FIREBASE_API_KEY: ${FIREBASE_API_KEY:-AIzaSyB5VyO6qS-XlnVD3zOIuEVNBD5JFn22_1w}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+
+      # OAuth configuration (Firebase API key is hardcoded)
+      REDIS_ENCRYPTION_KEY: ${REDIS_ENCRYPTION_KEY}
       
       # LimaCharlie API credentials (for server-side API calls)
       LC_OID: ${LC_OID}

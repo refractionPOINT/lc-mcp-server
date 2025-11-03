@@ -35,8 +35,7 @@ type Config struct {
 	RedisDB       int    // Redis database number
 
 	// OAuth configuration
-	FirebaseAPIKey string // Firebase API key for authentication
-	EncryptionKey  string // 32-byte hex-encoded key for token encryption
+	EncryptionKey string // Base64-encoded 32-byte key for token encryption (AES-256)
 
 	// Authentication (loaded from environment or config file)
 	Auth *auth.AuthContext
@@ -82,8 +81,7 @@ func Load() (*Config, error) {
 		RedisDB:       getIntEnv("REDIS_DB", 0),
 
 		// OAuth configuration
-		FirebaseAPIKey: getEnv("FIREBASE_API_KEY", ""),
-		EncryptionKey:  getEnv("ENCRYPTION_KEY", ""),
+		EncryptionKey: getEnv("REDIS_ENCRYPTION_KEY", ""),
 	}
 
 	// Validate mode
@@ -94,11 +92,9 @@ func Load() (*Config, error) {
 	// For HTTP mode, validate OAuth-specific configuration
 	if cfg.Mode == "http" {
 		if cfg.EncryptionKey == "" {
-			return nil, fmt.Errorf("ENCRYPTION_KEY is required for HTTP mode (32-byte hex string)")
+			return nil, fmt.Errorf("REDIS_ENCRYPTION_KEY is required for HTTP mode (base64-encoded 32-byte key)")
 		}
-		if len(cfg.EncryptionKey) != 64 {
-			return nil, fmt.Errorf("ENCRYPTION_KEY must be 64 hex characters (32 bytes)")
-		}
+		// Note: Base64 validation is done in crypto package when initializing encryption
 
 		// Validate TLS configuration if enabled
 		if cfg.EnableTLS {

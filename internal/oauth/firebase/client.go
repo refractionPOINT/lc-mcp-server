@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"time"
 
@@ -38,13 +37,10 @@ type Client struct {
 
 // NewClient creates a new Firebase authentication client
 func NewClient(logger *slog.Logger) (*Client, error) {
-	// Get Firebase API key from environment
+	// LimaCharlie's Firebase Web API key (public token)
 	// NOTE: Firebase Web API keys are designed to be public and exposed in client apps
 	// Security is enforced through Firebase Security Rules, not API key secrecy
-	apiKey := os.Getenv("FIREBASE_API_KEY")
-	if apiKey == "" {
-		return nil, fmt.Errorf("FIREBASE_API_KEY environment variable is required")
-	}
+	const apiKey = "AIzaSyB5VyO6qS-XlnVD3zOIuEVNBD5JFn22_1w"
 
 	client := &Client{
 		apiKey: apiKey,
