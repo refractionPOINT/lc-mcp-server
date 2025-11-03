@@ -61,7 +61,7 @@ func Load() (*Config, error) {
 		SDKCacheTTL: getDurationEnv("SDK_CACHE_TTL", 5*time.Minute),
 
 		// HTTP server configuration
-		HTTPPort:           getIntEnv("HTTP_PORT", 8080),
+		HTTPPort:           getIntEnv("PORT", 8080),
 		ServerURL:          getEnv("MCP_SERVER_URL", "http://localhost:8080"),
 		CORSAllowedOrigins: getSliceEnv("CORS_ALLOWED_ORIGINS", []string{}),
 
