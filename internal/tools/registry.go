@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -344,13 +346,19 @@ func wrapHandler(reg *ToolRegistration) func(context.Context, mcp.CallToolReques
 
 // Helper functions for creating tool results
 
-// ToJSON converts a value to JSON string
+// ToJSON converts a value to JSON string without HTML escaping
 func ToJSON(v interface{}) string {
-	b, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetIndent("", "  ")
+	encoder.SetEscapeHTML(false) // Prevent &, <, > from being escaped as \u0026, \u003c, \u003e
+
+	if err := encoder.Encode(v); err != nil {
 		return fmt.Sprintf("{\"error\": \"failed to marshal JSON: %v\"}", err)
 	}
-	return string(b)
+
+	// encoder.Encode() adds a trailing newline, trim it
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 // SuccessResult creates a successful tool result

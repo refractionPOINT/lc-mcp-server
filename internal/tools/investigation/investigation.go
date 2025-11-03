@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
@@ -69,6 +70,9 @@ func RegisterGetProcesses() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
+			// Set investigation ID for interactive mode
+			org = org.WithInvestigationID(uuid.New().String())
+
 			// Get sensor (returns *Sensor)
 			sensor := org.GetSensor(sid)
 			if sensor == nil {
@@ -124,6 +128,9 @@ func RegisterGetNetworkConnections() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+
+			// Set investigation ID for interactive mode
+			org = org.WithInvestigationID(uuid.New().String())
 
 			// Get sensor (returns *Sensor)
 			sensor := org.GetSensor(sid)
@@ -181,6 +188,9 @@ func RegisterGetOSVersion() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+
+			// Set investigation ID for interactive mode
+			org = org.WithInvestigationID(uuid.New().String())
 
 			// Get sensor (returns *Sensor)
 			sensor := org.GetSensor(sid)
