@@ -545,8 +545,9 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	bearerToken := parts[1]
 
-	// Verify and extract UID and Firebase ID token from MCP access token
-	uid, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
+	// Verify and extract UID and LimaCharlie JWT from MCP access token
+	// The JWT has been exchanged from Firebase ID token to LimaCharlie JWT
+	uid, limaCharlieJWT, err := s.extractUIDFromToken(bearerToken)
 	if err != nil {
 		s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
 		return
@@ -558,11 +559,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		oid = oidVal
 	}
 
-	// Create auth context with Firebase ID token (for LimaCharlie API)
+	// Create auth context with LimaCharlie JWT (exchanged from Firebase token)
 	authCtx := &auth.AuthContext{
 		Mode:     auth.AuthModeUIDOAuth,
 		UID:      uid,
-		JWTToken: firebaseIDToken, // Use Firebase ID token, not MCP access token
+		JWTToken: limaCharlieJWT, // LimaCharlie JWT for API authentication
 		OID:      oid,
 	}
 
@@ -634,8 +635,9 @@ func (s *Server) extractUIDFromToken(token string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid or expired token: %s", validation.Error)
 	}
 
-	// Return the Firebase UID and Firebase ID token from validated token
-	return validation.UID, validation.FirebaseIDToken, nil
+	// Return the Firebase UID and LimaCharlie JWT (exchanged from Firebase token)
+	// This matches Python implementation where Firebase token is exchanged for LC JWT
+	return validation.UID, validation.LimaCharlieJWT, nil
 }
 
 func (s *Server) writeJSONRPCSuccess(w http.ResponseWriter, id interface{}, result interface{}) {

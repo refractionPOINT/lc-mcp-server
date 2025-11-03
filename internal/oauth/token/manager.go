@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
 	"log/slog"
@@ -23,6 +24,7 @@ type ValidationResult struct {
 	UID                  string
 	FirebaseIDToken      string
 	FirebaseRefreshToken string
+	LimaCharlieJWT       string // JWT exchanged from Firebase token for LimaCharlie API
 	Scope                string
 	Error                string
 	Refreshed            bool
@@ -96,16 +98,39 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 				tokenData.FirebaseIDToken = newIDToken
 				tokenData.FirebaseExpiresAt = newExpiresAt
 
+				// Exchange Firebase token for LimaCharlie JWT
+				// This matches Python SDK behavior in Manager.py _refreshJWT (lines 200-212)
+				limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(newIDToken, "", m.logger)
+				if err != nil {
+					m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
+					return &ValidationResult{
+						Valid: false,
+						Error: fmt.Sprintf("JWT exchange failed: %v", err),
+					}, nil
+				}
+
 				return &ValidationResult{
 					Valid:                true,
 					UID:                  tokenData.UID,
 					FirebaseIDToken:      newIDToken,
 					FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
+					LimaCharlieJWT:       limaCharlieJWT,
 					Scope:                tokenData.Scope,
 					Refreshed:            true,
 				}, nil
 			}
 		}
+	}
+
+	// Exchange Firebase token for LimaCharlie JWT
+	// This matches Python SDK behavior in Manager.py _refreshJWT (lines 200-212)
+	limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(tokenData.FirebaseIDToken, "", m.logger)
+	if err != nil {
+		m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
+		return &ValidationResult{
+			Valid: false,
+			Error: fmt.Sprintf("JWT exchange failed: %v", err),
+		}, nil
 	}
 
 	// Return validation result
@@ -114,6 +139,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 		UID:                  tokenData.UID,
 		FirebaseIDToken:      tokenData.FirebaseIDToken,
 		FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
+		LimaCharlieJWT:       limaCharlieJWT,
 		Scope:                tokenData.Scope,
 		Refreshed:            false,
 	}, nil
