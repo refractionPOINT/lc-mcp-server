@@ -115,6 +115,24 @@ func TestLoad(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no authentication configured")
 	})
+
+	t.Run("http mode without credentials", func(t *testing.T) {
+		os.Setenv("MCP_MODE", "http")
+		os.Setenv("REDIS_ENCRYPTION_KEY", "dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzISE=") // base64 encoded 32 bytes
+		os.Unsetenv("LC_OID")
+		os.Unsetenv("LC_API_KEY")
+		os.Unsetenv("LC_UID")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+
+		require.NotNil(t, cfg.Auth)
+		assert.Equal(t, "uid_oauth", cfg.Auth.Mode.String())
+		// In HTTP mode, credentials are empty since they come from OAuth tokens
+		assert.Empty(t, cfg.Auth.OID)
+		assert.Empty(t, cfg.Auth.APIKey)
+		assert.Empty(t, cfg.Auth.UID)
+	})
 }
 
 func TestValidate(t *testing.T) {

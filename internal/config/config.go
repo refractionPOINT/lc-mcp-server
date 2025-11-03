@@ -105,7 +105,7 @@ func Load() (*Config, error) {
 	}
 
 	// Load authentication configuration
-	authContext, err := loadAuthContext()
+	authContext, err := loadAuthContext(cfg.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load authentication: %w", err)
 	}
@@ -115,7 +115,17 @@ func Load() (*Config, error) {
 }
 
 // loadAuthContext loads authentication from environment variables
-func loadAuthContext() (*auth.AuthContext, error) {
+// For HTTP mode, returns a placeholder auth context since authentication
+// comes from OAuth Bearer tokens in each request
+func loadAuthContext(mode string) (*auth.AuthContext, error) {
+	// For HTTP mode with OAuth, return placeholder auth context
+	// Actual authentication will come from Bearer tokens in requests
+	if mode == "http" {
+		return &auth.AuthContext{
+			Mode: auth.AuthModeUIDOAuth,
+			// Empty credentials - will be populated from OAuth tokens per-request
+		}, nil
+	}
 	oid := os.Getenv("LC_OID")
 	apiKey := os.Getenv("LC_API_KEY")
 	uid := os.Getenv("LC_UID")
@@ -151,19 +161,19 @@ func loadAuthContext() (*auth.AuthContext, error) {
 	}
 
 	// Determine authentication mode
-	var mode auth.AuthMode
+	var authMode auth.AuthMode
 	if uid != "" {
 		// UID mode
 		if jwtToken != "" || environment != "" {
-			mode = auth.AuthModeUIDOAuth
+			authMode = auth.AuthModeUIDOAuth
 		} else if apiKey != "" {
-			mode = auth.AuthModeUIDKey
+			authMode = auth.AuthModeUIDKey
 		} else {
 			return nil, fmt.Errorf("UID mode requires either API key or JWT/environment")
 		}
 	} else {
 		// Normal mode
-		mode = auth.AuthModeNormal
+		authMode = auth.AuthModeNormal
 		if oid == "" && apiKey == "" {
 			// No auth configured - this is okay for testing
 			// but tools will fail without credentials
@@ -172,7 +182,7 @@ func loadAuthContext() (*auth.AuthContext, error) {
 	}
 
 	authCtx := &auth.AuthContext{
-		Mode:        mode,
+		Mode:        authMode,
 		OID:         oid,
 		APIKey:      apiKey,
 		UID:         uid,
