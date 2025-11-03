@@ -43,15 +43,9 @@ type Server struct {
 
 // New creates a new HTTP server instance using standard library
 func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsManager *gcs.Manager, profile string) (*Server, error) {
-	// Build Redis URL from components
-	redisURL := fmt.Sprintf("redis://%s/%d", cfg.RedisAddress, cfg.RedisDB)
-	if cfg.RedisPassword != "" {
-		redisURL = fmt.Sprintf("redis://:%s@%s/%d", cfg.RedisPassword, cfg.RedisAddress, cfg.RedisDB)
-	}
-
 	// Initialize Redis client
 	redisClient, err := redis.New(&redis.Config{
-		URL: redisURL,
+		URL: cfg.RedisURL,
 	}, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Redis client: %w", err)

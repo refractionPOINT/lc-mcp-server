@@ -36,11 +36,9 @@ services:
       # HTTP server configuration
       PORT: 8080
       MCP_SERVER_URL: ${MCP_SERVER_URL:-http://localhost:8080}
-      
+
       # Redis configuration
-      REDIS_ADDRESS: redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
-      REDIS_DB: ${REDIS_DB:-0}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/${REDIS_DB:-0}
 
       # OAuth configuration (Firebase API key is hardcoded)
       REDIS_ENCRYPTION_KEY: ${REDIS_ENCRYPTION_KEY}

@@ -30,9 +30,7 @@ type Config struct {
 	AllowedRedirectURIs []string // Allowed OAuth redirect URIs (exact match)
 
 	// Redis configuration (for OAuth state management)
-	RedisAddress  string // Redis server address (host:port)
-	RedisPassword string // Redis password (optional)
-	RedisDB       int    // Redis database number
+	RedisURL string // Redis URL (e.g., redis://user:password@host:port/db)
 
 	// OAuth configuration
 	EncryptionKey string // Base64-encoded 32-byte key for token encryption (AES-256)
@@ -76,9 +74,7 @@ func Load() (*Config, error) {
 		}),
 
 		// Redis configuration
-		RedisAddress:  getEnv("REDIS_ADDRESS", "localhost:6379"),
-		RedisPassword: getEnv("REDIS_PASSWORD", ""),
-		RedisDB:       getIntEnv("REDIS_DB", 0),
+		RedisURL: getEnv("REDIS_URL", "redis://localhost:6379/0"),
 
 		// OAuth configuration
 		EncryptionKey: getEnv("REDIS_ENCRYPTION_KEY", ""),
