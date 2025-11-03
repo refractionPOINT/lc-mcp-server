@@ -589,8 +589,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		return
 	}
 
+	// Wrap large results with GCS if available
+	wrappedResult := s.wrapResultWithGCS(ctx, result, toolName)
+
 	// Return success response
-	s.writeJSONRPCSuccess(w, id, result)
+	s.writeJSONRPCSuccess(w, id, wrappedResult)
 }
 
 func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id interface{}) {
@@ -638,6 +641,57 @@ func (s *Server) extractUIDFromToken(token string) (string, string, error) {
 	// Return the Firebase UID and LimaCharlie JWT (exchanged from Firebase token)
 	// This matches Python implementation where Firebase token is exchanged for LC JWT
 	return validation.UID, validation.LimaCharlieJWT, nil
+}
+
+func (s *Server) wrapResultWithGCS(ctx context.Context, result interface{}, toolName string) interface{} {
+	// Try to wrap large results with GCS by working with JSON representation
+	// Marshal the result to JSON to inspect its structure
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		// Can't marshal - return as-is
+		return result
+	}
+
+	// Parse as map to extract text content
+	var resultMap map[string]interface{}
+	if err := json.Unmarshal(resultJSON, &resultMap); err != nil {
+		return result
+	}
+
+	// Check if this is an error result
+	if isError, ok := resultMap["isError"].(bool); ok && isError {
+		return result
+	}
+
+	// Try to extract text from content
+	if contentList, ok := resultMap["content"].([]interface{}); ok && len(contentList) > 0 {
+		if contentItem, ok := contentList[0].(map[string]interface{}); ok {
+			if text, ok := contentItem["text"].(string); ok {
+				// Parse the JSON text
+				var data interface{}
+				if err := json.Unmarshal([]byte(text), &data); err != nil {
+					// Not JSON or can't parse - return as-is
+					return result
+				}
+
+				// Try to wrap with GCS
+				wrappedData, err := gcs.MaybeWrapResult(ctx, data, toolName)
+				if err != nil {
+					// If wrapping fails, return original
+					return result
+				}
+
+				// Re-encode and update the content
+				wrappedJSON, _ := json.MarshalIndent(wrappedData, "", "  ")
+				contentItem["text"] = string(wrappedJSON)
+				// Return the modified result
+				return resultMap
+			}
+		}
+	}
+
+	// If we can't process it, return as-is
+	return result
 }
 
 func (s *Server) writeJSONRPCSuccess(w http.ResponseWriter, id interface{}, result interface{}) {

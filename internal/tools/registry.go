@@ -7,6 +7,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
 )
 
 // ToolHandler is the function signature for MCP tool handlers
@@ -282,13 +283,62 @@ func AddToolsToServer(s *server.MCPServer, profile string) error {
 }
 
 // wrapHandler converts our ToolHandler to mcp-go's expected signature
+// and wraps large results with GCS if available
 func wrapHandler(reg *ToolRegistration) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments using the method
 		args := request.GetArguments()
 
 		// Call the actual handler
-		return reg.Handler(ctx, args)
+		result, err := reg.Handler(ctx, args)
+		if err != nil {
+			return result, err
+		}
+
+		// Try to wrap large results with GCS by working with JSON representation
+		// Marshal the result to JSON to inspect its structure
+		resultJSON, err := json.Marshal(result)
+		if err != nil {
+			// Can't marshal - return as-is
+			return result, nil
+		}
+
+		// Parse as map to extract text content
+		var resultMap map[string]interface{}
+		if err := json.Unmarshal(resultJSON, &resultMap); err != nil {
+			return result, nil
+		}
+
+		// Check if this is an error result
+		if isError, ok := resultMap["isError"].(bool); ok && isError {
+			return result, nil
+		}
+
+		// Try to extract text from content
+		if contentList, ok := resultMap["content"].([]interface{}); ok && len(contentList) > 0 {
+			if contentItem, ok := contentList[0].(map[string]interface{}); ok {
+				if text, ok := contentItem["text"].(string); ok {
+					// Parse the JSON text
+					var data interface{}
+					if err := json.Unmarshal([]byte(text), &data); err != nil {
+						// Not JSON or can't parse - return as-is
+						return result, nil
+					}
+
+					// Try to wrap with GCS
+					wrappedData, err := gcs.MaybeWrapResult(ctx, data, reg.Name)
+					if err != nil {
+						// If wrapping fails, return original
+						return result, nil
+					}
+
+					// Re-encode and create new result
+					return mcp.NewToolResultText(ToJSON(wrappedData)), nil
+				}
+			}
+		}
+
+		return result, nil
 	}
 }
 
