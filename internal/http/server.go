@@ -394,13 +394,33 @@ func (s *Server) handleIntrospect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleProviderSelection(w http.ResponseWriter, r *http.Request) {
-	// Provider selection is handled within HandleAuthorize
-	http.Redirect(w, r, "/authorize", http.StatusFound)
+	// Extract session ID from query parameter
+	sessionID := r.URL.Query().Get("session")
+	if sessionID == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "invalid_request",
+			"error_description": "Missing session parameter",
+		})
+		return
+	}
+
+	// Delegate to OAuth handler which has the full implementation
+	s.oauthHandlers.HandleProviderSelection(w, r, sessionID)
 }
 
 func (s *Server) handleMFAChallenge(w http.ResponseWriter, r *http.Request) {
-	// MFA is handled within OAuth callback flow
-	http.Redirect(w, r, "/authorize", http.StatusFound)
+	// Extract session ID from query parameter
+	sessionID := r.URL.Query().Get("session")
+	if sessionID == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "invalid_request",
+			"error_description": "Missing session parameter",
+		})
+		return
+	}
+
+	// Delegate to OAuth handler
+	s.oauthHandlers.HandleMFAChallenge(w, r, sessionID)
 }
 
 func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
@@ -408,8 +428,21 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	// MFA verification is handled within OAuth callback flow
-	http.Redirect(w, r, "/authorize", http.StatusFound)
+
+	// Extract parameters
+	sessionID := r.FormValue("session")
+	code := r.FormValue("code")
+
+	if sessionID == "" || code == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "invalid_request",
+			"error_description": "Missing session or code parameter",
+		})
+		return
+	}
+
+	// Delegate to OAuth handler
+	s.oauthHandlers.HandleMFAVerify(w, r, sessionID, code)
 }
 
 func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
