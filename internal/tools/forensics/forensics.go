@@ -3,6 +3,7 @@ package forensics
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -32,16 +33,17 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 		return nil, fmt.Errorf("failed to get sensor: %w", err)
 	}
 
-	// Build command parameters
-	req := lc.Dict{
-		"command": command,
-	}
+	// Build command string with parameters
+	// Format: "command --param1 value1 --param2 value2"
+	cmdStr := command
 	for k, v := range params {
-		req[k] = v
+		cmdStr += fmt.Sprintf(" --%s %v", k, v)
 	}
 
 	// Use SimpleRequest with a 30-second timeout
-	result, err := sensor.SimpleRequest(req)
+	result, err := sensor.SimpleRequest(cmdStr, lc.SimpleRequestOptions{
+		Timeout: 30 * time.Second,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("sensor command failed: %w", err)
 	}

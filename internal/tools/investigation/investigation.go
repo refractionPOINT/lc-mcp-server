@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"context"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -74,16 +75,12 @@ func RegisterGetProcesses() {
 				return tools.ErrorResult("sensor not found"), nil
 			}
 
-			// TODO: Go SDK needs synchronous request method like Python's sensor.request()
-			// For now, just send the task (fire-and-forget)
-			err = sensor.Task("os_processes", lc.TaskingOptions{})
+			// Use SimpleRequest to get synchronous response
+			result, err := sensor.SimpleRequest("os_processes", lc.SimpleRequestOptions{
+				Timeout: 30 * time.Second,
+			})
 			if err != nil {
-				return tools.ErrorResultf("failed to task sensor: %v", err), nil
-			}
-
-			result := map[string]interface{}{
-				"status":  "task_sent",
-				"message": "Task sent to sensor. Go SDK does not yet support synchronous task responses. Need to add sensor.Request() method.",
+				return tools.ErrorResultf("failed to get processes: %v", err), nil
 			}
 
 			return tools.SuccessResult(result), nil
@@ -134,15 +131,13 @@ func RegisterGetNetworkConnections() {
 				return tools.ErrorResult("sensor not found"), nil
 			}
 
-			// TODO: Go SDK needs synchronous request method
-			err = sensor.Task("os_network_connections", lc.TaskingOptions{})
+			// Use SimpleRequest to get synchronous response
+			// Python uses "netstat" command instead of "os_network_connections"
+			result, err := sensor.SimpleRequest("netstat", lc.SimpleRequestOptions{
+				Timeout: 30 * time.Second,
+			})
 			if err != nil {
-				return tools.ErrorResultf("failed to task sensor: %v", err), nil
-			}
-
-			result := map[string]interface{}{
-				"status":  "task_sent",
-				"message": "Task sent to sensor. Go SDK does not yet support synchronous task responses.",
+				return tools.ErrorResultf("failed to get network connections: %v", err), nil
 			}
 
 			return tools.SuccessResult(result), nil
@@ -193,15 +188,12 @@ func RegisterGetOSVersion() {
 				return tools.ErrorResult("sensor not found"), nil
 			}
 
-			// TODO: Go SDK needs synchronous request method
-			err = sensor.Task("os_version", lc.TaskingOptions{})
+			// Use SimpleRequest to get synchronous response
+			result, err := sensor.SimpleRequest("os_version", lc.SimpleRequestOptions{
+				Timeout: 30 * time.Second,
+			})
 			if err != nil {
-				return tools.ErrorResultf("failed to task sensor: %v", err), nil
-			}
-
-			result := map[string]interface{}{
-				"status":  "task_sent",
-				"message": "Task sent to sensor. Go SDK does not yet support synchronous task responses.",
+				return tools.ErrorResultf("failed to get OS version: %v", err), nil
 			}
 
 			return tools.SuccessResult(result), nil
