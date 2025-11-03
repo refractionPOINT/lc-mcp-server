@@ -375,16 +375,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-	// Dynamic client registration (OAuth 2.0 DCR)
-	// Not critical for initial implementation - return not implemented
-	s.writeJSON(w, http.StatusNotImplemented, map[string]string{
-		"error":             "not_implemented",
-		"error_description": "Dynamic client registration not yet supported",
-	})
+	s.oauthHandlers.HandleRegister(w, r)
 }
 
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {

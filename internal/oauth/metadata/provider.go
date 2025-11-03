@@ -43,8 +43,8 @@ func (p *Provider) GetServerURL() string {
 func (p *Provider) GetProtectedResourceMetadata() map[string]interface{} {
 	return map[string]interface{}{
 		// The resource identifier for this MCP server
-		// Note: We advertise the root URL since the server accepts MCP requests on both / and /mcp
-		"resource": p.serverURL,
+		// Points to the actual MCP endpoint at /mcp (matches Python implementation)
+		"resource": p.serverURL + "/mcp",
 
 		// Authorization servers that can issue tokens for this resource
 		"authorization_servers": []string{p.serverURL},

@@ -3,10 +3,12 @@ package endpoints
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
@@ -515,4 +517,86 @@ func (h *Handlers) HandleProtectedResourceMetadata(w http.ResponseWriter, r *htt
 func (h *Handlers) HandleAuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) {
 	metadata := h.metadataProvider.GetAuthorizationServerMetadata()
 	writeJSON(w, http.StatusOK, metadata)
+}
+
+// HandleRegister handles POST /register - Dynamic Client Registration (RFC 7591)
+func (h *Handlers) HandleRegister(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Method not allowed", http.StatusMethodNotAllowed))
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		ClientName   string   `json:"client_name"`
+		RedirectURIs []string `json:"redirect_uris"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.Error("Failed to parse registration request", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Invalid JSON request body", http.StatusBadRequest))
+		return
+	}
+
+	// Validate required parameters
+	if req.ClientName == "" {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Missing client_name parameter", http.StatusBadRequest))
+		return
+	}
+
+	if len(req.RedirectURIs) == 0 {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Missing redirect_uris parameter", http.StatusBadRequest))
+		return
+	}
+
+	// Validate redirect URIs (must be localhost or HTTPS)
+	for _, uri := range req.RedirectURIs {
+		if !isValidRedirectURI(uri) {
+			h.logger.Warn("Invalid redirect URI in registration", "uri", uri, "client_name", req.ClientName)
+			WriteOAuthError(w, NewOAuthError(
+				"invalid_redirect_uri",
+				fmt.Sprintf("Invalid redirect_uri: %s (must be localhost or HTTPS)", uri),
+				http.StatusBadRequest,
+			))
+			return
+		}
+	}
+
+	// Generate client ID (no secret for public clients)
+	clientID, err := h.stateManager.GenerateClientID()
+	if err != nil {
+		h.logger.Error("Failed to generate client ID", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to generate client ID", http.StatusInternalServerError))
+		return
+	}
+
+	// Store registration
+	registration := state.NewClientRegistration(clientID, req.ClientName, req.RedirectURIs)
+	if err := h.stateManager.StoreClientRegistration(r.Context(), registration); err != nil {
+		h.logger.Error("Failed to store client registration", "error", err, "client_id", clientID)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to register client", http.StatusInternalServerError))
+		return
+	}
+
+	h.logger.Info("Registered new OAuth client", "client_id", clientID, "client_name", req.ClientName)
+
+	// Build response per RFC 7591
+	response := map[string]interface{}{
+		"client_id":                  clientID,
+		"client_name":                req.ClientName,
+		"redirect_uris":              req.RedirectURIs,
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"token_endpoint_auth_method": "none", // Public client
+	}
+
+	writeJSON(w, http.StatusCreated, response)
+}
+
+// isValidRedirectURI validates redirect URIs for client registration
+func isValidRedirectURI(uri string) bool {
+	// Must be localhost or HTTPS
+	return strings.HasPrefix(uri, "http://localhost") ||
+		strings.HasPrefix(uri, "http://127.0.0.1") ||
+		strings.HasPrefix(uri, "https://")
 }
