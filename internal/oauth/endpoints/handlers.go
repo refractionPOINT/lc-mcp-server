@@ -99,7 +99,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		// Redirect to provider selection page
 		sessionID, err := h.stateManager.GenerateSelectionSessionID()
 		if err != nil {
-			h.logger.Error("")
+			h.logger.Error("Failed to generate selection session ID", "error", err)
 			WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to generate session", http.StatusInternalServerError))
 			return
 		}
@@ -117,7 +117,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := h.stateManager.StoreSelectionSession(r.Context(), sessionID, paramsMap); err != nil {
-			h.logger.Error("")
+			h.logger.Error("Failed to store selection session", "error", err, "session_id", sessionID)
 			WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store session", http.StatusInternalServerError))
 			return
 		}
@@ -142,7 +142,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	oauthState := state.NewOAuthState(stateParam, codeChallenge, codeChallengeMethod, redirectURI, clientID, scope, resource, providerID)
 	if err := h.stateManager.StoreOAuthState(r.Context(), oauthState); err != nil {
-		h.logger.Error("")
+		h.logger.Error("Failed to store OAuth state", "error", err, "state", stateParam)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store state", http.StatusInternalServerError))
 		return
 	}
@@ -153,7 +153,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, firebaseAuthURI, err := h.firebaseClient.CreateAuthURI(r.Context(), providerID, callbackURL, []string{"openid", "email", "profile"})
 	if err != nil {
-		h.logger.Error("")
+		h.logger.Error("Failed to create Firebase auth URI", "error", err, "provider", providerID)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to initiate authentication", http.StatusInternalServerError))
 		return
 	}
@@ -177,7 +177,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Validate callback
 	queryString, err := h.firebaseClient.ValidateProviderCallback(r.URL.RequestURI())
 	if err != nil {
-		h.logger.Error("")
+		h.logger.Error("Failed to validate provider callback", "error", err, "uri", r.URL.RequestURI())
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>Invalid callback</p>")
 		return
 	}
@@ -232,7 +232,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		h.logger.Error("")
+		h.logger.Error("Firebase sign-in failed", "error", err, "provider", oauthState.Provider)
 		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
 		return
 	}
@@ -302,7 +302,7 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 	// Create token response
 	tokenResp, err := h.tokenManager.CreateTokenResponse(r.Context(), authCode.UID, authCode.FirebaseIDToken, authCode.FirebaseRefreshToken, authCode.FirebaseExpiresAt, authCode.Scope)
 	if err != nil {
-		h.logger.Error("")
+		h.logger.Error("Failed to create token response", "error", err, "uid", authCode.UID)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to issue tokens", http.StatusInternalServerError))
 		return
 	}
@@ -478,7 +478,7 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	// Verify MFA code
 	resp, err := h.firebaseClient.FinalizeMFASignIn(r.Context(), mfaSession.MFAPendingCredential, mfaSession.MFAEnrollmentID, code)
 	if err != nil {
-		h.logger.Error("")
+		h.logger.Error("MFA verification failed", "error", err, "session_id", sessionID)
 		writeHTML(w, http.StatusBadRequest, "<h1>MFA Error</h1><p>Invalid code</p>")
 		return
 	}
@@ -508,13 +508,11 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 // HandleProtectedResourceMetadata handles RFC 9728 Protected Resource Metadata requests
 func (h *Handlers) HandleProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
 	metadata := h.metadataProvider.GetProtectedResourceMetadata()
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, "%s", metadata)
+	writeJSON(w, http.StatusOK, metadata)
 }
 
 // HandleAuthorizationServerMetadata handles RFC 8414 Authorization Server Metadata requests
 func (h *Handlers) HandleAuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) {
 	metadata := h.metadataProvider.GetAuthorizationServerMetadata()
-	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, "%s", metadata)
+	writeJSON(w, http.StatusOK, metadata)
 }
