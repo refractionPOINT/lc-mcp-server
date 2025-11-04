@@ -119,8 +119,8 @@ func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsMa
 	s.server = &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
 		Handler:           s.withMiddleware(mux),
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		ReadTimeout:       10 * time.Minute, // Increased to support long-running sensor commands
+		WriteTimeout:      10 * time.Minute, // Increased to support long-running sensor commands
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1 MB

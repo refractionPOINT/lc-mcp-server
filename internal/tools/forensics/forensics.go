@@ -3,6 +3,7 @@ package forensics
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -42,14 +43,23 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 		cmdStr += fmt.Sprintf(" --%s %v", k, v)
 	}
 
-	// Use SimpleRequest with a 30-second timeout
+	// Log the command being sent
+	logger := slog.Default()
+	logger.Debug("Sending sensor command", "sensor_id", sid, "command", cmdStr)
+	startTime := time.Now()
+
+	// Use SimpleRequest with a 10-minute timeout to support long-running sensor commands
 	result, err := sensor.SimpleRequest(cmdStr, lc.SimpleRequestOptions{
-		Timeout: 30 * time.Second,
+		Timeout: 10 * time.Minute,
 	})
+
+	duration := time.Since(startTime)
 	if err != nil {
+		logger.Debug("Sensor command failed", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
 		return nil, fmt.Errorf("sensor command failed: %w", err)
 	}
 
+	logger.Debug("Sensor command completed successfully", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
 	return result, nil
 }
 
@@ -74,14 +84,23 @@ func sendSensorCommandWithPositional(ctx context.Context, sid string, command st
 		cmdStr += fmt.Sprintf(" --%s %v", k, v)
 	}
 
-	// Use SimpleRequest with a 30-second timeout
+	// Log the command being sent
+	logger := slog.Default()
+	logger.Debug("Sending sensor command", "sensor_id", sid, "command", cmdStr)
+	startTime := time.Now()
+
+	// Use SimpleRequest with a 10-minute timeout to support long-running sensor commands
 	result, err := sensor.SimpleRequest(cmdStr, lc.SimpleRequestOptions{
-		Timeout: 30 * time.Second,
+		Timeout: 10 * time.Minute,
 	})
+
+	duration := time.Since(startTime)
 	if err != nil {
+		logger.Debug("Sensor command failed", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
 		return nil, fmt.Errorf("sensor command failed: %w", err)
 	}
 
+	logger.Debug("Sensor command completed successfully", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
 	return result, nil
 }
 
