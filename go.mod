@@ -10,6 +10,7 @@ require (
 	github.com/mark3labs/mcp-go v0.42.0
 	github.com/redis/go-redis/v9 v9.16.0
 	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251102153056-9ea896eebcf6
+	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.254.0
 	gopkg.in/yaml.v3 v3.0.1
