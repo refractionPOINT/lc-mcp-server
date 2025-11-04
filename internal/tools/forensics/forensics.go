@@ -50,12 +50,18 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 	logger.Info("Sending sensor command", "request_id", requestID, "sensor_id", sid, "command", cmdStr)
 	startTime := time.Now()
 
+	// Log that we're about to enter SimpleRequest (which may block for a long time)
+	// With SDK logging enabled, we'll see internal logs from MakeInteractive, Spout, etc.
+	logger.Debug("Entering SimpleRequest", "request_id", requestID, "timeout", "10m")
+
 	// Use SimpleRequest with a 10-minute timeout to support long-running sensor commands
 	result, err := sensor.SimpleRequest(cmdStr, lc.SimpleRequestOptions{
 		Timeout: 10 * time.Minute,
 	})
 
 	duration := time.Since(startTime)
+	logger.Debug("Exited SimpleRequest", "request_id", requestID, "duration_ms", duration.Milliseconds(), "success", err == nil)
+
 	if err != nil {
 		logger.Info("Sensor command failed", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
 		return nil, fmt.Errorf("sensor command failed: %w", err)
@@ -92,12 +98,18 @@ func sendSensorCommandWithPositional(ctx context.Context, sid string, command st
 	logger.Info("Sending sensor command", "request_id", requestID, "sensor_id", sid, "command", cmdStr)
 	startTime := time.Now()
 
+	// Log that we're about to enter SimpleRequest (which may block for a long time)
+	// With SDK logging enabled, we'll see internal logs from MakeInteractive, Spout, etc.
+	logger.Debug("Entering SimpleRequest", "request_id", requestID, "timeout", "10m")
+
 	// Use SimpleRequest with a 10-minute timeout to support long-running sensor commands
 	result, err := sensor.SimpleRequest(cmdStr, lc.SimpleRequestOptions{
 		Timeout: 10 * time.Minute,
 	})
 
 	duration := time.Since(startTime)
+	logger.Debug("Exited SimpleRequest", "request_id", requestID, "duration_ms", duration.Milliseconds(), "success", err == nil)
+
 	if err != nil {
 		logger.Info("Sensor command failed", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
 		return nil, fmt.Errorf("sensor command failed: %w", err)

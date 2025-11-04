@@ -173,17 +173,21 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 	var client *lc.Client
 	var err error
 
+	// Create logger adapter to see SDK internal logs
+	// This is critical for debugging Spout, MakeInteractive, and SimpleRequest issues
+	sdkLogger := NewLCLoggerSlog(c.logger)
+
 	// Use environment loader if we have environment set (for OAuth mode)
 	if auth.Environment != "" {
 		client, err = lc.NewClientFromLoader(
 			opts,
-			nil, // logger - SDK uses its own
+			sdkLogger, // Pass logger adapter to see SDK internals
 			&lc.EnvironmentClientOptionLoader{},
 			lc.NewFileClientOptionLoader(""),
 		)
 	} else {
 		// Use direct client creation for API key mode
-		client, err = lc.NewClient(opts, nil)
+		client, err = lc.NewClient(opts, sdkLogger)
 	}
 
 	if err != nil {
