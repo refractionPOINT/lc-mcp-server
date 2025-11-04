@@ -16,6 +16,7 @@ type contextKey string
 const (
 	authContextKey contextKey = "lc_auth_context"
 	sdkCacheKey    contextKey = "lc_sdk_cache"
+	requestIDKey   contextKey = "lc_request_id"
 )
 
 // AuthMode represents the authentication mode
@@ -189,4 +190,18 @@ func GetSDKCache(ctx context.Context) (*SDKCache, error) {
 		return nil, errors.New("SDK cache not found in context")
 	}
 	return cache, nil
+}
+
+// WithRequestID adds a request ID to the context for tracing
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, requestIDKey, requestID)
+}
+
+// GetRequestID retrieves the request ID from the context
+// Returns empty string if not found
+func GetRequestID(ctx context.Context) string {
+	if requestID, ok := ctx.Value(requestIDKey).(string); ok {
+		return requestID
+	}
+	return ""
 }

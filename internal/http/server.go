@@ -518,12 +518,18 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, id int
 }
 
 func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id interface{}, params map[string]interface{}) {
+	// Generate request ID for tracking
+	requestID := fmt.Sprintf("req_%d", time.Now().UnixNano())
+	startTime := time.Now()
+
 	// Extract tool name and arguments
 	toolName, ok := params["name"].(string)
 	if !ok {
 		s.writeJSONRPCError(w, id, -32602, "Invalid params", "Missing or invalid 'name' parameter")
 		return
 	}
+
+	s.logger.Info("Tool call started", "request_id", requestID, "tool", toolName)
 
 	arguments, ok := params["arguments"].(map[string]interface{})
 	if !ok {
@@ -547,11 +553,16 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	// Verify and extract UID and LimaCharlie JWT from MCP access token
 	// The JWT has been exchanged from Firebase ID token to LimaCharlie JWT
+	s.logger.Info("Extracting UID from token", "request_id", requestID)
+	tokenStartTime := time.Now()
 	uid, limaCharlieJWT, err := s.extractUIDFromToken(bearerToken)
+	tokenDuration := time.Since(tokenStartTime)
 	if err != nil {
+		s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
 		s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
 		return
 	}
+	s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
 
 	// Extract OID from arguments if present (for UID mode)
 	oid := ""
@@ -569,6 +580,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	// Create request context with auth
 	ctx := r.Context()
+	ctx = auth.WithRequestID(ctx, requestID)
 	ctx = auth.WithAuthContext(ctx, authCtx)
 	ctx = auth.WithSDKCache(ctx, s.sdkCache)
 	if s.gcsManager != nil {
@@ -583,14 +595,22 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	}
 
 	// Call the tool handler
+	s.logger.Info("Executing tool handler", "request_id", requestID, "tool", toolName)
+	toolStartTime := time.Now()
 	result, err := tool.Handler(ctx, arguments)
+	toolDuration := time.Since(toolStartTime)
 	if err != nil {
+		s.logger.Info("Tool execution failed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds(), "error", err.Error())
 		s.writeJSONRPCError(w, id, -32000, "Tool execution error", err.Error())
 		return
 	}
+	s.logger.Info("Tool execution completed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds())
 
 	// Wrap large results with GCS if available
 	wrappedResult := s.wrapResultWithGCS(ctx, result, toolName)
+
+	totalDuration := time.Since(startTime)
+	s.logger.Info("Tool call completed successfully", "request_id", requestID, "tool", toolName, "total_duration_ms", totalDuration.Milliseconds())
 
 	// Return success response
 	s.writeJSONRPCSuccess(w, id, wrappedResult)

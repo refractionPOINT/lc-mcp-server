@@ -8,6 +8,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -45,7 +46,8 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 
 	// Log the command being sent
 	logger := slog.Default()
-	logger.Debug("Sending sensor command", "sensor_id", sid, "command", cmdStr)
+	requestID := auth.GetRequestID(ctx)
+	logger.Info("Sending sensor command", "request_id", requestID, "sensor_id", sid, "command", cmdStr)
 	startTime := time.Now()
 
 	// Use SimpleRequest with a 10-minute timeout to support long-running sensor commands
@@ -55,11 +57,11 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 
 	duration := time.Since(startTime)
 	if err != nil {
-		logger.Debug("Sensor command failed", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
+		logger.Info("Sensor command failed", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
 		return nil, fmt.Errorf("sensor command failed: %w", err)
 	}
 
-	logger.Debug("Sensor command completed successfully", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
+	logger.Info("Sensor command completed successfully", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
 	return result, nil
 }
 
@@ -86,7 +88,8 @@ func sendSensorCommandWithPositional(ctx context.Context, sid string, command st
 
 	// Log the command being sent
 	logger := slog.Default()
-	logger.Debug("Sending sensor command", "sensor_id", sid, "command", cmdStr)
+	requestID := auth.GetRequestID(ctx)
+	logger.Info("Sending sensor command", "request_id", requestID, "sensor_id", sid, "command", cmdStr)
 	startTime := time.Now()
 
 	// Use SimpleRequest with a 10-minute timeout to support long-running sensor commands
@@ -96,11 +99,11 @@ func sendSensorCommandWithPositional(ctx context.Context, sid string, command st
 
 	duration := time.Since(startTime)
 	if err != nil {
-		logger.Debug("Sensor command failed", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
+		logger.Info("Sensor command failed", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
 		return nil, fmt.Errorf("sensor command failed: %w", err)
 	}
 
-	logger.Debug("Sensor command completed successfully", "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
+	logger.Info("Sensor command completed successfully", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
 	return result, nil
 }
 
