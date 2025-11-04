@@ -12,9 +12,11 @@ import (
 )
 
 // CachedSDK holds a cached SDK instance with metadata
+// NOTE: We only cache the Client, not the Organization, to prevent
+// Spout reuse issues. Organization objects are lightweight wrappers
+// that can be created on-demand from the Client.
 type CachedSDK struct {
 	Client    *lc.Client
-	Org       *lc.Organization
 	CreatedAt time.Time
 	LastUsed  time.Time
 	CacheKey  string // For debugging purposes
@@ -129,7 +131,17 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 			// 				"age":       time.Since(cached.CreatedAt),
 			// 			}).Debug("SDK cache hit")
 
-			return cached.Org, nil
+			// CRITICAL FIX: Always create fresh Organization from cached Client
+			// This prevents Spout reuse issues. When WithInvestigationID() creates
+			// a shallow copy, it shares the Spout pointer. If the Spout was initialized
+			// with a different investigation ID, responses will be filtered incorrectly
+			// at the WebSocket level and never arrive, causing 10-minute timeouts.
+			// Creating a fresh Organization ensures no stale Spout is attached.
+			org, err := lc.NewOrganization(cached.Client)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create organization from cached client: %w", err)
+			}
+			return org, nil
 		}
 
 		// Expired, remove from cache
@@ -178,16 +190,10 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 		return nil, fmt.Errorf("failed to create SDK client: %w", err)
 	}
 
-	// Create organization wrapper
-	org, err := lc.NewOrganization(client)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create organization: %w", err)
-	}
-
-	// Cache the instance
+	// Cache the client instance (NOT the organization)
+	// Organization will be created fresh on each request to prevent Spout reuse
 	cached = &CachedSDK{
 		Client:    client,
-		Org:       org,
 		CreatedAt: time.Now(),
 		LastUsed:  time.Now(),
 		CacheKey:  cacheKey,
@@ -205,6 +211,12 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 	// 		"cache_key": cacheKey[:8] + "...",
 	// 		"mode":      auth.Mode.String(),
 	// 	}).Info("Created and cached new SDK client")
+
+	// Create fresh Organization from the newly cached client
+	org, err := lc.NewOrganization(client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create organization: %w", err)
+	}
 
 	return org, nil
 }
