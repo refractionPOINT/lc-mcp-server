@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.42.0
 	github.com/redis/go-redis/v9 v9.16.0
-	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251104163033-696371d5bff4
+	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251104180040-515a96ef4291
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.254.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -78,3 +78,5 @@ require (
 	google.golang.org/grpc v1.76.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
+
+replace github.com/refractionPOINT/go-limacharlie/limacharlie => ../go-limacharlie/limacharlie
