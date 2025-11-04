@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 )
@@ -23,6 +24,9 @@ func getSensor(ctx context.Context, sensorID string) (*lc.Sensor, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Set investigation ID for interactive mode
+	org = org.WithInvestigationID(uuid.New().String())
 
 	sensor := org.GetSensor(sensorID)
 	if sensor == nil {

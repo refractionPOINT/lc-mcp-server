@@ -98,6 +98,8 @@ var ProfileDefinitions = map[string][]string{
 		"get_packages",
 		"get_registry_keys",
 		"find_strings",
+		"dir_list",
+		"dir_find_hash",
 		// Artifacts
 		"list_artifacts",
 		"get_artifact",

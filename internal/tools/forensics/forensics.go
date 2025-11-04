@@ -20,6 +20,8 @@ func init() {
 	RegisterGetAutoruns()
 	RegisterGetDrivers()
 	RegisterGetUsers()
+	RegisterDirList()
+	RegisterDirFindHash()
 	RegisterGetRegistryKeys()
 	RegisterGetHistoricEvents()
 }
@@ -37,6 +39,38 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 	// Format: "command --param1 value1 --param2 value2"
 	cmdStr := command
 	for k, v := range params {
+		cmdStr += fmt.Sprintf(" --%s %v", k, v)
+	}
+
+	// Use SimpleRequest with a 30-second timeout
+	result, err := sensor.SimpleRequest(cmdStr, lc.SimpleRequestOptions{
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sensor command failed: %w", err)
+	}
+
+	return result, nil
+}
+
+// sendSensorCommandWithPositional sends a command with positional arguments to a sensor
+func sendSensorCommandWithPositional(ctx context.Context, sid string, command string, positionalArgs []string, flagParams map[string]interface{}) (interface{}, error) {
+	sensor, err := getSensor(ctx, sid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sensor: %w", err)
+	}
+
+	// Build command string with positional arguments first, then flags
+	// Format: "command <arg1> <arg2> --flag1 value1 --flag2 value2"
+	cmdStr := command
+
+	// Add positional arguments
+	for _, arg := range positionalArgs {
+		cmdStr += fmt.Sprintf(" %s", arg)
+	}
+
+	// Add flag parameters
+	for k, v := range flagParams {
 		cmdStr += fmt.Sprintf(" --%s %v", k, v)
 	}
 
@@ -322,6 +356,169 @@ func RegisterGetUsers() {
 			resp, err := sendSensorCommand(ctx, sid, "os_users", map[string]interface{}{})
 			if err != nil {
 				return tools.ErrorResultf("failed to get users: %v", err), nil
+			}
+
+			return tools.SuccessResult(resp), nil
+		},
+	})
+}
+
+// RegisterDirList registers the dir_list tool
+func RegisterDirList() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "dir_list",
+		Description: "List directory contents with optional depth (supports wildcards)",
+		Profile:     "live_investigation",
+		RequiresOID: true,
+		Schema: mcp.NewTool("dir_list",
+			mcp.WithDescription("List directory contents with optional depth. Supports wildcards (* and ?) in file expressions."),
+			mcp.WithString("sid",
+				mcp.Required(),
+				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithString("root_dir",
+				mcp.Required(),
+				mcp.Description("Root directory path to begin listing from")),
+			mcp.WithString("file_expression",
+				mcp.Required(),
+				mcp.Description("File name expression supporting wildcards (* and ?)")),
+			mcp.WithNumber("depth",
+				mcp.Description("Maximum depth of listing (default: 1 for single level)")),
+			mcp.WithString("oid",
+				mcp.Description("Organization ID (required in UID mode)")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			sid, ok := args["sid"].(string)
+			if !ok {
+				return tools.ErrorResult("sid parameter is required"), nil
+			}
+
+			rootDir, ok := args["root_dir"].(string)
+			if !ok {
+				return tools.ErrorResult("root_dir parameter is required"), nil
+			}
+
+			fileExp, ok := args["file_expression"].(string)
+			if !ok {
+				return tools.ErrorResult("file_expression parameter is required"), nil
+			}
+
+			// Optional depth parameter, default to 1
+			depth := 1
+			if depthParam, ok := args["depth"].(float64); ok {
+				depth = int(depthParam)
+			}
+
+			// Build positional args: root_dir, file_expression
+			positionalArgs := []string{rootDir, fileExp}
+
+			// Build flag params
+			flagParams := map[string]interface{}{
+				"depth": depth,
+			}
+
+			resp, err := sendSensorCommandWithPositional(ctx, sid, "dir_list", positionalArgs, flagParams)
+			if err != nil {
+				return tools.ErrorResultf("failed to list directory: %v", err), nil
+			}
+
+			return tools.SuccessResult(resp), nil
+		},
+	})
+}
+
+// RegisterDirFindHash registers the dir_find_hash tool
+func RegisterDirFindHash() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "dir_find_hash",
+		Description: "Search for files by SHA256 hash in directory tree",
+		Profile:     "live_investigation",
+		RequiresOID: true,
+		Schema: mcp.NewTool("dir_find_hash",
+			mcp.WithDescription("Search for files matching SHA256 hashes in a directory tree. Supports wildcards (* and ?) in file expressions."),
+			mcp.WithString("sid",
+				mcp.Required(),
+				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithString("root_dir",
+				mcp.Required(),
+				mcp.Description("Root directory path to begin search from")),
+			mcp.WithString("file_expression",
+				mcp.Required(),
+				mcp.Description("File name expression supporting wildcards (* and ?)")),
+			mcp.WithArray("hashes",
+				mcp.Required(),
+				mcp.Description("Array of SHA256 hashes to search for (64 hexadecimal characters each)")),
+			mcp.WithNumber("depth",
+				mcp.Description("Maximum depth of search (default: 1 for single level)")),
+			mcp.WithString("oid",
+				mcp.Description("Organization ID (required in UID mode)")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			sid, ok := args["sid"].(string)
+			if !ok {
+				return tools.ErrorResult("sid parameter is required"), nil
+			}
+
+			rootDir, ok := args["root_dir"].(string)
+			if !ok {
+				return tools.ErrorResult("root_dir parameter is required"), nil
+			}
+
+			fileExp, ok := args["file_expression"].(string)
+			if !ok {
+				return tools.ErrorResult("file_expression parameter is required"), nil
+			}
+
+			// Extract and validate hashes array
+			hashesRaw, ok := args["hashes"].([]interface{})
+			if !ok || len(hashesRaw) == 0 {
+				return tools.ErrorResult("hashes parameter is required and must be a non-empty array"), nil
+			}
+
+			// Convert to string slice and validate
+			hashes := make([]string, 0, len(hashesRaw))
+			for i, hashRaw := range hashesRaw {
+				hashStr, ok := hashRaw.(string)
+				if !ok {
+					return tools.ErrorResultf("hash at index %d is not a string", i), nil
+				}
+
+				// Validate hash is exactly 64 characters (SHA256 hex)
+				if len(hashStr) != 64 {
+					return tools.ErrorResultf("hash at index %d must be exactly 64 characters (got %d): %s", i, len(hashStr), hashStr), nil
+				}
+
+				// Validate hash contains only hexadecimal characters
+				for _, c := range hashStr {
+					if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+						return tools.ErrorResultf("hash at index %d contains invalid hexadecimal character: %s", i, hashStr), nil
+					}
+				}
+
+				hashes = append(hashes, hashStr)
+			}
+
+			if len(hashes) == 0 {
+				return tools.ErrorResult("at least one valid hash is required"), nil
+			}
+
+			// Optional depth parameter, default to 1
+			depth := 1
+			if depthParam, ok := args["depth"].(float64); ok {
+				depth = int(depthParam)
+			}
+
+			// Build positional args: root_dir, file_expression, hash1, hash2, ...
+			positionalArgs := []string{rootDir, fileExp}
+			positionalArgs = append(positionalArgs, hashes...)
+
+			// Build flag params
+			flagParams := map[string]interface{}{
+				"depth": depth,
+			}
+
+			resp, err := sendSensorCommandWithPositional(ctx, sid, "dir_find_hash", positionalArgs, flagParams)
+			if err != nil {
+				return tools.ErrorResultf("failed to search for hashes: %v", err), nil
 			}
 
 			return tools.SuccessResult(resp), nil
