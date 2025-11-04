@@ -114,6 +114,8 @@ github.com/redis/go-redis/v9 v9.16.0 h1:OotgqgLSRCmzfqChbQyG1PHC3tLNR89DG4jdOERS
 github.com/redis/go-redis/v9 v9.16.0/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
 github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251104014338-ea48c74ff107 h1:Qa2hPUsqtuAvRt5/3xBPXwswlVATFuTQNhCb7obsuFw=
 github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251104014338-ea48c74ff107/go.mod h1:M4LyEs/2mJ2OA1JHsDMQYKPdD8/RZmz2+FWLlVIwapM=
+github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251104163033-696371d5bff4 h1:cdO0e4umttWcNS3xJFbuOmzLWDeF1nce2ZoHFAp1zS4=
+github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251104163033-696371d5bff4/go.mod h1:M4LyEs/2mJ2OA1JHsDMQYKPdD8/RZmz2+FWLlVIwapM=
 github.com/rogpeppe/go-internal v1.13.1 h1:KvO1DLK/DRN07sQ1LQKScxyZJuNnedQ5/wKSR38lUII=
 github.com/rogpeppe/go-internal v1.13.1/go.mod h1:uMEvuHeurkdAXX61udpOXGD/AzZDWNMNyH2VO9fmH0o=
 github.com/rs/xid v1.6.0/go.mod h1:7XoLgs4eV+QndskICGsho+ADou8ySMSjJKDIan90Nz0=
