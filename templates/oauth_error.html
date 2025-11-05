@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LimaCharlie - Authentication Error</title>
+    <link rel="icon" type="image/png" href="/static/favicon/favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --lc-dark-bg: #00030C;
+            --lc-accent-blue: #4A90E2;
+            --lc-accent-red: #E24A4A;
+            --lc-text-primary: #FFFFFF;
+            --lc-text-secondary: #B0B8C1;
+            --lc-glass-bg: rgba(255, 255, 255, 0.05);
+            --lc-glass-border: rgba(255, 255, 255, 0.1);
+            --lc-hover-glow: rgba(74, 144, 226, 0.4);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Rubik', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--lc-dark-bg);
+            color: var(--lc-text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background-image:
+                radial-gradient(circle at 20% 50%, rgba(74, 144, 226, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(226, 74, 74, 0.08) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 480px;
+            width: 100%;
+        }
+
+        .card {
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 16px;
+            padding: 48px 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .error-icon {
+            text-align: center;
+            font-size: 64px;
+            margin-bottom: 24px;
+            animation: shake 0.5s ease-in-out;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            75% { transform: translateX(10px); }
+        }
+
+        .logo-container {
+            text-align: center;
+            margin-bottom: 16px;
+        }
+
+        .logo {
+            max-width: 150px;
+            height: auto;
+            margin: 0 auto;
+            display: block;
+            filter: drop-shadow(0 4px 12px rgba(74, 144, 226, 0.3));
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 12px;
+            color: var(--lc-accent-red);
+        }
+
+        .error-message {
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 14px;
+            line-height: 1.6;
+            margin-bottom: 32px;
+            padding: 16px;
+            background: rgba(226, 74, 74, 0.05);
+            border: 1px solid rgba(226, 74, 74, 0.2);
+            border-radius: 8px;
+        }
+
+        .error-code {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 12px;
+            color: var(--lc-accent-red);
+            margin-top: 8px;
+        }
+
+        .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 14px 24px;
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 12px;
+            color: var(--lc-text-primary);
+            text-decoration: none;
+            font-size: 15px;
+            font-weight: 500;
+            transition: all 0.15s ease-in-out;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--lc-accent-blue), #A74AE2);
+            border-color: transparent;
+        }
+
+        .btn:hover {
+            border-color: var(--lc-accent-blue);
+            box-shadow: 0 0 24px var(--lc-hover-glow);
+            transform: translateY(-2px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .details {
+            margin-top: 24px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .details-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--lc-text-secondary);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .details-content {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 11px;
+            color: var(--lc-text-secondary);
+            line-height: 1.5;
+            word-break: break-all;
+        }
+
+        .footer {
+            margin-top: 32px;
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 12px;
+        }
+
+        .footer-link {
+            color: var(--lc-accent-blue);
+            text-decoration: none;
+            transition: all 0.15s ease-in-out;
+        }
+
+        .footer-link:hover {
+            text-shadow: 0 0 12px var(--lc-hover-glow);
+        }
+
+        @media (max-width: 600px) {
+            .card {
+                padding: 32px 24px;
+            }
+
+            h1 {
+                font-size: 20px;
+            }
+
+            .error-icon {
+                font-size: 48px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo-container">
+                <img src="/static/images/limacharlie-logo.png" alt="LimaCharlie" class="logo">
+            </div>
+
+            <div class="error-icon">⚠️</div>
+
+            <h1>{{if .ErrorTitle}}{{.ErrorTitle}}{{else}}Authentication Error{{end}}</h1>
+
+            <div class="error-message">
+                {{if .ErrorMessage}}{{.ErrorMessage}}{{else}}An error occurred during authentication. Please try again.{{end}}
+                {{if .ErrorCode}}
+                <div class="error-code">Error: {{.ErrorCode}}</div>
+                {{end}}
+            </div>
+
+            <div class="actions">
+                <a href="{{if .RetryURL}}{{.RetryURL}}{{else}}/authorize{{end}}" class="btn btn-primary">
+                    <span>🔄</span>
+                    <span>Try Again</span>
+                </a>
+
+                {{if .SupportURL}}
+                <a href="{{.SupportURL}}" class="btn" target="_blank">
+                    <span>📧</span>
+                    <span>Contact Support</span>
+                </a>
+                {{end}}
+            </div>
+
+            {{if .ErrorDetails}}
+            <div class="details">
+                <div class="details-title">Technical Details</div>
+                <div class="details-content">{{.ErrorDetails}}</div>
+            </div>
+            {{end}}
+
+            <div class="footer">
+                Need help? Visit <a href="https://docs.limacharlie.io" class="footer-link" target="_blank">LimaCharlie Docs</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

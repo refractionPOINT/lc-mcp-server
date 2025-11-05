@@ -147,6 +147,10 @@ func (s *Server) setupRoutes() {
 	// Root endpoint - handles MCP requests when URL is configured without /mcp suffix
 	s.mux.HandleFunc("/", s.handleRootRequest)
 
+	// Static file serving for OAuth pages (favicon, images, etc.)
+	fs := http.FileServer(http.Dir("static"))
+	s.mux.Handle("/static/", http.StripPrefix("/static/", fs))
+
 	// Health check endpoints
 	s.mux.HandleFunc("/health", s.handleHealth)
 	s.mux.HandleFunc("/ready", s.handleReady)

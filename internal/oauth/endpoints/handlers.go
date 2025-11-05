@@ -30,8 +30,8 @@ type Handlers struct {
 
 // NewHandlers creates new OAuth endpoint handlers
 func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, logger *slog.Logger) (*Handlers, error) {
-	// Load templates (will create simple inline templates)
-	tmpl, err := template.New("oauth").Parse(providerSelectionHTML + mfaChallengeHTML + errorPageHTML)
+	// Load templates from files
+	tmpl, err := template.ParseGlob("templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse templates: %w", err)
 	}
@@ -393,52 +393,17 @@ func (h *Handlers) validatePKCE(verifier, challenge string) bool {
 	return computed == challenge
 }
 
-// HTML templates (inline for simplicity)
-const providerSelectionHTML = `{{define "provider_selection"}}
-<!DOCTYPE html>
-<html>
-<head><title>Select Provider</title></head>
-<body>
-<h1>Select Authentication Provider</h1>
-<form method="POST" action="/oauth/select-provider">
-<input type="hidden" name="session" value="{{.SessionID}}">
-<button type="submit" name="provider" value="google">Google</button>
-<button type="submit" name="provider" value="microsoft">Microsoft</button>
-</form>
-</body>
-</html>
-{{end}}`
-
-const mfaChallengeHTML = `{{define "mfa_challenge"}}
-<!DOCTYPE html>
-<html>
-<head><title>MFA Verification</title></head>
-<body>
-<h1>Two-Factor Authentication</h1>
-<form method="POST" action="/oauth/mfa-verify">
-<input type="hidden" name="session" value="{{.SessionID}}">
-<label>Enter 6-digit code:</label>
-<input type="text" name="code" maxlength="6" required>
-<button type="submit">Verify</button>
-</form>
-</body>
-</html>
-{{end}}`
-
-const errorPageHTML = `{{define "error"}}
-<!DOCTYPE html>
-<html>
-<head><title>OAuth Error</title></head>
-<body>
-<h1>Authentication Error</h1>
-<p>{{.Error}}</p>
-</body>
-</html>
-{{end}}`
+// Templates are now loaded from files in templates/ directory
+// See: templates/select_provider.html, templates/mfa_challenge.html, templates/oauth_error.html
 
 func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method == http.MethodGet {
-		h.templates.ExecuteTemplate(w, "provider_selection", map[string]string{"SessionID": sessionID})
+		data := struct {
+			SessionID string
+		}{
+			SessionID: sessionID,
+		}
+		h.templates.ExecuteTemplate(w, "select_provider.html", data)
 	} else {
 		// Handle POST - provider selected
 		provider := r.FormValue("provider")
@@ -455,7 +420,28 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, sessionID string) {
-	h.templates.ExecuteTemplate(w, "mfa_challenge", map[string]string{"SessionID": sessionID})
+	// Get MFA session to extract email
+	mfaSession, _ := h.stateManager.GetMFASession(r.Context(), sessionID)
+
+	email := "user"
+	if mfaSession != nil && mfaSession.Email != "" {
+		email = mfaSession.Email
+	}
+
+	data := struct {
+		SessionID         string
+		Email             string
+		MaxAttempts       int
+		AttemptCount      int
+		AttemptsRemaining int
+	}{
+		SessionID:         sessionID,
+		Email:             email,
+		MaxAttempts:       3,
+		AttemptCount:      0,
+		AttemptsRemaining: 3,
+	}
+	h.templates.ExecuteTemplate(w, "mfa_challenge.html", data)
 }
 
 func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessionID, code string) {

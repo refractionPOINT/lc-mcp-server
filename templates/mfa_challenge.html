@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LimaCharlie - Two-Factor Authentication</title>
+    <link rel="icon" type="image/png" href="/static/favicon/favicon.ico">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --lc-dark-bg: #00030C;
+            --lc-accent-blue: #4A90E2;
+            --lc-accent-green: #4AE2A2;
+            --lc-accent-red: #E24A4A;
+            --lc-text-primary: #FFFFFF;
+            --lc-text-secondary: #B0B8C1;
+            --lc-glass-bg: rgba(255, 255, 255, 0.05);
+            --lc-glass-border: rgba(255, 255, 255, 0.1);
+            --lc-hover-glow: rgba(74, 144, 226, 0.4);
+            --lc-error-bg: rgba(226, 74, 74, 0.1);
+            --lc-error-border: rgba(226, 74, 74, 0.3);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Rubik', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--lc-dark-bg);
+            color: var(--lc-text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background-image:
+                radial-gradient(circle at 20% 50%, rgba(74, 144, 226, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(226, 74, 144, 0.08) 0%, transparent 50%);
+        }
+
+        .container {
+            max-width: 480px;
+            width: 100%;
+        }
+
+        .card {
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 16px;
+            padding: 48px 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .logo-container {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .logo {
+            max-width: 180px;
+            height: auto;
+            margin: 0 auto;
+            display: block;
+            filter: drop-shadow(0 4px 12px rgba(74, 144, 226, 0.3));
+        }
+
+        .icon-container {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .mfa-icon {
+            font-size: 48px;
+            filter: drop-shadow(0 4px 12px rgba(74, 144, 226, 0.3));
+        }
+
+        h1 {
+            font-size: 24px;
+            font-weight: 600;
+            text-align: center;
+            margin-bottom: 12px;
+            color: var(--lc-text-primary);
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 14px;
+            margin-bottom: 32px;
+            line-height: 1.5;
+        }
+
+        .user-badge {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 32px;
+            padding: 12px 16px;
+            background: rgba(74, 144, 226, 0.05);
+            border: 1px solid rgba(74, 144, 226, 0.2);
+            border-radius: 8px;
+            font-size: 13px;
+            color: var(--lc-text-secondary);
+        }
+
+        .user-badge strong {
+            color: var(--lc-text-primary);
+            font-weight: 500;
+        }
+
+        /* Code input styling */
+        .code-input-container {
+            margin-bottom: 24px;
+        }
+
+        .code-input-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--lc-text-secondary);
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        #verification-code {
+            width: 100%;
+            padding: 20px 24px;
+            background: var(--lc-glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 2px solid var(--lc-glass-border);
+            border-radius: 12px;
+            color: var(--lc-text-primary);
+            font-size: 32px;
+            font-weight: 600;
+            text-align: center;
+            letter-spacing: 8px;
+            font-family: 'IBM Plex Mono', monospace;
+            transition: all 0.2s ease-in-out;
+            outline: none;
+        }
+
+        #verification-code:focus {
+            border-color: var(--lc-accent-blue);
+            box-shadow: 0 0 24px var(--lc-hover-glow);
+        }
+
+        #verification-code.error {
+            border-color: var(--lc-accent-red);
+            background: var(--lc-error-bg);
+        }
+
+        /* Hide number input spinners */
+        #verification-code::-webkit-outer-spin-button,
+        #verification-code::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        #verification-code[type=number] {
+            -moz-appearance: textfield;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 16px 24px;
+            background: linear-gradient(135deg, var(--lc-accent-blue), #A74AE2);
+            border: none;
+            border-radius: 12px;
+            color: var(--lc-text-primary);
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease-in-out;
+            box-shadow: 0 4px 16px rgba(74, 144, 226, 0.3);
+        }
+
+        .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(74, 144, 226, 0.5);
+        }
+
+        .submit-btn:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .submit-btn.loading {
+            pointer-events: none;
+        }
+
+        .submit-btn.loading::after {
+            content: '...';
+            animation: ellipsis 1.5s infinite;
+        }
+
+        @keyframes ellipsis {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+
+        /* Error message */
+        .error-message {
+            display: none;
+            margin-top: 16px;
+            padding: 12px 16px;
+            background: var(--lc-error-bg);
+            border: 1px solid var(--lc-error-border);
+            border-radius: 8px;
+            color: var(--lc-accent-red);
+            font-size: 13px;
+            text-align: center;
+            animation: slideDown 0.3s ease-out;
+        }
+
+        .error-message.show {
+            display: block;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Info badges */
+        .info-badges {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 24px;
+            margin-bottom: 24px;
+        }
+
+        .info-badge {
+            flex: 1;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .info-badge-label {
+            display: block;
+            font-size: 11px;
+            color: var(--lc-text-secondary);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .info-badge-value {
+            display: block;
+            font-size: 18px;
+            font-weight: 600;
+            font-family: 'IBM Plex Mono', monospace;
+        }
+
+        .info-badge-value.timer {
+            color: var(--lc-accent-blue);
+        }
+
+        .info-badge-value.attempts-warning {
+            color: var(--lc-accent-red);
+        }
+
+        .info-badge-value.attempts-ok {
+            color: var(--lc-accent-green);
+        }
+
+        .footer {
+            margin-top: 32px;
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 12px;
+        }
+
+        .footer-link {
+            color: var(--lc-accent-blue);
+            text-decoration: none;
+            transition: all 0.15s ease-in-out;
+        }
+
+        .footer-link:hover {
+            text-shadow: 0 0 12px var(--lc-hover-glow);
+        }
+
+        /* Help text */
+        .help-text {
+            margin-top: 16px;
+            text-align: center;
+            color: var(--lc-text-secondary);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        /* Mobile responsiveness */
+        @media (max-width: 600px) {
+            .card {
+                padding: 32px 24px;
+            }
+
+            h1 {
+                font-size: 20px;
+            }
+
+            #verification-code {
+                font-size: 28px;
+                letter-spacing: 6px;
+                padding: 16px 20px;
+            }
+
+            .info-badges {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="card">
+            <div class="logo-container">
+                <img src="/static/images/limacharlie-logo.png" alt="LimaCharlie" class="logo">
+            </div>
+
+            <div class="icon-container">
+                <div class="mfa-icon">🔐</div>
+            </div>
+
+            <h1>Two-Factor Authentication</h1>
+            <p class="subtitle">
+                Enter the 6-digit verification code from your authenticator app
+            </p>
+
+            <div class="user-badge">
+                <span>👤</span>
+                <span>Signing in as <strong>{{.Email}}</strong></span>
+            </div>
+
+            <form id="mfa-form" method="POST" action="/oauth/mfa-verify">
+                <input type="hidden" name="session" value="{{.SessionID}}">
+
+                <div class="code-input-container">
+                    <label for="verification-code" class="code-input-label">Verification Code</label>
+                    <input
+                        type="text"
+                        id="verification-code"
+                        name="verification_code"
+                        maxlength="6"
+                        pattern="[0-9]{6}"
+                        inputmode="numeric"
+                        autocomplete="one-time-code"
+                        placeholder="000000"
+                        required
+                        autofocus
+                    >
+                </div>
+
+                <button type="submit" id="submit-btn" class="submit-btn" disabled>
+                    Verify Code
+                </button>
+
+                <div id="error-message" class="error-message"></div>
+            </form>
+
+            <div class="info-badges">
+                <div class="info-badge">
+                    <span class="info-badge-label">Time Remaining</span>
+                    <span class="info-badge-value timer" id="timer">5:00</span>
+                </div>
+                <div class="info-badge">
+                    <span class="info-badge-label">Attempts Left</span>
+                    <span class="info-badge-value" id="attempts-remaining">{{.AttemptsRemaining}}</span>
+                </div>
+            </div>
+
+            <div class="help-text">
+                The code expires in 5 minutes. You have {{.MaxAttempts}} attempts.<br>
+                Need help? <a href="https://docs.limacharlie.io" class="footer-link" target="_blank">View documentation</a>
+            </div>
+
+            <div class="footer">
+                Secured by <a href="https://limacharlie.io" class="footer-link" target="_blank">LimaCharlie</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+        const MAX_ATTEMPTS = {{.MaxAttempts}};
+        let currentAttempt = {{.AttemptCount}};
+        let isSubmitting = false;
+
+        // DOM elements
+        const form = document.getElementById('mfa-form');
+        const codeInput = document.getElementById('verification-code');
+        const submitBtn = document.getElementById('submit-btn');
+        const errorMessage = document.getElementById('error-message');
+        const timerDisplay = document.getElementById('timer');
+        const attemptsDisplay = document.getElementById('attempts-remaining');
+
+        // Initialize countdown timer
+        const startTime = Date.now();
+        const endTime = startTime + SESSION_TIMEOUT_MS;
+
+        function updateTimer() {
+            const remaining = endTime - Date.now();
+
+            if (remaining <= 0) {
+                timerDisplay.textContent = '0:00';
+                timerDisplay.style.color = 'var(--lc-accent-red)';
+                showError('Session expired. Please restart authentication.');
+                submitBtn.disabled = true;
+                codeInput.disabled = true;
+                return;
+            }
+
+            const minutes = Math.floor(remaining / 60000);
+            const seconds = Math.floor((remaining % 60000) / 1000);
+            timerDisplay.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+            // Change color when less than 1 minute remaining
+            if (remaining < 60000) {
+                timerDisplay.style.color = 'var(--lc-accent-red)';
+            }
+
+            setTimeout(updateTimer, 1000);
+        }
+
+        updateTimer();
+
+        // Update attempts display color
+        function updateAttemptsDisplay() {
+            const remaining = MAX_ATTEMPTS - currentAttempt;
+            attemptsDisplay.textContent = remaining;
+
+            if (remaining <= 1) {
+                attemptsDisplay.classList.add('attempts-warning');
+                attemptsDisplay.classList.remove('attempts-ok');
+            } else {
+                attemptsDisplay.classList.add('attempts-ok');
+                attemptsDisplay.classList.remove('attempts-warning');
+            }
+        }
+
+        updateAttemptsDisplay();
+
+        // Code input validation
+        codeInput.addEventListener('input', function(e) {
+            // Only allow digits
+            this.value = this.value.replace(/[^0-9]/g, '');
+
+            // Remove error state
+            this.classList.remove('error');
+            errorMessage.classList.remove('show');
+
+            // Enable/disable submit button
+            submitBtn.disabled = this.value.length !== 6;
+
+            // Auto-submit when 6 digits entered
+            if (this.value.length === 6 && !isSubmitting) {
+                setTimeout(() => {
+                    if (!isSubmitting && this.value.length === 6) {
+                        form.dispatchEvent(new Event('submit'));
+                    }
+                }, 300); // Small delay for better UX
+            }
+        });
+
+        // Show error message
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.add('show');
+            codeInput.classList.add('error');
+            codeInput.select(); // Select text for easy correction
+        }
+
+        // Form submission
+        form.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            if (isSubmitting) {
+                return;
+            }
+
+            const code = codeInput.value.trim();
+
+            if (code.length !== 6) {
+                showError('Please enter a 6-digit code');
+                return;
+            }
+
+            // Prevent double submission
+            isSubmitting = true;
+            submitBtn.classList.add('loading');
+            submitBtn.disabled = true;
+            codeInput.disabled = true;
+            errorMessage.classList.remove('show');
+
+            try {
+                // Explicitly create FormData to ensure fields are captured correctly
+                const formData = new FormData();
+                formData.append('session', '{{.SessionID}}');
+                formData.append('verification_code', codeInput.value);
+
+                const response = await fetch('/oauth/mfa-verify', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                // Parse JSON response (server now returns JSON instead of 302 redirect)
+                const data = await response.json();
+
+                if (response.ok && data.success && data.redirect_url) {
+                    // Success - redirect to the OAuth callback URL
+                    window.location.href = data.redirect_url;
+                    return;
+                }
+
+                if (!response.ok) {
+                    // Increment attempt counter
+                    currentAttempt++;
+                    updateAttemptsDisplay();
+
+                    // Show error message
+                    const errorMsg = data.error_description || 'Verification failed. Please try again.';
+                    showError(errorMsg);
+
+                    // Check if max attempts reached
+                    if (currentAttempt >= MAX_ATTEMPTS) {
+                        setTimeout(() => {
+                            showError('Maximum attempts exceeded. Redirecting...');
+                            // Redirect will happen from server
+                        }, 2000);
+                    } else {
+                        // Re-enable form
+                        isSubmitting = false;
+                        submitBtn.classList.remove('loading');
+                        submitBtn.disabled = false;
+                        codeInput.disabled = false;
+                        codeInput.value = '';
+                        codeInput.focus();
+                    }
+                }
+            } catch (error) {
+                console.error('MFA verification error:', error);
+                showError('Network error. Please check your connection and try again.');
+
+                // Re-enable form
+                isSubmitting = false;
+                submitBtn.classList.remove('loading');
+                submitBtn.disabled = false;
+                codeInput.disabled = false;
+                codeInput.focus();
+            }
+        });
+
+        // Handle paste event (for codes copied from authenticator apps)
+        codeInput.addEventListener('paste', function(e) {
+            e.preventDefault();
+            const pastedText = (e.clipboardData || window.clipboardData).getData('text');
+            const digits = pastedText.replace(/[^0-9]/g, '').substring(0, 6);
+            this.value = digits;
+            this.dispatchEvent(new Event('input'));
+        });
+
+        // Focus input on load
+        codeInput.focus();
+    </script>
+</body>
+</html>
