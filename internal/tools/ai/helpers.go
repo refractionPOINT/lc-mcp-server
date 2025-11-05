@@ -18,7 +18,7 @@ const (
 	// DefaultModel is the default Gemini model to use
 	DefaultModel = "gemini-2.5-flash"
 	// LiteModel is the lite version of Gemini
-	LiteModel = "gemini-2.5-flash-lite-preview-06-17"
+	LiteModel = "gemini-2.5-flash-lite"
 	// DefaultRetryCount is the default number of retries for YAML parsing/validation
 	DefaultRetryCount = 10
 )
