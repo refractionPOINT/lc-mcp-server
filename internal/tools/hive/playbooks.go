@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -27,18 +26,8 @@ func RegisterListPlaybooks() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_playbooks",
 			mcp.WithDescription("List all playbooks in the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -88,21 +77,11 @@ func RegisterGetPlaybook() {
 			mcp.WithString("playbook_name",
 				mcp.Required(),
 				mcp.Description("Name of the playbook to retrieve")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			playbookName, ok := args["playbook_name"].(string)
 			if !ok || playbookName == "" {
 				return tools.ErrorResult("playbook_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -158,8 +137,6 @@ func RegisterSetPlaybook() {
 			mcp.WithObject("playbook_data",
 				mcp.Required(),
 				mcp.Description("Playbook definition (steps, conditions, actions)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			playbookName, ok := args["playbook_name"].(string)
@@ -170,14 +147,6 @@ func RegisterSetPlaybook() {
 			playbookData, ok := args["playbook_data"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("playbook_data parameter is required and must be an object"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -221,21 +190,11 @@ func RegisterDeletePlaybook() {
 			mcp.WithString("playbook_name",
 				mcp.Required(),
 				mcp.Description("Name of the playbook to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			playbookName, ok := args["playbook_name"].(string)
 			if !ok || playbookName == "" {
 				return tools.ErrorResult("playbook_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

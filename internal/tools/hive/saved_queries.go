@@ -3,10 +3,10 @@ package hive
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -28,18 +28,8 @@ func RegisterListSavedQueries() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_saved_queries",
 			mcp.WithDescription("List all saved LCQL queries"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -89,21 +79,11 @@ func RegisterGetSavedQuery() {
 			mcp.WithString("query_name",
 				mcp.Required(),
 				mcp.Description("Name of the saved query to retrieve")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)
 			if !ok || queryName == "" {
 				return tools.ErrorResult("query_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -161,8 +141,6 @@ func RegisterSetSavedQuery() {
 				mcp.Description("The LCQL query string")),
 			mcp.WithString("description",
 				mcp.Description("Optional description of what the query does")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)
@@ -176,14 +154,6 @@ func RegisterSetSavedQuery() {
 			}
 
 			description, _ := args["description"].(string)
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
 
 			org, err := getOrganization(ctx)
 			if err != nil {
@@ -234,21 +204,11 @@ func RegisterDeleteSavedQuery() {
 			mcp.WithString("query_name",
 				mcp.Required(),
 				mcp.Description("Name of the saved query to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)
 			if !ok || queryName == "" {
 				return tools.ErrorResult("query_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -290,9 +250,7 @@ func RegisterRunSavedQuery() {
 				mcp.Required(),
 				mcp.Description("Name of the saved query to run")),
 			mcp.WithNumber("limit",
-				mcp.Description("Maximum number of results to return (default 100)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
+				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)
@@ -300,17 +258,9 @@ func RegisterRunSavedQuery() {
 				return tools.ErrorResult("query_name parameter is required"), nil
 			}
 
-			limit := 100
+			limit := math.MaxInt
 			if limitParam, ok := args["limit"].(float64); ok {
 				limit = int(limitParam)
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

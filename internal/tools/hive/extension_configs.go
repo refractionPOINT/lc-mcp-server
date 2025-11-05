@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -27,18 +26,8 @@ func RegisterListExtensionConfigs() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_extension_configs",
 			mcp.WithDescription("List all extension configurations"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -88,21 +77,11 @@ func RegisterGetExtensionConfig() {
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension to retrieve config for")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)
 			if !ok || extensionName == "" {
 				return tools.ErrorResult("extension_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -158,8 +137,6 @@ func RegisterSetExtensionConfig() {
 			mcp.WithObject("config_data",
 				mcp.Required(),
 				mcp.Description("Extension configuration data")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)
@@ -170,14 +147,6 @@ func RegisterSetExtensionConfig() {
 			configData, ok := args["config_data"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("config_data parameter is required and must be an object"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -221,21 +190,11 @@ func RegisterDeleteExtensionConfig() {
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension config to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)
 			if !ok || extensionName == "" {
 				return tools.ErrorResult("extension_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

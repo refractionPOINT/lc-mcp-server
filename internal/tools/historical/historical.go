@@ -3,6 +3,7 @@ package historical
 import (
 	"context"
 	"fmt"
+	"math"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -47,11 +48,9 @@ func RegisterRunLCQLQuery() {
 				mcp.Required(),
 				mcp.Description("The LCQL query to run")),
 			mcp.WithNumber("limit",
-				mcp.Description("Maximum number of results to return (default: 100)")),
+				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
 			mcp.WithString("stream",
 				mcp.Description("Stream to query: 'event', 'detect', or 'audit' (default: 'event')")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract query
@@ -60,8 +59,8 @@ func RegisterRunLCQLQuery() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
-			// Extract limit (default 100)
-			limit := 100
+			// Extract limit (unlimited if not specified)
+			limit := math.MaxInt
 			if limitFloat, ok := args["limit"].(float64); ok {
 				limit = int(limitFloat)
 			}
@@ -70,15 +69,6 @@ func RegisterRunLCQLQuery() {
 			stream := "event"
 			if streamStr, ok := args["stream"].(string); ok && streamStr != "" {
 				stream = streamStr
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Validate stream parameter
@@ -169,8 +159,6 @@ func RegisterGetHistoricDetections() {
 				mcp.Description("Detection category to filter by")),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of results to return")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract start and end timestamps
@@ -185,15 +173,6 @@ func RegisterGetHistoricDetections() {
 				return tools.ErrorResult("end parameter is required"), nil
 			}
 			end := int64(endFloat)
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
 
 			// Get organization
 			org, err := getOrganization(ctx)
@@ -238,8 +217,6 @@ func RegisterSearchIOCs() {
 				mcp.Description("Type of information to retrieve: 'summary', 'locations', etc.")),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of results to return")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract parameters
@@ -256,15 +233,6 @@ func RegisterSearchIOCs() {
 			infoType, ok := args["info_type"].(string)
 			if !ok || infoType == "" {
 				return tools.ErrorResult("info_type parameter is required"), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization
@@ -306,18 +274,8 @@ func RegisterBatchSearchIOCs() {
 			mcp.WithString("info_type",
 				mcp.Required(),
 				mcp.Description("Type of information to retrieve: 'summary', 'locations', etc.")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
 
 			// Get organization
 			org, err := getOrganization(ctx)
@@ -350,22 +308,11 @@ func RegisterGetTimeWhenSensorHasData() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
 			if !ok {
 				return tools.ErrorResult("sid parameter is required"), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization

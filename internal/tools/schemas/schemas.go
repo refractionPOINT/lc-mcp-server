@@ -42,21 +42,11 @@ func RegisterGetEventSchema() {
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name of the event_type to get (e.g. 'DNS_REQUEST')")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
 			if !ok || name == "" {
 				return tools.ErrorResult("name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -92,8 +82,6 @@ func RegisterGetEventSchemasBatch() {
 			mcp.WithArray("event_names",
 				mcp.Required(),
 				mcp.Description("List of event_type names to get schemas for (e.g. ['DNS_REQUEST', 'PROCESS_START'])")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			eventNamesRaw, ok := args["event_names"].([]interface{})
@@ -111,14 +99,6 @@ func RegisterGetEventSchemasBatch() {
 
 			if len(eventNames) == 0 {
 				return tools.ErrorResult("event_names must contain at least one valid string"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -192,18 +172,8 @@ func RegisterGetEventTypesWithSchemas() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_event_types_with_schemas",
 			mcp.WithDescription("Get all available event_type with schemas available for the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -235,21 +205,11 @@ func RegisterGetEventTypesWithSchemasForPlatform() {
 			mcp.WithString("platform",
 				mcp.Required(),
 				mcp.Description("The platform name to get event_types for (e.g. 'windows', 'linux', 'macos', as listed in the response from get_platform_names)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			platform, ok := args["platform"].(string)
 			if !ok || platform == "" {
 				return tools.ErrorResult("platform parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -281,18 +241,8 @@ func RegisterGetPlatformNames() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_platform_names",
 			mcp.WithDescription("Get the platform names ontology from LimaCharlie (does not mean the tenant has sensors for these platforms)"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -324,21 +274,11 @@ func RegisterListWithPlatform() {
 			mcp.WithString("platform",
 				mcp.Required(),
 				mcp.Description("The platform name to list sensors for (e.g. 'windows', 'linux', 'macos', as listed in the response from get_platform_names)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			platform, ok := args["platform"].(string)
 			if !ok || platform == "" {
 				return tools.ErrorResult("platform parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

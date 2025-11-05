@@ -117,8 +117,8 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 
 // registerTools registers all tools for the configured profile
 func (s *Server) registerTools() error {
-	// Add tools to the MCP server
-	if err := tools.AddToolsToServer(s.mcpServer, s.config.Profile); err != nil {
+	// Add tools to the MCP server with auth mode for dynamic OID parameter handling
+	if err := tools.AddToolsToServer(s.mcpServer, s.config.Profile, s.config.Auth.Mode); err != nil {
 		return err
 	}
 

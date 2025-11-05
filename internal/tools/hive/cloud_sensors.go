@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -27,18 +26,8 @@ func RegisterListCloudSensors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_cloud_sensors",
 			mcp.WithDescription("List all cloud sensor configurations"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -88,21 +77,11 @@ func RegisterGetCloudSensor() {
 			mcp.WithString("sensor_name",
 				mcp.Required(),
 				mcp.Description("Name of the cloud sensor to retrieve")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sensorName, ok := args["sensor_name"].(string)
 			if !ok || sensorName == "" {
 				return tools.ErrorResult("sensor_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -158,8 +137,6 @@ func RegisterSetCloudSensor() {
 			mcp.WithObject("sensor_config",
 				mcp.Required(),
 				mcp.Description("Cloud sensor configuration data")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sensorName, ok := args["sensor_name"].(string)
@@ -170,14 +147,6 @@ func RegisterSetCloudSensor() {
 			sensorConfig, ok := args["sensor_config"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("sensor_config parameter is required and must be an object"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -221,21 +190,11 @@ func RegisterDeleteCloudSensor() {
 			mcp.WithString("sensor_name",
 				mcp.Required(),
 				mcp.Description("Name of the cloud sensor to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sensorName, ok := args["sensor_name"].(string)
 			if !ok || sensorName == "" {
 				return tools.ErrorResult("sensor_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

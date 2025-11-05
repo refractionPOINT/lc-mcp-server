@@ -44,22 +44,11 @@ func RegisterGenerateLCQLQuery() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to query")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
 				return tools.ErrorResult("query parameter is required"), nil
-			}
-
-			// Handle OID switching
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -167,22 +156,11 @@ func RegisterGenerateDRRuleDetection() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to detect")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
 				return tools.ErrorResult("query parameter is required"), nil
-			}
-
-			// Handle OID switching
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -311,22 +289,11 @@ func RegisterGenerateDRRuleRespond() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of how to respond")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
 				return tools.ErrorResult("query parameter is required"), nil
-			}
-
-			// Handle OID switching
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

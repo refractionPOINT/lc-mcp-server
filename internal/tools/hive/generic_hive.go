@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -30,21 +29,11 @@ func RegisterListRules() {
 			mcp.WithString("hive_name",
 				mcp.Required(),
 				mcp.Description("Name of the hive (e.g., 'dr-general', 'dr-managed', 'fp')")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
 			if !ok || hiveName == "" {
 				return tools.ErrorResult("hive_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -99,8 +88,6 @@ func RegisterGetRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to retrieve")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
@@ -111,14 +98,6 @@ func RegisterGetRule() {
 			ruleName, ok := args["rule_name"].(string)
 			if !ok || ruleName == "" {
 				return tools.ErrorResult("rule_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -177,8 +156,6 @@ func RegisterSetRule() {
 			mcp.WithObject("rule_content",
 				mcp.Required(),
 				mcp.Description("Rule content (detection and response for D&R rules)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
@@ -194,14 +171,6 @@ func RegisterSetRule() {
 			ruleContent, ok := args["rule_content"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -248,8 +217,6 @@ func RegisterDeleteRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
@@ -260,14 +227,6 @@ func RegisterDeleteRule() {
 			ruleName, ok := args["rule_name"].(string)
 			if !ok || ruleName == "" {
 				return tools.ErrorResult("rule_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

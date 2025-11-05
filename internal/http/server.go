@@ -621,18 +621,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	}
 	s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
 
-	// Extract OID from arguments if present (for UID mode)
-	oid := ""
-	if oidVal, ok := arguments["oid"].(string); ok {
-		oid = oidVal
-	}
-
-	// Create auth context with LimaCharlie JWT (exchanged from Firebase token)
+	// Create initial auth context with LimaCharlie JWT (exchanged from Firebase token)
 	authCtx := &auth.AuthContext{
 		Mode:     auth.AuthModeUIDOAuth,
 		UID:      uid,
 		JWTToken: limaCharlieJWT, // LimaCharlie JWT for API authentication
-		OID:      oid,
 	}
 
 	// Create request context with auth
@@ -644,11 +637,22 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		ctx = gcs.WithGCSManager(ctx, s.gcsManager)
 	}
 
-	// Look up the tool
+	// Handle OID switching if tool requires it and OID is provided
 	tool, ok := tools.GetTool(toolName)
 	if !ok {
 		s.writeJSONRPCError(w, id, -32601, "Tool not found", fmt.Sprintf("Unknown tool: %s", toolName))
 		return
+	}
+
+	if tool.RequiresOID {
+		if oidParam, ok := arguments["oid"].(string); ok && oidParam != "" {
+			var err error
+			ctx, err = auth.WithOID(ctx, oidParam)
+			if err != nil {
+				s.writeJSONRPCError(w, id, -32000, "Invalid OID", fmt.Sprintf("Failed to switch OID: %v", err))
+				return
+			}
+		}
 	}
 
 	// Call the tool handler
@@ -684,10 +688,18 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 			continue
 		}
 
+		schema := tool.Schema
+
+		// HTTP server is always in UID OAuth mode, so dynamically add OID parameter
+		// if the tool requires it
+		if tool.RequiresOID {
+			schema = tools.AddOIDToToolSchema(schema)
+		}
+
 		toolList = append(toolList, map[string]interface{}{
 			"name":        tool.Name,
 			"description": tool.Description,
-			"inputSchema": tool.Schema.InputSchema,
+			"inputSchema": schema.InputSchema,
 		})
 	}
 

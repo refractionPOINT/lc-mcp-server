@@ -65,23 +65,12 @@ func RegisterGetSensorInfo() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
 			sid, err := tools.ExtractAndValidateSID(args)
 			if err != nil {
 				return tools.ErrorResult(err.Error()), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization
@@ -153,18 +142,8 @@ func RegisterListSensors() {
 				mcp.Description("Filter sensors with hostname starting with this prefix")),
 			mcp.WithString("with_ip",
 				mcp.Description("Filter sensors with this IP address")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
 
 			// Get organization
 			org, err := getOrganization(ctx)
@@ -240,18 +219,8 @@ func RegisterGetOnlineSensors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_online_sensors",
 			mcp.WithDescription("List all currently online sensors in the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
 
 			// Get organization
 			org, err := getOrganization(ctx)
@@ -307,8 +276,6 @@ func RegisterIsOnline() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
@@ -317,16 +284,7 @@ func RegisterIsOnline() {
 				return tools.ErrorResult(err.Error()), nil
 			}
 
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
-			// Get organization
+			// OID handling is now automatic via wrapHandler			// Get organization
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -366,23 +324,12 @@ func RegisterSearchHosts() {
 			mcp.WithString("hostname_expr",
 				mcp.Required(),
 				mcp.Description("Hostname expression to search for")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract hostname expression
 			hostnameExpr, ok := args["hostname_expr"].(string)
 			if !ok || hostnameExpr == "" {
 				return tools.ErrorResult("hostname_expr parameter is required"), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization

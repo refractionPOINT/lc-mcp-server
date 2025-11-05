@@ -45,23 +45,12 @@ func RegisterGetProcesses() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
 			sid, err := tools.ExtractAndValidateSID(args)
 			if err != nil {
 				return tools.ErrorResult(err.Error()), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization
@@ -104,23 +93,12 @@ func RegisterGetNetworkConnections() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
 			sid, err := tools.ExtractAndValidateSID(args)
 			if err != nil {
 				return tools.ErrorResult(err.Error()), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization
@@ -164,23 +142,12 @@ func RegisterGetOSVersion() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
 			sid, err := tools.ExtractAndValidateSID(args)
 			if err != nil {
 				return tools.ErrorResult(err.Error()), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization

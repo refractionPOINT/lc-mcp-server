@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -26,18 +25,8 @@ func RegisterListInstallationKeys() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_installation_keys",
 			mcp.WithDescription("List all installation keys in the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -74,8 +63,6 @@ func RegisterCreateInstallationKey() {
 				mcp.Description("Description of the installation key")),
 			mcp.WithNumber("quota",
 				mcp.Description("Optional maximum number of sensors that can use this key")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			tagsRaw, ok := args["tags"].([]interface{})
@@ -94,14 +81,6 @@ func RegisterCreateInstallationKey() {
 			description, ok := args["description"].(string)
 			if !ok || description == "" {
 				return tools.ErrorResult("description parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -145,21 +124,11 @@ func RegisterDeleteInstallationKey() {
 			mcp.WithString("iid",
 				mcp.Required(),
 				mcp.Description("Installation key ID to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			iid, ok := args["iid"].(string)
 			if !ok || iid == "" {
 				return tools.ErrorResult("iid parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

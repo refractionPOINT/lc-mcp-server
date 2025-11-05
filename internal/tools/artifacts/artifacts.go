@@ -46,8 +46,6 @@ func RegisterListArtifacts() {
 				mcp.Description("Start timestamp")),
 			mcp.WithNumber("end",
 				mcp.Description("End timestamp")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -100,8 +98,6 @@ func RegisterGetArtifact() {
 				mcp.Description("Artifact ID to retrieve")),
 			mcp.WithBoolean("get_url_only",
 				mcp.Description("If true, return signed URL instead of downloading (default: false)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			artifactID, ok := args["artifact_id"].(string)

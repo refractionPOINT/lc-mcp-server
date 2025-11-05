@@ -28,8 +28,6 @@ func RegisterValidateDRRuleComponents() {
 				mcp.Description("The detection component (YAML/JSON structure)")),
 			mcp.WithObject("respond",
 				mcp.Description("Optional respond component (YAML/JSON structure)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (optional, for context)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			detect, ok := args["detect"]

@@ -47,18 +47,8 @@ func RegisterGetOrgInfo() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_org_info",
 			mcp.WithDescription("Get detailed organization information and configuration"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
 
 			// Get organization
 			org, err := getOrganization(ctx)
@@ -88,18 +78,8 @@ func RegisterGetUsageStats() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_usage_stats",
 			mcp.WithDescription("Get organization usage statistics"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -126,18 +106,8 @@ func RegisterGetBillingDetails() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_billing_details",
 			mcp.WithDescription("Get billing information for the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -172,8 +142,6 @@ func RegisterGetOrgInvoiceURL() {
 				mcp.Description("Invoice month (1-12)")),
 			mcp.WithString("format",
 				mcp.Description("Optional format parameter for the invoice")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			year, ok := args["year"].(float64)
@@ -189,14 +157,6 @@ func RegisterGetOrgInvoiceURL() {
 			format := ""
 			if f, ok := args["format"].(string); ok {
 				format = f
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -360,18 +320,8 @@ func RegisterGetOrgErrors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_org_errors",
 			mcp.WithDescription("Get error logs for the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -401,21 +351,11 @@ func RegisterDismissOrgError() {
 			mcp.WithString("component",
 				mcp.Required(),
 				mcp.Description("Component name of the error to dismiss")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			component, ok := args["component"].(string)
 			if !ok || component == "" {
 				return tools.ErrorResult("component parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -444,18 +384,8 @@ func RegisterListAPIKeys() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_api_keys",
 			mcp.WithDescription("List all API keys for the organization (does not return actual key values)"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -487,8 +417,6 @@ func RegisterCreateAPIKey() {
 				mcp.Description("Description/name for the API key")),
 			mcp.WithArray("permissions",
 				mcp.Description("Optional list of permissions for the key")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			keyName, ok := args["key_name"].(string)
@@ -502,14 +430,6 @@ func RegisterCreateAPIKey() {
 					if perm, ok := p.(string); ok {
 						permissions = append(permissions, perm)
 					}
-				}
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
 				}
 			}
 
@@ -543,21 +463,11 @@ func RegisterDeleteAPIKey() {
 			mcp.WithString("key_hash",
 				mcp.Required(),
 				mcp.Description("Hash of the API key to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			keyHash, ok := args["key_hash"].(string)
 			if !ok || keyHash == "" {
 				return tools.ErrorResult("key_hash parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -586,18 +496,8 @@ func RegisterGetMITREReport() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_mitre_report",
 			mcp.WithDescription("Get MITRE ATT&CK coverage report showing detection rule coverage"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -633,8 +533,6 @@ func RegisterGetTimeWhenSensorHasData() {
 			mcp.WithNumber("end",
 				mcp.Required(),
 				mcp.Description("End timestamp (Unix seconds)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, err := tools.ExtractAndValidateSID(args)
@@ -650,14 +548,6 @@ func RegisterGetTimeWhenSensorHasData() {
 			end, ok := args["end"].(float64)
 			if !ok {
 				return tools.ErrorResult("end parameter is required and must be a number"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

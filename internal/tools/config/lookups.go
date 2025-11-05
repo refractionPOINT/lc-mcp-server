@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -29,18 +28,8 @@ func RegisterListLookups() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_lookups",
 			mcp.WithDescription("List all lookup tables in the organization"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -90,21 +79,11 @@ func RegisterGetLookup() {
 			mcp.WithString("lookup_name",
 				mcp.Required(),
 				mcp.Description("Name of the lookup table to retrieve")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
 			if !ok || lookupName == "" {
 				return tools.ErrorResult("lookup_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -160,8 +139,6 @@ func RegisterSetLookup() {
 			mcp.WithObject("lookup_data",
 				mcp.Required(),
 				mcp.Description("Lookup table data (key-value pairs or list of items)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
@@ -172,14 +149,6 @@ func RegisterSetLookup() {
 			lookupData, ok := args["lookup_data"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("lookup_data parameter is required and must be an object"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -223,21 +192,11 @@ func RegisterDeleteLookup() {
 			mcp.WithString("lookup_name",
 				mcp.Required(),
 				mcp.Description("Name of the lookup table to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
 			if !ok || lookupName == "" {
 				return tools.ErrorResult("lookup_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -281,8 +240,6 @@ func RegisterQueryLookup() {
 			mcp.WithString("key",
 				mcp.Required(),
 				mcp.Description("Key to look up in the table")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
@@ -293,14 +250,6 @@ func RegisterQueryLookup() {
 			key, ok := args["key"].(string)
 			if !ok || key == "" {
 				return tools.ErrorResult("key parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)

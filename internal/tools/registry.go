@@ -9,6 +9,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
 )
 
@@ -265,9 +266,39 @@ func GetToolsForProfile(profile string) []string {
 	return tools
 }
 
+// IsUIDMode checks if the auth mode supports OID switching
+func IsUIDMode(authMode auth.AuthMode) bool {
+	return authMode == auth.AuthModeUIDKey || authMode == auth.AuthModeUIDOAuth
+}
+
+// AddOIDToToolSchema adds the OID parameter to a tool's input schema
+func AddOIDToToolSchema(tool mcp.Tool) mcp.Tool {
+	// Clone the input schema
+	schema := tool.InputSchema
+
+	// Initialize Properties map if nil
+	if schema.Properties == nil {
+		schema.Properties = make(map[string]any)
+	}
+
+	// Add OID parameter with simplified description
+	schema.Properties["oid"] = map[string]any{
+		"type":        "string",
+		"description": "Organization ID",
+	}
+
+	// Add to required list
+	schema.Required = append(schema.Required, "oid")
+
+	// Update the tool with modified schema
+	tool.InputSchema = schema
+	return tool
+}
+
 // AddToolsToServer adds all tools for a profile to an MCP server
-func AddToolsToServer(s *server.MCPServer, profile string) error {
+func AddToolsToServer(s *server.MCPServer, profile string, authMode auth.AuthMode) error {
 	toolNames := GetToolsForProfile(profile)
+	isUIDMode := IsUIDMode(authMode)
 
 	for _, name := range toolNames {
 		reg, ok := GetTool(name)
@@ -276,22 +307,40 @@ func AddToolsToServer(s *server.MCPServer, profile string) error {
 			continue
 		}
 
+		schema := reg.Schema
+
+		// Dynamically add OID parameter if tool requires it and we're in UID mode
+		if reg.RequiresOID && isUIDMode {
+			schema = AddOIDToToolSchema(schema)
+		}
+
 		// Wrap handler to convert between MCP request and our handler signature
-		wrappedHandler := wrapHandler(reg)
+		wrappedHandler := wrapHandler(reg, isUIDMode)
 
 		// Add tool to server
-		s.AddTool(reg.Schema, wrappedHandler)
+		s.AddTool(schema, wrappedHandler)
 	}
 
 	return nil
 }
 
-// wrapHandler converts our ToolHandler to mcp-go's expected signature
-// and wraps large results with GCS if available
-func wrapHandler(reg *ToolRegistration) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+// wrapHandler converts our ToolHandler to mcp-go's expected signature,
+// handles OID switching for tools that require it, and wraps large results with GCS if available
+func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments using the method
 		args := request.GetArguments()
+
+		// Automatically handle OID switching for tools that require it in UID mode
+		if reg.RequiresOID && isUIDMode {
+			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
+				var err error
+				ctx, err = auth.WithOID(ctx, oidParam)
+				if err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("failed to switch OID: %v", err)), nil
+				}
+			}
+		}
 
 		// Call the actual handler
 		result, err := reg.Handler(ctx, args)

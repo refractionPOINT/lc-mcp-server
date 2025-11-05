@@ -47,23 +47,12 @@ func RegisterIsolateNetwork() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
 			sid, err := tools.ExtractAndValidateSID(args)
 			if err != nil {
 				return tools.ErrorResult(err.Error()), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization
@@ -105,23 +94,12 @@ func RegisterRejoinNetwork() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
 			sid, err := tools.ExtractAndValidateSID(args)
 			if err != nil {
 				return tools.ErrorResult(err.Error()), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization
@@ -163,23 +141,12 @@ func RegisterIsIsolated() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
 			sid, err := tools.ExtractAndValidateSID(args)
 			if err != nil {
 				return tools.ErrorResult(err.Error()), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization
@@ -229,8 +196,6 @@ func RegisterAddTag() {
 			mcp.WithNumber("ttl",
 				mcp.Required(),
 				mcp.Description("Time to live in seconds (0 for permanent)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract SID
@@ -251,15 +216,6 @@ func RegisterAddTag() {
 				return tools.ErrorResult("ttl parameter is required"), nil
 			}
 			ttl := int(ttlFloat)
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
 
 			// Get organization
 			org, err := getOrganization(ctx)
@@ -304,8 +260,6 @@ func RegisterRemoveTag() {
 			mcp.WithString("tag",
 				mcp.Required(),
 				mcp.Description("Tag to remove")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract SID
@@ -318,15 +272,6 @@ func RegisterRemoveTag() {
 			tag, ok := args["tag"].(string)
 			if !ok || tag == "" {
 				return tools.ErrorResult("tag parameter is required"), nil
-			}
-
-			// Handle OID switching for UID mode
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			// Get organization

@@ -36,8 +36,6 @@ func RegisterReliableTasking() {
 				mcp.Description("Sensor selector expression")),
 			mcp.WithNumber("retention_seconds",
 				mcp.Description("How long to keep the task active (default: 86400)")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			command, ok := args["command"].(string)
@@ -89,8 +87,6 @@ func RegisterListReliableTasks() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_reliable_tasks",
 			mcp.WithDescription("List pending reliable tasks"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -121,8 +117,6 @@ func RegisterDeleteSensor() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID) to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)

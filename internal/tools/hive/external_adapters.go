@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -27,18 +26,8 @@ func RegisterListExternalAdapters() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_external_adapters",
 			mcp.WithDescription("List all external adapter configurations"),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
-			}
-
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -88,21 +77,11 @@ func RegisterGetExternalAdapter() {
 			mcp.WithString("adapter_name",
 				mcp.Required(),
 				mcp.Description("Name of the adapter to retrieve")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			adapterName, ok := args["adapter_name"].(string)
 			if !ok || adapterName == "" {
 				return tools.ErrorResult("adapter_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -158,8 +137,6 @@ func RegisterSetExternalAdapter() {
 			mcp.WithObject("adapter_config",
 				mcp.Required(),
 				mcp.Description("Adapter configuration data")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			adapterName, ok := args["adapter_name"].(string)
@@ -170,14 +147,6 @@ func RegisterSetExternalAdapter() {
 			adapterConfig, ok := args["adapter_config"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("adapter_config parameter is required and must be an object"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -221,21 +190,11 @@ func RegisterDeleteExternalAdapter() {
 			mcp.WithString("adapter_name",
 				mcp.Required(),
 				mcp.Description("Name of the adapter to delete")),
-			mcp.WithString("oid",
-				mcp.Description("Organization ID (required in UID mode)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			adapterName, ok := args["adapter_name"].(string)
 			if !ok || adapterName == "" {
 				return tools.ErrorResult("adapter_name parameter is required"), nil
-			}
-
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
-				if err != nil {
-					return tools.ErrorResultf("failed to switch OID: %v", err), nil
-				}
 			}
 
 			org, err := getOrganization(ctx)
