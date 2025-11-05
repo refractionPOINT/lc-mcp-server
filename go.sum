@@ -112,8 +112,8 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/redis/go-redis/v9 v9.16.0 h1:OotgqgLSRCmzfqChbQyG1PHC3tLNR89DG4jdOERSEP4=
 github.com/redis/go-redis/v9 v9.16.0/go.mod h1:u410H11HMLoB+TP67dz8rL9s6QW2j76l0//kSOd3370=
-github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251105040508-ddcd1790f730 h1:vMtNP6FJypnldd7YtlIObveQEGs9VxgsQOdjid0dgGY=
-github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251105040508-ddcd1790f730/go.mod h1:M4LyEs/2mJ2OA1JHsDMQYKPdD8/RZmz2+FWLlVIwapM=
+github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251105155728-564367a6cc1c h1:TNr3lTxwCjE7EZaQ+lmlobYfdzMWMIALkTlu0s1U8AA=
+github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251105155728-564367a6cc1c/go.mod h1:M4LyEs/2mJ2OA1JHsDMQYKPdD8/RZmz2+FWLlVIwapM=
 github.com/rogpeppe/go-internal v1.13.1 h1:KvO1DLK/DRN07sQ1LQKScxyZJuNnedQ5/wKSR38lUII=
 github.com/rogpeppe/go-internal v1.13.1/go.mod h1:uMEvuHeurkdAXX61udpOXGD/AzZDWNMNyH2VO9fmH0o=
 github.com/rs/xid v1.6.0/go.mod h1:7XoLgs4eV+QndskICGsho+ADou8ySMSjJKDIan90Nz0=
