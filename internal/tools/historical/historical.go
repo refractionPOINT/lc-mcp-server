@@ -81,26 +81,71 @@ func RegisterRunLCQLQuery() {
 				}
 			}
 
+			// Validate stream parameter
+			if stream != "event" && stream != "detect" && stream != "audit" {
+				return tools.ErrorResultf("invalid stream '%s' specified. Must be one of: 'event', 'detect', 'audit'", stream), nil
+			}
+
 			// Get organization
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// TODO: Go SDK needs Query() method
-			// Need to add: func (org *Organization) Query(query string, stream string, limit int) ([]map[string]interface{}, error)
-			// For now, return error indicating SDK limitation
-			_ = org // Use org to avoid unused variable error
-			_ = query
-			_ = stream
-			_ = limit
-
-			result := map[string]interface{}{
-				"error":   "not_implemented",
-				"message": "Go SDK does not yet have Query() method. Need to add to go-limacharlie SDK.",
+			// Create query request with cursor-based pagination
+			queryReq := lc.QueryRequest{
+				Query:  query,
+				Stream: stream,
+				Cursor: "-", // Enable cursor-based pagination
 			}
 
-			return tools.SuccessResult(result), nil
+			// Get query iterator
+			iter, err := org.QueryAll(queryReq)
+			if err != nil {
+				return tools.ErrorResultf("failed to create query iterator: %v", err), nil
+			}
+
+			// Collect results up to the limit
+			results := make([]lc.Dict, 0, limit)
+			hasMore := false
+
+			for iter.HasMore() {
+				resp, err := iter.Next()
+				if err != nil {
+					return tools.ErrorResultf("failed to fetch query results: %v", err), nil
+				}
+
+				if resp == nil {
+					break
+				}
+
+				// Add results from this page
+				for _, result := range resp.Results {
+					if len(results) >= limit {
+						hasMore = true
+						break
+					}
+					results = append(results, result)
+				}
+
+				// Stop if we've reached the limit
+				if len(results) >= limit {
+					hasMore = true
+					break
+				}
+			}
+
+			// Check if there are more results available
+			if !hasMore && iter.HasMore() {
+				hasMore = true
+			}
+
+			response := map[string]interface{}{
+				"results":  results,
+				"has_more": hasMore,
+			}
+
+			return tools.SuccessResult(response), nil
 		},
 	})
 }

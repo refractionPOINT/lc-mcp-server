@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -171,6 +172,8 @@ func (s *Server) setupRoutes() {
 
 	// Provider selection endpoints
 	s.mux.HandleFunc("/oauth/select-provider", s.handleProviderSelection)
+	s.mux.HandleFunc("/oauth/select-provider/google", s.handleProviderSelectionWithProvider)
+	s.mux.HandleFunc("/oauth/select-provider/microsoft", s.handleProviderSelectionWithProvider)
 
 	// MFA endpoints
 	s.mux.HandleFunc("/oauth/mfa-challenge", s.handleMFAChallenge)
@@ -415,6 +418,56 @@ func (s *Server) handleProviderSelection(w http.ResponseWriter, r *http.Request)
 
 	// Delegate to OAuth handler which has the full implementation
 	s.oauthHandlers.HandleProviderSelection(w, r, sessionID)
+}
+
+func (s *Server) handleProviderSelectionWithProvider(w http.ResponseWriter, r *http.Request) {
+	// Extract provider from URL path (/oauth/select-provider/{provider})
+	provider := ""
+	if strings.HasSuffix(r.URL.Path, "/google") {
+		provider = "google"
+	} else if strings.HasSuffix(r.URL.Path, "/microsoft") {
+		provider = "microsoft"
+	}
+
+	if provider == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "invalid_request",
+			"error_description": "Invalid provider",
+		})
+		return
+	}
+
+	// Extract session ID from query parameter
+	sessionID := r.URL.Query().Get("session")
+	if sessionID == "" {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "invalid_request",
+			"error_description": "Missing session parameter",
+		})
+		return
+	}
+
+	// Get stored OAuth parameters from session
+	params, err := s.stateManager.ConsumeSelectionSession(r.Context(), sessionID)
+	if err != nil || params == nil {
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "invalid_request",
+			"error_description": "Session expired or invalid",
+		})
+		return
+	}
+
+	// Add provider to parameters
+	params["provider"] = provider
+
+	// Build authorize URL with all parameters using proper URL encoding
+	q := url.Values{}
+	for k, v := range params {
+		q.Set(k, v)
+	}
+
+	authorizeURL := "/authorize?" + q.Encode()
+	http.Redirect(w, r, authorizeURL, http.StatusFound)
 }
 
 func (s *Server) handleMFAChallenge(w http.ResponseWriter, r *http.Request) {
