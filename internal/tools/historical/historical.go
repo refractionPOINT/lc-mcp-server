@@ -2,6 +2,7 @@ package historical
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 
@@ -145,6 +146,8 @@ func RegisterGetHistoricDetections() {
 			mcp.WithNumber("end",
 				mcp.Required(),
 				mcp.Description("End timestamp in Unix epoch seconds")),
+			mcp.WithString("sid",
+				mcp.Description("Optional sensor ID to filter detections by")),
 			mcp.WithString("cat",
 				mcp.Description("Detection category to filter by")),
 			mcp.WithNumber("limit",
@@ -156,13 +159,13 @@ func RegisterGetHistoricDetections() {
 			if !ok {
 				return tools.ErrorResult("start parameter is required"), nil
 			}
-			start := int64(startFloat)
+			start := int(startFloat)
 
 			endFloat, ok := args["end"].(float64)
 			if !ok {
 				return tools.ErrorResult("end parameter is required"), nil
 			}
-			end := int64(endFloat)
+			end := int(endFloat)
 
 			// Get organization
 			org, err := tools.GetOrganization(ctx)
@@ -170,16 +173,60 @@ func RegisterGetHistoricDetections() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// TODO: Go SDK needs GetDetections() method
-			// Need to add: func (org *Organization) GetDetections(start, end int64) ([]Detection, error)
-			// For now, return error indicating SDK limitation
-			_ = org
-			_ = start
-			_ = end
+			// Extract optional parameters
+			sid := ""
+			if sidStr, ok := args["sid"].(string); ok {
+				sid = sidStr
+			}
+
+			cat := ""
+			if catStr, ok := args["cat"].(string); ok {
+				cat = catStr
+			}
+
+			limit := 0 // 0 means no limit
+			if limitFloat, ok := args["limit"].(float64); ok {
+				limit = int(limitFloat)
+			}
+
+			// Create the request
+			req := lc.HistoricalDetectionsRequest{
+				SID:    sid,
+				Cat:    cat,
+				Cursor: "-", // Start from the beginning
+				Start:  start,
+				End:    end,
+				Limit:  limit,
+			}
+
+			// Fetch all detections with pagination
+			allDetects := make([]lc.Detect, 0)
+			for {
+				resp, err := org.HistoricalDetections(req)
+				if err != nil {
+					return tools.ErrorResultf("failed to get historical detections: %v", err), nil
+				}
+
+				allDetects = append(allDetects, resp.Detects...)
+
+				// Check if there's a next cursor
+				if resp.NextCursor == "" {
+					break
+				}
+
+				// Check if we've reached the limit
+				if limit > 0 && len(allDetects) >= limit {
+					allDetects = allDetects[:limit]
+					break
+				}
+
+				// Update cursor for next iteration
+				req.Cursor = resp.NextCursor
+			}
 
 			result := map[string]interface{}{
-				"error":   "not_implemented",
-				"message": "Go SDK does not yet have GetDetections() method. Need to add to go-limacharlie SDK.",
+				"detections": allDetects,
+				"count":      len(allDetects),
 			}
 
 			return tools.SuccessResult(result), nil
@@ -231,20 +278,72 @@ func RegisterSearchIOCs() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// TODO: Go SDK needs SearchIOC() method
-			// Need to add: func (org *Organization) SearchIOC(iocType, iocValue, infoType string) (interface{}, error)
-			// For now, return error indicating SDK limitation
-			_ = org
-			_ = iocType
-			_ = iocValue
-			_ = infoType
-
-			result := map[string]interface{}{
-				"error":   "not_implemented",
-				"message": "Go SDK does not yet have SearchIOC() method. Need to add to go-limacharlie SDK.",
+			// Map IOC type to InsightObjectType
+			var objectType lc.InsightObjectType
+			switch iocType {
+			case "hash", "file_hash":
+				objectType = lc.InsightObjectTypes.FileHash
+			case "domain":
+				objectType = lc.InsightObjectTypes.Domain
+			case "ip":
+				objectType = lc.InsightObjectTypes.IP
+			case "file_path":
+				objectType = lc.InsightObjectTypes.FilePath
+			case "file_name":
+				objectType = lc.InsightObjectTypes.FileName
+			case "user", "username":
+				objectType = lc.InsightObjectTypes.Username
+			case "service_name":
+				objectType = lc.InsightObjectTypes.ServiceName
+			case "package_name":
+				objectType = lc.InsightObjectTypes.PackageName
+			default:
+				return tools.ErrorResultf("unsupported ioc_type '%s'. Valid types: hash, domain, ip, file_path, file_name, user, service_name, package_name", iocType), nil
 			}
 
-			return tools.SuccessResult(result), nil
+			// Map info type to InsightObjectTypeInfoType
+			var objectTypeInfo lc.InsightObjectTypeInfoType
+			switch infoType {
+			case "summary":
+				objectTypeInfo = lc.InsightObjectTypeInfoTypes.Summary
+			case "locations", "location":
+				objectTypeInfo = lc.InsightObjectTypeInfoTypes.Location
+			default:
+				return tools.ErrorResultf("unsupported info_type '%s'. Valid types: summary, locations", infoType), nil
+			}
+
+			// Check if wildcards are present
+			hasWildcards := false
+			if len(iocValue) > 0 {
+				hasWildcards = iocValue[0] == '*' || iocValue[len(iocValue)-1] == '*'
+			}
+
+			// Create the request
+			req := lc.InsightObjectsRequest{
+				IndicatorName:   iocValue,
+				ObjectType:      objectType,
+				ObjectTypeInfo:  objectTypeInfo,
+				IsCaseSensitive: false, // Default to case insensitive
+				AllowWildcards:  hasWildcards,
+				SearchInLogs:    false, // Default to searching in sensor data
+			}
+
+			// Use InsightObjectsPerObject if we want detailed per-object results
+			if objectTypeInfo == lc.InsightObjectTypeInfoTypes.Location {
+				resp, err := org.InsightObjectsPerObject(req)
+				if err != nil {
+					return tools.ErrorResultf("failed to search IOCs: %v", err), nil
+				}
+				return tools.SuccessResult(resp), nil
+			}
+
+			// Use InsightObjects for summary
+			resp, err := org.InsightObjects(req)
+			if err != nil {
+				return tools.ErrorResultf("failed to search IOCs: %v", err), nil
+			}
+
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }
@@ -266,6 +365,16 @@ func RegisterBatchSearchIOCs() {
 				mcp.Description("Type of information to retrieve: 'summary', 'locations', etc.")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Extract parameters
+			iocsJSON, ok := args["iocs"].(string)
+			if !ok || iocsJSON == "" {
+				return tools.ErrorResult("iocs parameter is required"), nil
+			}
+
+			infoType, ok := args["info_type"].(string)
+			if !ok || infoType == "" {
+				return tools.ErrorResult("info_type parameter is required"), nil
+			}
 
 			// Get organization
 			org, err := tools.GetOrganization(ctx)
@@ -273,15 +382,64 @@ func RegisterBatchSearchIOCs() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Note: Using InsightObjectsBatch from SDK
-			_ = org
-
-			result := map[string]interface{}{
-				"error":   "not_implemented",
-				"message": "Go SDK needs InsightObjectsBatch() method. Need to add to go-limacharlie SDK.",
+			// Parse IOCs JSON array
+			var iocList []map[string]string
+			if err := json.Unmarshal([]byte(iocsJSON), &iocList); err != nil {
+				return tools.ErrorResultf("failed to parse iocs JSON: %v", err), nil
 			}
 
-			return tools.SuccessResult(result), nil
+			// Build the objects map for batch request
+			objects := make(map[lc.InsightObjectType][]string)
+			for _, ioc := range iocList {
+				iocType, ok := ioc["type"]
+				if !ok {
+					return tools.ErrorResult("each IOC must have a 'type' field"), nil
+				}
+				iocValue, ok := ioc["value"]
+				if !ok {
+					return tools.ErrorResult("each IOC must have a 'value' field"), nil
+				}
+
+				// Map IOC type to InsightObjectType
+				var objectType lc.InsightObjectType
+				switch iocType {
+				case "hash", "file_hash":
+					objectType = lc.InsightObjectTypes.FileHash
+				case "domain":
+					objectType = lc.InsightObjectTypes.Domain
+				case "ip":
+					objectType = lc.InsightObjectTypes.IP
+				case "file_path":
+					objectType = lc.InsightObjectTypes.FilePath
+				case "file_name":
+					objectType = lc.InsightObjectTypes.FileName
+				case "user", "username":
+					objectType = lc.InsightObjectTypes.Username
+				case "service_name":
+					objectType = lc.InsightObjectTypes.ServiceName
+				case "package_name":
+					objectType = lc.InsightObjectTypes.PackageName
+				default:
+					return tools.ErrorResultf("unsupported ioc_type '%s'. Valid types: hash, domain, ip, file_path, file_name, user, service_name, package_name", iocType), nil
+				}
+
+				// Add to objects map
+				objects[objectType] = append(objects[objectType], iocValue)
+			}
+
+			// Create the batch request
+			req := lc.InsightObjectsBatchRequest{
+				Objects:         objects,
+				IsCaseSensitive: false, // Default to case insensitive
+			}
+
+			// Call InsightObjectsBatch
+			resp, err := org.InsightObjectsBatch(req)
+			if err != nil {
+				return tools.ErrorResultf("failed to batch search IOCs: %v", err), nil
+			}
+
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

@@ -275,3 +275,47 @@ func interpretSchema(schema map[string]interface{}) string {
 
 	return output
 }
+
+// getSchemaInfo fetches schema information from the SDK
+func getSchemaInfo(ctx context.Context, org *lc.Organization) string {
+	// Get all available schemas
+	schemas, err := org.GetSchemas()
+	if err != nil {
+		fmt.Printf("Warning: failed to fetch schemas: %v\n", err)
+		return "No schema available - extrapolate with best effort."
+	}
+
+	if schemas == nil || len(schemas.EventTypes) == 0 {
+		return "No schema available - extrapolate with best effort."
+	}
+
+	// Build schema information
+	// Provide a list of available event types rather than full schemas
+	// to avoid overwhelming the prompt with too much data
+	var schemaInfo strings.Builder
+	schemaInfo.WriteString(fmt.Sprintf("Available event types (%d total):\n", len(schemas.EventTypes)))
+
+	// Group into columns for readability
+	for i, eventType := range schemas.EventTypes {
+		// Remove "evt:" prefix if present for cleaner output
+		cleanType := eventType
+		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 {
+			cleanType = parts[1]
+		}
+
+		schemaInfo.WriteString(cleanType)
+
+		// Add separator or newline
+		if (i+1)%3 == 0 {
+			schemaInfo.WriteString("\n")
+		} else if i < len(schemas.EventTypes)-1 {
+			schemaInfo.WriteString(", ")
+		}
+	}
+
+	schemaInfo.WriteString("\n\nUse these event type names in your LCQL queries. ")
+	schemaInfo.WriteString("Common fields across most events include: routing (with sid, oid, tags, etc.), ")
+	schemaInfo.WriteString("event_type, ts (timestamp), and type-specific fields.")
+
+	return schemaInfo.String()
+}

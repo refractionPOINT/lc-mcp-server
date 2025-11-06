@@ -54,9 +54,8 @@ func RegisterGenerateLCQLQuery() {
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
-			// TODO: Get schema from prompt (requires implementing schema detection)
-			// For now, use empty schema
-			schema := "No schema available - extrapolate with best effort."
+			// Get schema information from the SDK
+			schema := getSchemaInfo(ctx, org)
 			prompt := strings.Replace(promptTemplate, "{lcql_schema}", schema, -1)
 
 			// Loop up to retry count times to generate and validate
@@ -166,8 +165,8 @@ func RegisterGenerateDRRuleDetection() {
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
-			// TODO: Get schema from prompt
-			schema := "No schema available - extrapolate with best effort."
+			// Get schema information from the SDK
+			schema := getSchemaInfo(ctx, org)
 			prompt := strings.Replace(promptTemplate, "{lcql_schema}", schema, -1)
 
 			// Loop up to retry count times
