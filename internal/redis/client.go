@@ -32,13 +32,21 @@ func New(cfg *Config, logger *slog.Logger) (*Client, error) {
 		return nil, fmt.Errorf("invalid Redis URL: %w", err)
 	}
 
-	// Configure client
-	opt.DialTimeout = 5 * time.Second
-	opt.ReadTimeout = 3 * time.Second
-	opt.WriteTimeout = 3 * time.Second
+	// Configure client with lenient timeouts for high-latency networks
+	opt.DialTimeout = 30 * time.Second
+	opt.ReadTimeout = 10 * time.Second
+	opt.WriteTimeout = 10 * time.Second
 	opt.PoolSize = 10
 	opt.MinIdleConns = 2
-	opt.MaxRetries = 3
+
+	// Command retry settings
+	opt.MaxRetries = 5
+	opt.MinRetryBackoff = 100 * time.Millisecond
+	opt.MaxRetryBackoff = 3 * time.Second
+
+	// Connection dialer retry settings (separate from command retries)
+	opt.DialerRetries = 20
+	opt.DialerRetryTimeout = 500 * time.Millisecond
 
 	// Create client
 	client := redis.NewClient(opt)
@@ -48,8 +56,8 @@ func New(cfg *Config, logger *slog.Logger) (*Client, error) {
 		logger: logger,
 	}
 
-	// Test connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Test connection with longer timeout to match dial settings
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
