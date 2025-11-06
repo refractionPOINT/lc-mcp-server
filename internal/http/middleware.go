@@ -237,18 +237,6 @@ func isProfilePath(path string) bool {
 	return false
 }
 
-// authMiddleware validates OAuth Bearer tokens (will be implemented in Phase 4)
-func (s *Server) authMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// TODO: Implement OAuth token validation
-		// Extract Bearer token from Authorization header
-		// Validate token with OAuth token manager
-		// Auto-refresh if needed
-		// Store user context (UID, OAuth creds) for downstream handlers
-
-		next.ServeHTTP(w, r)
-	})
-}
 
 // responseWriter wraps http.ResponseWriter to capture status code
 type responseWriter struct {
