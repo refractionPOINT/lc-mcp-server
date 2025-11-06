@@ -19,6 +19,10 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Extract API version from context for observability
+	apiVersion := GetVersionFromContext(r.Context())
+	s.logger.Debug("Handling MCP request", "api_version", apiVersion, "path", r.URL.Path)
+
 	// Parse JSON-RPC request
 	var req struct {
 		JSONRPC string                 `json:"jsonrpc"`

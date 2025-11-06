@@ -45,10 +45,13 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("/oauth/mfa-verify", s.handleMFAVerify)
 
 	// MCP JSON-RPC endpoint (protected by OAuth)
-	s.mux.HandleFunc("/mcp", s.handleMCPRequest)
+	// Register both unversioned (latest) and versioned routes
+	s.mux.HandleFunc("/mcp", s.handleMCPRequest)        // Unversioned -> latest
+	s.mux.HandleFunc("/mcp/"+APIVersionV1, s.handleMCPRequest) // Explicit v1
 
 	// Profile-specific endpoints - register all valid profiles
 	// This allows URL-based profile routing when MCP_PROFILE is not set
+	// Register both unversioned (latest) and versioned variants
 	profiles := []string{
 		"all",
 		"core",
@@ -62,8 +65,13 @@ func (s *Server) setupRoutes() {
 		"ai_powered",
 	}
 	for _, profile := range profiles {
-		route := "/" + profile
-		s.mux.HandleFunc(route, s.handleMCPRequest)
+		// Unversioned route (maps to latest)
+		unversionedRoute := "/" + profile
+		s.mux.HandleFunc(unversionedRoute, s.handleMCPRequest)
+
+		// Versioned route (explicit v1)
+		versionedRoute := "/" + APIVersionV1 + "/" + profile
+		s.mux.HandleFunc(versionedRoute, s.handleMCPRequest)
 	}
 }
 
@@ -129,8 +137,13 @@ func (s *Server) handleRootRequest(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, map[string]interface{}{
 			"type":   "lc-mcp-server",
 			"status": "ok",
+			"api_version": map[string]string{
+				"current": LatestAPIVersion,
+				"supported": APIVersionV1,
+			},
 			"endpoints": map[string]string{
 				"mcp":    "/mcp",
+				"mcp_v1": "/mcp/" + APIVersionV1,
 				"health": "/health",
 				"ready":  "/ready",
 			},

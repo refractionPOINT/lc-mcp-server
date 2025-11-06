@@ -48,6 +48,7 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 
 	// Server-specific middleware (need access to server state)
 	handler = s.requestIDMiddleware(handler)       // Adds request ID to context
+	handler = VersionMiddleware(handler)           // Extract and validate API version
 	handler = s.rateLimitMiddleware(handler)       // Rate limiting per endpoint
 	handler = s.bodySizeLimitMiddleware(handler)   // Prevent large request bodies
 	handler = s.securityHeadersMiddleware(handler) // Security headers
@@ -239,16 +240,20 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 
 // getEndpointType determines the rate limit category for a path
 func getEndpointType(path string) string {
+	// Strip version prefix for endpoint type detection
+	// This ensures /mcp/v1 is recognized as "mcp_request" just like /mcp
+	normalizedPath := StripVersionFromPath(path)
+
 	switch {
-	case strings.HasPrefix(path, "/authorize"):
+	case strings.HasPrefix(normalizedPath, "/authorize"):
 		return "oauth_authorize"
-	case strings.HasPrefix(path, "/token"):
+	case strings.HasPrefix(normalizedPath, "/token"):
 		return "oauth_token"
-	case strings.HasPrefix(path, "/oauth/callback"):
+	case strings.HasPrefix(normalizedPath, "/oauth/callback"):
 		return "oauth_callback"
-	case strings.HasPrefix(path, "/mcp"):
+	case strings.HasPrefix(normalizedPath, "/mcp"):
 		return "mcp_request"
-	case isProfilePath(path):
+	case isProfilePath(normalizedPath):
 		return "mcp_request"
 	default:
 		return "default"

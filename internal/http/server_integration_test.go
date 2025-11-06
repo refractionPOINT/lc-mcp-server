@@ -412,6 +412,198 @@ func TestServerClose(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// Test Versioned Routes
+func TestVersionedRoutes(t *testing.T) {
+	server := createTestServer(t)
+
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+		"params":  map[string]interface{}{},
+	}
+
+	body, err := json.Marshal(requestBody)
+	require.NoError(t, err)
+
+	t.Run("unversioned /mcp route works", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "2.0", response["jsonrpc"])
+	})
+
+	t.Run("versioned /mcp/v1 route works", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		var response map[string]interface{}
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "2.0", response["jsonrpc"])
+	})
+
+	t.Run("unversioned and versioned routes return same results", func(t *testing.T) {
+		// Request to unversioned route
+		req1 := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+		req1.Header.Set("Content-Type", "application/json")
+		w1 := httptest.NewRecorder()
+		server.mux.ServeHTTP(w1, req1)
+
+		var response1 map[string]interface{}
+		err = json.Unmarshal(w1.Body.Bytes(), &response1)
+		require.NoError(t, err)
+
+		// Request to versioned route
+		req2 := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewReader(body))
+		req2.Header.Set("Content-Type", "application/json")
+		w2 := httptest.NewRecorder()
+		server.mux.ServeHTTP(w2, req2)
+
+		var response2 map[string]interface{}
+		err = json.Unmarshal(w2.Body.Bytes(), &response2)
+		require.NoError(t, err)
+
+		// Compare tool counts (not exact match since tools might have internal state)
+		result1 := response1["result"].(map[string]interface{})
+		result2 := response2["result"].(map[string]interface{})
+		tools1 := result1["tools"].([]interface{})
+		tools2 := result2["tools"].([]interface{})
+		assert.Equal(t, len(tools1), len(tools2), "Tool counts should match")
+	})
+
+	t.Run("invalid version returns 404", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/mcp/v999", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+// Test Versioned Profile Routes
+func TestVersionedProfileRoutes(t *testing.T) {
+	server := createTestServer(t)
+
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "ping",
+	}
+
+	body, err := json.Marshal(requestBody)
+	require.NoError(t, err)
+
+	profileTests := []struct {
+		name              string
+		unversionedPath   string
+		versionedPath     string
+	}{
+		{
+			name:            "all profile",
+			unversionedPath: "/all",
+			versionedPath:   "/v1/all",
+		},
+		{
+			name:            "core profile",
+			unversionedPath: "/core",
+			versionedPath:   "/v1/core",
+		},
+		{
+			name:            "historical_data profile",
+			unversionedPath: "/historical_data",
+			versionedPath:   "/v1/historical_data",
+		},
+	}
+
+	for _, tt := range profileTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Run("unversioned route works", func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, tt.unversionedPath, bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+
+				server.mux.ServeHTTP(w, req)
+
+				assert.Equal(t, http.StatusOK, w.Code)
+
+				var response map[string]interface{}
+				err = json.Unmarshal(w.Body.Bytes(), &response)
+				require.NoError(t, err)
+				assert.Equal(t, "2.0", response["jsonrpc"])
+			})
+
+			t.Run("versioned route works", func(t *testing.T) {
+				req := httptest.NewRequest(http.MethodPost, tt.versionedPath, bytes.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+				w := httptest.NewRecorder()
+
+				server.mux.ServeHTTP(w, req)
+
+				assert.Equal(t, http.StatusOK, w.Code)
+
+				var response map[string]interface{}
+				err = json.Unmarshal(w.Body.Bytes(), &response)
+				require.NoError(t, err)
+				assert.Equal(t, "2.0", response["jsonrpc"])
+			})
+		})
+	}
+
+	t.Run("invalid version on profile route returns 404", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v999/all", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		server.mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+// Test Root Endpoint Returns Version Info
+func TestRootEndpointVersionInfo(t *testing.T) {
+	server := createTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+
+	server.mux.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var response map[string]interface{}
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+
+	// Check that version info is present
+	apiVersion, ok := response["api_version"].(map[string]interface{})
+	require.True(t, ok, "api_version should be present in root response")
+	assert.Equal(t, APIVersionV1, apiVersion["current"])
+	assert.Equal(t, APIVersionV1, apiVersion["supported"])
+
+	// Check that versioned endpoints are advertised
+	endpoints, ok := response["endpoints"].(map[string]interface{})
+	require.True(t, ok, "endpoints should be present in root response")
+	assert.NotEmpty(t, endpoints["mcp"])
+	assert.NotEmpty(t, endpoints["mcp_v1"])
+}
+
 // Benchmark MCP Request Handling
 func BenchmarkMCPInitialize(b *testing.B) {
 	// Create a testing.T for the helper function
@@ -434,4 +626,38 @@ func BenchmarkMCPInitialize(b *testing.B) {
 		w := httptest.NewRecorder()
 		server.mux.ServeHTTP(w, req)
 	}
+}
+
+// Benchmark Versioned Route Performance
+func BenchmarkVersionedRoute(b *testing.B) {
+	t := &testing.T{}
+	server := createTestServer(t)
+
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "ping",
+	}
+
+	body, _ := json.Marshal(requestBody)
+
+	b.Run("unversioned", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			server.mux.ServeHTTP(w, req)
+		}
+	})
+
+	b.Run("versioned", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			req := httptest.NewRequest(http.MethodPost, "/mcp/v1", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			server.mux.ServeHTTP(w, req)
+		}
+	})
 }
