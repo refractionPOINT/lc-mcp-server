@@ -272,27 +272,49 @@ func IsUIDMode(authMode auth.AuthMode) bool {
 }
 
 // AddOIDToToolSchema adds the OID parameter to a tool's input schema
+// This function creates a deep copy of the schema to avoid modifying shared state
 func AddOIDToToolSchema(tool mcp.Tool) mcp.Tool {
-	// Clone the input schema
 	schema := tool.InputSchema
 
-	// Initialize Properties map if nil
-	if schema.Properties == nil {
-		schema.Properties = make(map[string]any)
+	// Deep copy Properties map to avoid modifying the original
+	newProperties := make(map[string]any, len(schema.Properties)+1)
+	for k, v := range schema.Properties {
+		newProperties[k] = v
 	}
 
-	// Add OID parameter with simplified description
-	schema.Properties["oid"] = map[string]any{
-		"type":        "string",
-		"description": "Organization ID",
+	// Only add OID parameter if not already present
+	if _, exists := newProperties["oid"]; !exists {
+		newProperties["oid"] = map[string]any{
+			"type":        "string",
+			"description": "Organization ID",
+		}
 	}
 
-	// Add to required list
-	schema.Required = append(schema.Required, "oid")
+	// Deep copy Required slice to avoid modifying the original
+	newRequired := make([]string, len(schema.Required), len(schema.Required)+1)
+	copy(newRequired, schema.Required)
 
-	// Update the tool with modified schema
-	tool.InputSchema = schema
-	return tool
+	// Only append "oid" if not already in Required list
+	hasOID := false
+	for _, req := range newRequired {
+		if req == "oid" {
+			hasOID = true
+			break
+		}
+	}
+	if !hasOID {
+		newRequired = append(newRequired, "oid")
+	}
+
+	// Create new schema with copied data
+	newSchema := schema
+	newSchema.Properties = newProperties
+	newSchema.Required = newRequired
+
+	// Return new tool with modified schema
+	newTool := tool
+	newTool.InputSchema = newSchema
+	return newTool
 }
 
 // AddToolsToServer adds all tools for a profile to an MCP server
