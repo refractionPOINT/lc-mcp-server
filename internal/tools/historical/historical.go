@@ -96,7 +96,13 @@ func RegisterRunLCQLQuery() {
 			}
 
 			// Collect results up to the limit
-			results := make([]lc.Dict, 0, limit)
+			// Use reasonable initial capacity to avoid "makeslice: cap out of range" panic
+			// when limit is math.MaxInt (unlimited)
+			initialCap := 100
+			if limit != math.MaxInt && limit < 1000 {
+				initialCap = limit
+			}
+			results := make([]lc.Dict, 0, initialCap)
 			hasMore := false
 
 			for iter.HasMore() {
