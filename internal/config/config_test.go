@@ -44,7 +44,9 @@ func TestLoad(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, "stdio", cfg.Mode)
-		assert.Equal(t, "all", cfg.Profile)
+		// When MCP_PROFILE is not set, Profile should be empty string
+		// This enables URL-based routing in HTTP mode, and defaults to "all" in STDIO mode
+		assert.Equal(t, "", cfg.Profile)
 		assert.Equal(t, "info", cfg.LogLevel)
 		assert.False(t, cfg.EnableAudit)
 		assert.Equal(t, 5*time.Minute, cfg.SDKCacheTTL)

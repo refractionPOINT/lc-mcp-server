@@ -51,7 +51,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		Mode:        getEnv("MCP_MODE", "stdio"),
-		Profile:     getEnv("MCP_PROFILE", "all"),
+		Profile:     os.Getenv("MCP_PROFILE"), // Empty string if not set - enables URL-based routing
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
 		EnableAudit: getBoolEnv("AUDIT_LOG_ENABLED", false),
 		AuditLevel:  getEnv("AUDIT_LOG_LEVEL", "MEDIUM"),
@@ -262,16 +262,19 @@ func getSliceEnv(key string, defaultValue []string) []string {
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
-	// Validate profile
+	// Validate profile (empty string means "not configured" - enables URL-based routing)
 	validProfiles := map[string]bool{
-		"core":                  true,
-		"historical_data":       true,
-		"live_investigation":    true,
-		"threat_response":       true,
-		"fleet_management":      true,
-		"detection_engineering": true,
-		"platform_admin":        true,
-		"all":                   true,
+		"":                         true, // Not configured - use URL-based routing in HTTP mode
+		"core":                     true,
+		"historical_data":          true,
+		"historical_data_readonly": true,
+		"live_investigation":       true,
+		"threat_response":          true,
+		"fleet_management":         true,
+		"detection_engineering":    true,
+		"platform_admin":           true,
+		"ai_powered":               true,
+		"all":                      true,
 	}
 
 	if !validProfiles[c.Profile] {

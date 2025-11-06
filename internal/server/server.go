@@ -78,6 +78,13 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	// Initialize based on mode
 	switch cfg.Mode {
 	case "stdio":
+		// For STDIO mode, profile must come from config (no URLs)
+		// Default to "all" if not explicitly set
+		if cfg.Profile == "" {
+			cfg.Profile = "all"
+			logger.Info("MCP_PROFILE not set, defaulting to 'all' for STDIO mode")
+		}
+
 		// Create MCP server for STDIO mode
 		mcpServer := server.NewMCPServer(
 			"LimaCharlie MCP Server",

@@ -182,13 +182,54 @@ func (s *Server) setupRoutes() {
 	// MCP JSON-RPC endpoint (protected by OAuth)
 	s.mux.HandleFunc("/mcp", s.handleMCPRequest)
 
-	// Profile-specific endpoints (for backward compatibility)
-	profiles := []string{"all", "historical_data", "live_investigation", "threat_response",
-		"fleet_management", "detection_engineering", "platform_admin"}
+	// Profile-specific endpoints - register all valid profiles
+	// This allows URL-based profile routing when MCP_PROFILE is not set
+	profiles := []string{
+		"all",
+		"core",
+		"historical_data",
+		"historical_data_readonly",
+		"live_investigation",
+		"threat_response",
+		"fleet_management",
+		"detection_engineering",
+		"platform_admin",
+		"ai_powered",
+	}
 	for _, profile := range profiles {
 		route := "/" + profile
 		s.mux.HandleFunc(route, s.handleMCPRequest)
 	}
+}
+
+// getActiveProfile determines the active profile for a request
+// If MCP_PROFILE is explicitly set (s.profile != ""), it takes precedence
+// Otherwise, extract profile from URL path
+func (s *Server) getActiveProfile(r *http.Request) string {
+	// If profile is explicitly configured via MCP_PROFILE env var, use it
+	if s.profile != "" {
+		return s.profile
+	}
+
+	// Otherwise, extract from URL path
+	path := r.URL.Path
+
+	// Handle root and /mcp paths - default to "all"
+	if path == "/" || path == "/mcp" {
+		return "all"
+	}
+
+	// Extract profile from path (e.g., "/historical_data" -> "historical_data")
+	profile := strings.TrimPrefix(path, "/")
+
+	// Validate that it's a real profile
+	if _, exists := tools.ProfileDefinitions[profile]; exists {
+		return profile
+	}
+
+	// If not a valid profile, default to "all"
+	s.logger.Warn("Invalid profile in URL path, defaulting to 'all'", "path", path, "profile", profile)
+	return "all"
 }
 
 // createTLSConfig creates a secure TLS configuration
@@ -680,8 +721,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 }
 
 func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id interface{}) {
-	// Get tools for the configured profile
-	toolNames := tools.GetToolsForProfile(s.profile)
+	// Get active profile - uses URL-based routing if MCP_PROFILE not set
+	activeProfile := s.getActiveProfile(r)
+	s.logger.Debug("Listing tools for profile", "profile", activeProfile, "url_path", r.URL.Path)
+
+	// Get tools for the active profile
+	toolNames := tools.GetToolsForProfile(activeProfile)
 
 	toolList := make([]map[string]interface{}, 0, len(toolNames))
 	for _, name := range toolNames {
