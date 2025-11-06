@@ -17,7 +17,6 @@ func init() {
 	RegisterGetOSVersion()
 }
 
-
 // RegisterGetProcesses registers the get_processes tool
 func RegisterGetProcesses() {
 	tools.RegisterTool(&tools.ToolRegistration{

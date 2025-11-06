@@ -18,7 +18,6 @@ func init() {
 	RegisterGetArtifact()
 }
 
-
 // RegisterListArtifacts registers the list_artifacts tool
 func RegisterListArtifacts() {
 	tools.RegisterTool(&tools.ToolRegistration{

@@ -47,16 +47,16 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	handler := next
 
 	// Server-specific middleware (need access to server state)
-	handler = s.requestIDMiddleware(handler)      // Adds request ID to context
-	handler = s.rateLimitMiddleware(handler)      // Rate limiting per endpoint
-	handler = s.bodySizeLimitMiddleware(handler)  // Prevent large request bodies
+	handler = s.requestIDMiddleware(handler)       // Adds request ID to context
+	handler = s.rateLimitMiddleware(handler)       // Rate limiting per endpoint
+	handler = s.bodySizeLimitMiddleware(handler)   // Prevent large request bodies
 	handler = s.securityHeadersMiddleware(handler) // Security headers
-	handler = s.corsMiddleware(handler)           // CORS handling
+	handler = s.corsMiddleware(handler)            // CORS handling
 
 	// Enhanced standalone middleware (production-ready observability)
-	handler = MetricsMiddleware()(handler)        // Track request metrics
-	handler = RequestLogger(s.logger)(handler)    // Structured logging with request ID
-	handler = PanicRecovery(s.logger)(handler)    // Panic recovery (outermost)
+	handler = MetricsMiddleware()(handler)     // Track request metrics
+	handler = RequestLogger(s.logger)(handler) // Structured logging with request ID
+	handler = PanicRecovery(s.logger)(handler) // Panic recovery (outermost)
 
 	return handler
 }

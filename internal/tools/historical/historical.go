@@ -19,7 +19,6 @@ func init() {
 	RegisterGetTimeWhenSensorHasData()
 }
 
-
 // RegisterRunLCQLQuery registers the run_lcql_query tool
 func RegisterRunLCQLQuery() {
 	tools.RegisterTool(&tools.ToolRegistration{

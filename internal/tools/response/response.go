@@ -18,7 +18,6 @@ func init() {
 	RegisterRemoveTag()
 }
 
-
 // RegisterIsolateNetwork registers the isolate_network tool
 func RegisterIsolateNetwork() {
 	tools.RegisterTool(&tools.ToolRegistration{

@@ -22,7 +22,6 @@ func init() {
 	RegisterGetDetectionRules()
 }
 
-
 // RegisterListDRGeneralRules registers the list_dr_general_rules tool
 func RegisterListDRGeneralRules() {
 	tools.RegisterTool(&tools.ToolRegistration{

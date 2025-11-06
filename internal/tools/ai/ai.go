@@ -21,7 +21,6 @@ func init() {
 	RegisterGenerateDetectionSummary()
 }
 
-
 // RegisterGenerateLCQLQuery registers the generate_lcql_query tool
 func RegisterGenerateLCQLQuery() {
 	tools.RegisterTool(&tools.ToolRegistration{

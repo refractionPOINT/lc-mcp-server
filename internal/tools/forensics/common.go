@@ -9,7 +9,6 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
-
 // getSensor retrieves a sensor by ID from the organization
 //
 // IMPORTANT: This function generates a unique investigation ID for each request.

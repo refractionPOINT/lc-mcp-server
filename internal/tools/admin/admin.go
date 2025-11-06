@@ -27,7 +27,6 @@ func init() {
 	RegisterGetSKUDefinitions()
 }
 
-
 // RegisterGetOrgInfo registers the get_org_info tool
 func RegisterGetOrgInfo() {
 	tools.RegisterTool(&tools.ToolRegistration{

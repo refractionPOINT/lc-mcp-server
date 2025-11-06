@@ -20,7 +20,6 @@ func init() {
 	RegisterListWithPlatform()
 }
 
-
 // RegisterGetEventSchema registers the get_event_schema tool
 func RegisterGetEventSchema() {
 	tools.RegisterTool(&tools.ToolRegistration{

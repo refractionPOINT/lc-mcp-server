@@ -19,7 +19,6 @@ func init() {
 	RegisterSearchHosts()
 }
 
-
 // RegisterTestTool registers the test_tool
 func RegisterTestTool() {
 	tools.RegisterTool(&tools.ToolRegistration{
