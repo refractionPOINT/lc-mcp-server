@@ -237,7 +237,6 @@ func isProfilePath(path string) bool {
 	return false
 }
 
-
 // responseWriter wraps http.ResponseWriter to capture status code
 type responseWriter struct {
 	http.ResponseWriter
