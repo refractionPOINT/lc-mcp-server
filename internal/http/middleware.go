@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/ratelimit"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
 // contextKey is a type for context keys to avoid collisions
@@ -217,17 +218,23 @@ func getEndpointType(path string) string {
 		return "oauth_token"
 	case strings.HasPrefix(path, "/oauth/callback"):
 		return "oauth_callback"
-	case strings.HasPrefix(path, "/mcp") ||
-		strings.Contains(path, "historical_data") ||
-		strings.Contains(path, "live_investigation") ||
-		strings.Contains(path, "threat_response") ||
-		strings.Contains(path, "fleet_management") ||
-		strings.Contains(path, "detection_engineering") ||
-		strings.Contains(path, "platform_admin"):
+	case strings.HasPrefix(path, "/mcp"):
+		return "mcp_request"
+	case isProfilePath(path):
 		return "mcp_request"
 	default:
 		return "default"
 	}
+}
+
+// isProfilePath checks if the path contains any registered profile name
+func isProfilePath(path string) bool {
+	for profile := range tools.ProfileDefinitions {
+		if strings.Contains(path, profile) {
+			return true
+		}
+	}
+	return false
 }
 
 // authMiddleware validates OAuth Bearer tokens (will be implemented in Phase 4)
