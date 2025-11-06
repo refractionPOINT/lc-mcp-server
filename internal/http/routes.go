@@ -46,7 +46,7 @@ func (s *Server) setupRoutes() {
 
 	// MCP JSON-RPC endpoint (protected by OAuth)
 	// Register both unversioned (latest) and versioned routes
-	s.mux.HandleFunc("/mcp", s.handleMCPRequest)        // Unversioned -> latest
+	s.mux.HandleFunc("/mcp", s.handleMCPRequest)               // Unversioned -> latest
 	s.mux.HandleFunc("/mcp/"+APIVersionV1, s.handleMCPRequest) // Explicit v1
 
 	// Profile-specific endpoints - register all valid profiles
@@ -138,7 +138,7 @@ func (s *Server) handleRootRequest(w http.ResponseWriter, r *http.Request) {
 			"type":   "lc-mcp-server",
 			"status": "ok",
 			"api_version": map[string]string{
-				"current": LatestAPIVersion,
+				"current":   LatestAPIVersion,
 				"supported": APIVersionV1,
 			},
 			"endpoints": map[string]string{

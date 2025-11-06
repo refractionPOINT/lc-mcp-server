@@ -510,9 +510,9 @@ func TestVersionedProfileRoutes(t *testing.T) {
 	require.NoError(t, err)
 
 	profileTests := []struct {
-		name              string
-		unversionedPath   string
-		versionedPath     string
+		name            string
+		unversionedPath string
+		versionedPath   string
 	}{
 		{
 			name:            "all profile",
