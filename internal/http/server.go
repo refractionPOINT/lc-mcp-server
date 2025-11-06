@@ -608,11 +608,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	bearerToken := parts[1]
 
-	// Verify and extract UID and LimaCharlie JWT from MCP access token
+	// Verify and extract UID, LimaCharlie JWT, and Firebase token from MCP access token
 	// The JWT has been exchanged from Firebase ID token to LimaCharlie JWT
 	s.logger.Info("Extracting UID from token", "request_id", requestID)
 	tokenStartTime := time.Now()
-	uid, limaCharlieJWT, err := s.extractUIDFromToken(bearerToken)
+	uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
 	tokenDuration := time.Since(tokenStartTime)
 	if err != nil {
 		s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
@@ -622,10 +622,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
 
 	// Create initial auth context with LimaCharlie JWT (exchanged from Firebase token)
+	// Store Firebase ID token for JWT regeneration when switching orgs
 	authCtx := &auth.AuthContext{
-		Mode:     auth.AuthModeUIDOAuth,
-		UID:      uid,
-		JWTToken: limaCharlieJWT, // LimaCharlie JWT for API authentication
+		Mode:            auth.AuthModeUIDOAuth,
+		UID:             uid,
+		JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
+		FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
 	}
 
 	// Create request context with auth
@@ -647,7 +649,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	if tool.RequiresOID {
 		if oidParam, ok := arguments["oid"].(string); ok && oidParam != "" {
 			var err error
-			ctx, err = auth.WithOID(ctx, oidParam)
+			ctx, err = auth.WithOID(ctx, oidParam, s.logger)
 			if err != nil {
 				s.writeJSONRPCError(w, id, -32000, "Invalid OID", fmt.Sprintf("Failed to switch OID: %v", err))
 				return
@@ -708,7 +710,7 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 	})
 }
 
-func (s *Server) extractUIDFromToken(token string) (string, string, error) {
+func (s *Server) extractUIDFromToken(token string) (string, string, string, error) {
 	// SECURITY: Validate MCP OAuth access token (NOT Firebase token directly)
 	// The Bearer token here is the MCP-issued access token from /token endpoint
 
@@ -720,16 +722,16 @@ func (s *Server) extractUIDFromToken(token string) (string, string, error) {
 	validation, err := s.tokenManager.ValidateAccessToken(ctx, token, true)
 	if err != nil {
 		s.logger.Error("Token validation error", "error", err)
-		return "", "", fmt.Errorf("token validation failed: %w", err)
+		return "", "", "", fmt.Errorf("token validation failed: %w", err)
 	}
 
 	if !validation.Valid {
-		return "", "", fmt.Errorf("invalid or expired token: %s", validation.Error)
+		return "", "", "", fmt.Errorf("invalid or expired token: %s", validation.Error)
 	}
 
-	// Return the Firebase UID and LimaCharlie JWT (exchanged from Firebase token)
-	// This matches Python implementation where Firebase token is exchanged for LC JWT
-	return validation.UID, validation.LimaCharlieJWT, nil
+	// Return the Firebase UID, LimaCharlie JWT (exchanged from Firebase token), and Firebase ID token
+	// The Firebase ID token is needed for regenerating JWTs with OID when switching orgs
+	return validation.UID, validation.LimaCharlieJWT, validation.FirebaseIDToken, nil
 }
 
 func (s *Server) wrapResultWithGCS(ctx context.Context, result interface{}, toolName string) interface{} {

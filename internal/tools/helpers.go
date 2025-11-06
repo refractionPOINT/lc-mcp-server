@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 )
@@ -24,9 +25,9 @@ func ExtractAndValidateSID(args map[string]interface{}) (string, error) {
 
 // HandleOIDSwitch handles the optional OID parameter for UID mode
 // Returns the updated context and any error
-func HandleOIDSwitch(ctx context.Context, args map[string]interface{}) (context.Context, error) {
+func HandleOIDSwitch(ctx context.Context, args map[string]interface{}, logger *slog.Logger) (context.Context, error) {
 	if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
-		return auth.WithOID(ctx, oidParam)
+		return auth.WithOID(ctx, oidParam, logger)
 	}
 	return ctx, nil
 }

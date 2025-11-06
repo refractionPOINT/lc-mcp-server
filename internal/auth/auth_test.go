@@ -268,7 +268,7 @@ func TestWithOID(t *testing.T) {
 		}
 
 		ctx := WithAuthContext(context.Background(), auth)
-		newCtx, err := WithOID(ctx, "org2")
+		newCtx, err := WithOID(ctx, "org2", nil)
 
 		require.NoError(t, err)
 
@@ -291,7 +291,7 @@ func TestWithOID(t *testing.T) {
 		}
 
 		ctx := WithAuthContext(context.Background(), auth)
-		_, err := WithOID(ctx, "org2")
+		_, err := WithOID(ctx, "org2", nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot switch OID in normal mode")
@@ -315,7 +315,7 @@ func TestWithOID(t *testing.T) {
 		}
 
 		for _, invalidOID := range invalidOIDs {
-			_, err := WithOID(ctx, invalidOID)
+			_, err := WithOID(ctx, invalidOID, nil)
 			require.Error(t, err, "Should reject invalid OID: %s", invalidOID)
 			assert.Contains(t, err.Error(), "invalid OID")
 		}

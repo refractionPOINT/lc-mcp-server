@@ -357,7 +357,8 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 		if reg.RequiresOID && isUIDMode {
 			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
 				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
+				// Pass nil logger - WithOID will use slog.Default() as fallback
+				ctx, err = auth.WithOID(ctx, oidParam, nil)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("failed to switch OID: %v", err)), nil
 				}

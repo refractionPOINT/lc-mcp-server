@@ -42,7 +42,8 @@ func RegisterValidateDRRuleComponents() {
 			// For now, do basic structural validation
 			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
 				var err error
-				ctx, err = auth.WithOID(ctx, oidParam)
+				// Pass nil logger - WithOID will use slog.Default() as fallback
+				ctx, err = auth.WithOID(ctx, oidParam, nil)
 				if err != nil {
 					return tools.ErrorResultf("failed to switch OID: %v", err), nil
 				}

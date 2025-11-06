@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 )
@@ -47,23 +48,25 @@ func (m AuthMode) String() string {
 // AuthContext holds authentication credentials for a request
 // This is stored in context.Context to ensure request-scoped isolation
 type AuthContext struct {
-	Mode        AuthMode
-	OID         string
-	APIKey      string
-	UID         string
-	JWTToken    string
-	Environment string
+	Mode            AuthMode
+	OID             string
+	APIKey          string
+	UID             string
+	JWTToken        string
+	FirebaseIDToken string // Firebase ID token for JWT regeneration in UID mode
+	Environment     string
 }
 
 // Clone creates a deep copy of the AuthContext
 func (a *AuthContext) Clone() *AuthContext {
 	return &AuthContext{
-		Mode:        a.Mode,
-		OID:         a.OID,
-		APIKey:      a.APIKey,
-		UID:         a.UID,
-		JWTToken:    a.JWTToken,
-		Environment: a.Environment,
+		Mode:            a.Mode,
+		OID:             a.OID,
+		APIKey:          a.APIKey,
+		UID:             a.UID,
+		JWTToken:        a.JWTToken,
+		FirebaseIDToken: a.FirebaseIDToken,
+		Environment:     a.Environment,
 	}
 }
 
@@ -153,7 +156,8 @@ func MustFromContext(ctx context.Context) *AuthContext {
 
 // WithOID creates a new context with the specified OID
 // This is used for multi-org tools that accept an oid parameter
-func WithOID(ctx context.Context, oid string) (context.Context, error) {
+// In UID OAuth mode, this regenerates the JWT with the OID claim
+func WithOID(ctx context.Context, oid string, logger *slog.Logger) (context.Context, error) {
 	auth, err := FromContext(ctx)
 	if err != nil {
 		return ctx, err
@@ -172,6 +176,27 @@ func WithOID(ctx context.Context, oid string) (context.Context, error) {
 	// Clone auth context and update OID
 	newAuth := auth.Clone()
 	newAuth.OID = oid
+
+	// In UID OAuth mode, regenerate JWT with the OID claim
+	// This ensures the JWT contains the proper oid claim for API authorization
+	if auth.Mode == AuthModeUIDOAuth && auth.FirebaseIDToken != "" {
+		if logger == nil {
+			logger = slog.Default()
+		}
+
+		// Exchange Firebase token for LimaCharlie JWT with OID
+		limaCharlieJWT, err := ExchangeFirebaseTokenForJWT(auth.FirebaseIDToken, oid, logger)
+		if err != nil {
+			return ctx, fmt.Errorf("failed to generate JWT for OID %s: %w", oid, err)
+		}
+
+		// Update JWT with org-specific token
+		newAuth.JWTToken = limaCharlieJWT
+
+		logger.Debug("Regenerated JWT with OID for org switching",
+			"oid", oid,
+			"jwt_prefix", safePrefix(limaCharlieJWT, 20))
+	}
 
 	return WithAuthContext(ctx, newAuth), nil
 }
