@@ -1,6 +1,8 @@
 package gcs
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -154,11 +156,25 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
 	}
+	originalSize := len(jsonBytes)
 
-	// Create unique filename
+	// Compress the JSON data with gzip
+	var compressedBuf bytes.Buffer
+	gzipWriter := gzip.NewWriter(&compressedBuf)
+	if _, err := gzipWriter.Write(jsonBytes); err != nil {
+		return nil, fmt.Errorf("failed to compress data: %w", err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+	compressedBytes := compressedBuf.Bytes()
+	compressedSize := len(compressedBytes)
+	compressionRatio := float64(compressedSize) / float64(originalSize) * 100
+
+	// Create unique filename with .gz extension
 	timestamp := time.Now().UTC().Format("20060102_150405")
 	uniqueID := fmt.Sprintf("%x", time.Now().UnixNano()%0xFFFFFFFF)
-	filename := fmt.Sprintf("%s_%s_%s.json", toolName, timestamp, uniqueID)
+	filename := fmt.Sprintf("%s_%s_%s.json.gz", toolName, timestamp, uniqueID)
 
 	// Upload to GCS
 	bucket := m.client.Bucket(m.config.BucketName)
@@ -166,8 +182,9 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 
 	writer := obj.NewWriter(ctx)
 	writer.ContentType = "application/json"
+	writer.ContentEncoding = "gzip"
 
-	if _, err := writer.Write(jsonBytes); err != nil {
+	if _, err := writer.Write(compressedBytes); err != nil {
 		writer.Close()
 		return nil, fmt.Errorf("failed to write to GCS: %w", err)
 	}
@@ -215,12 +232,14 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 
 	slog.Info("Uploaded large result to GCS",
 		"filename", filename,
-		"size", len(jsonBytes),
+		"original_size", originalSize,
+		"compressed_size", compressedSize,
+		"compression_ratio", fmt.Sprintf("%.1f%%", compressionRatio),
 		"expires", expiryTime)
 
 	return &UploadResult{
 		URL:      signedURL,
-		FileSize: int64(len(jsonBytes)),
+		FileSize: int64(compressedSize),
 		IsTemp:   false,
 	}, nil
 }
