@@ -7,7 +7,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -21,14 +20,6 @@ func init() {
 	RegisterListWithPlatform()
 }
 
-// getOrganization retrieves the organization from the context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := auth.GetSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterGetEventSchema registers the get_event_schema tool
 func RegisterGetEventSchema() {
@@ -49,7 +40,7 @@ func RegisterGetEventSchema() {
 				return tools.ErrorResult("name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -101,7 +92,7 @@ func RegisterGetEventSchemasBatch() {
 				return tools.ErrorResult("event_names must contain at least one valid string"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -174,7 +165,7 @@ func RegisterGetEventTypesWithSchemas() {
 			mcp.WithDescription("Get all available event_type with schemas available for the organization"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -212,7 +203,7 @@ func RegisterGetEventTypesWithSchemasForPlatform() {
 				return tools.ErrorResult("platform parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -243,7 +234,7 @@ func RegisterGetPlatformNames() {
 			mcp.WithDescription("Get the platform names ontology from LimaCharlie (does not mean the tenant has sensors for these platforms)"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -281,7 +272,7 @@ func RegisterListWithPlatform() {
 				return tools.ErrorResult("platform parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

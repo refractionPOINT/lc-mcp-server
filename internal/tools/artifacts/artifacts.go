@@ -9,7 +9,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -19,15 +18,6 @@ func init() {
 	RegisterGetArtifact()
 }
 
-// getOrganization retrieves or creates an Organization instance from context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := auth.GetSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterListArtifacts registers the list_artifacts tool
 func RegisterListArtifacts() {
@@ -48,7 +38,7 @@ func RegisterListArtifacts() {
 				mcp.Description("End timestamp")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -105,7 +95,7 @@ func RegisterGetArtifact() {
 				return tools.ErrorResult("artifact_id parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

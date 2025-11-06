@@ -9,99 +9,107 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 )
 
-// Config holds all configuration for the MCP server
-type Config struct {
-	// Server configuration
+// ServerConfig holds server-level configuration
+type ServerConfig struct {
 	Mode     string // "stdio" or "http"
 	Profile  string // Profile to expose: "core", "all", etc.
 	LogLevel string // "debug", "info", "warn", "error"
+}
 
-	// HTTP server configuration (for OAuth mode)
-	HTTPPort           int      // HTTP server port
+// HTTPConfig holds HTTP server configuration
+type HTTPConfig struct {
+	Port               int      // HTTP server port
 	ServerURL          string   // Public server URL for OAuth metadata
 	CORSAllowedOrigins []string // Allowed CORS origins
+}
 
-	// TLS/HTTPS configuration
-	EnableTLS bool   // Enable HTTPS with TLS
-	TLSCert   string // Path to TLS certificate file
-	TLSKey    string // Path to TLS private key file
-
-	// OAuth security configuration
+// OAuthConfig holds OAuth-specific configuration
+type OAuthConfig struct {
 	AllowedRedirectURIs []string // Allowed OAuth redirect URIs (exact match)
+	RedisURL            string   // Redis URL (e.g., redis://user:password@host:port/db)
+	EncryptionKey       string   // Base64-encoded 32-byte key for token encryption (AES-256)
+}
 
-	// Redis configuration (for OAuth state management)
-	RedisURL string // Redis URL (e.g., redis://user:password@host:port/db)
+// TLSConfig holds TLS/HTTPS configuration
+type TLSConfig struct {
+	Enable bool   // Enable HTTPS with TLS
+	Cert   string // Path to TLS certificate file
+	Key    string // Path to TLS private key file
+}
 
-	// OAuth configuration
-	EncryptionKey string // Base64-encoded 32-byte key for token encryption (AES-256)
-
-	// Authentication (loaded from environment or config file)
-	Auth *auth.AuthContext
-
-	// Optional features
+// FeatureConfig holds optional feature flags
+type FeatureConfig struct {
 	EnableAudit bool
 	AuditLevel  string
-
-	// SDK cache settings
 	SDKCacheTTL time.Duration
+}
+
+// Config holds all configuration for the MCP server
+type Config struct {
+	Server   ServerConfig
+	HTTP     HTTPConfig
+	OAuth    OAuthConfig
+	TLS      TLSConfig
+	Auth     *auth.AuthContext
+	Features FeatureConfig
 }
 
 // Load loads configuration from environment variables
 // Priority: environment variables > defaults
 func Load() (*Config, error) {
 	cfg := &Config{
-		Mode:        getEnv("MCP_MODE", "stdio"),
-		Profile:     os.Getenv("MCP_PROFILE"), // Empty string if not set - enables URL-based routing
-		LogLevel:    getEnv("LOG_LEVEL", "info"),
-		EnableAudit: getBoolEnv("AUDIT_LOG_ENABLED", false),
-		AuditLevel:  getEnv("AUDIT_LOG_LEVEL", "MEDIUM"),
-		SDKCacheTTL: getDurationEnv("SDK_CACHE_TTL", 5*time.Minute),
-
-		// HTTP server configuration
-		HTTPPort:           getIntEnv("PORT", 8080),
-		ServerURL:          getEnv("MCP_SERVER_URL", "http://localhost:8080"),
-		CORSAllowedOrigins: getSliceEnv("CORS_ALLOWED_ORIGINS", []string{}),
-
-		// TLS configuration
-		EnableTLS: getBoolEnv("ENABLE_TLS", false),
-		TLSCert:   getEnv("TLS_CERT_FILE", ""),
-		TLSKey:    getEnv("TLS_KEY_FILE", ""),
-
-		// OAuth security configuration
-		AllowedRedirectURIs: getSliceEnv("ALLOWED_REDIRECT_URIS", []string{
-			"http://localhost/callback",
-			"http://127.0.0.1/callback",
-		}),
-
-		// Redis configuration
-		RedisURL: getEnv("REDIS_URL", "redis://localhost:6379/0"),
-
-		// OAuth configuration
-		EncryptionKey: getEnv("REDIS_ENCRYPTION_KEY", ""),
+		Server: ServerConfig{
+			Mode:     getEnv("MCP_MODE", "stdio"),
+			Profile:  os.Getenv("MCP_PROFILE"), // Empty string if not set - enables URL-based routing
+			LogLevel: getEnv("LOG_LEVEL", "info"),
+		},
+		HTTP: HTTPConfig{
+			Port:               getIntEnv("PORT", 8080),
+			ServerURL:          getEnv("MCP_SERVER_URL", "http://localhost:8080"),
+			CORSAllowedOrigins: getSliceEnv("CORS_ALLOWED_ORIGINS", []string{}),
+		},
+		OAuth: OAuthConfig{
+			AllowedRedirectURIs: getSliceEnv("ALLOWED_REDIRECT_URIS", []string{
+				"http://localhost/callback",
+				"http://127.0.0.1/callback",
+			}),
+			RedisURL:      getEnv("REDIS_URL", "redis://localhost:6379/0"),
+			EncryptionKey: getEnv("REDIS_ENCRYPTION_KEY", ""),
+		},
+		TLS: TLSConfig{
+			Enable: getBoolEnv("ENABLE_TLS", false),
+			Cert:   getEnv("TLS_CERT_FILE", ""),
+			Key:    getEnv("TLS_KEY_FILE", ""),
+		},
+		Features: FeatureConfig{
+			EnableAudit: getBoolEnv("AUDIT_LOG_ENABLED", false),
+			AuditLevel:  getEnv("AUDIT_LOG_LEVEL", "MEDIUM"),
+			SDKCacheTTL: getDurationEnv("SDK_CACHE_TTL", 5*time.Minute),
+		},
 	}
 
 	// Validate mode
-	if cfg.Mode != "stdio" && cfg.Mode != "http" {
-		return nil, fmt.Errorf("invalid MCP_MODE: %s (must be 'stdio' or 'http')", cfg.Mode)
+	if cfg.Server.Mode != "stdio" && cfg.Server.Mode != "http" {
+		return nil, fmt.Errorf("invalid MCP_MODE: %s (must be 'stdio' or 'http')", cfg.Server.Mode)
 	}
 
 	// For HTTP mode, validate OAuth-specific configuration
-	if cfg.Mode == "http" {
-		if cfg.EncryptionKey == "" {
+	if cfg.Server.Mode == "http" {
+		if cfg.OAuth.EncryptionKey == "" {
 			return nil, fmt.Errorf("REDIS_ENCRYPTION_KEY is required for HTTP mode (base64-encoded 32-byte key)")
 		}
 		// Note: Base64 validation is done in crypto package when initializing encryption
 
 		// Validate TLS configuration if enabled
-		if cfg.EnableTLS {
-			if cfg.TLSCert == "" || cfg.TLSKey == "" {
+		if cfg.TLS.Enable {
+			if cfg.TLS.Cert == "" || cfg.TLS.Key == "" {
 				return nil, fmt.Errorf("TLS_CERT_FILE and TLS_KEY_FILE are required when ENABLE_TLS=true")
 			}
 		}
 	}
 
 	// Load authentication configuration
-	authContext, err := loadAuthContext(cfg.Mode)
+	authContext, err := loadAuthContext(cfg.Server.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load authentication: %w", err)
 	}
@@ -277,8 +285,8 @@ func (c *Config) Validate() error {
 		"all":                      true,
 	}
 
-	if !validProfiles[c.Profile] {
-		return fmt.Errorf("invalid profile: %s", c.Profile)
+	if !validProfiles[c.Server.Profile] {
+		return fmt.Errorf("invalid profile: %s", c.Server.Profile)
 	}
 
 	// Validate log level
@@ -289,8 +297,8 @@ func (c *Config) Validate() error {
 		"error": true,
 	}
 
-	if !validLogLevels[c.LogLevel] {
-		return fmt.Errorf("invalid log level: %s", c.LogLevel)
+	if !validLogLevels[c.Server.LogLevel] {
+		return fmt.Errorf("invalid log level: %s", c.Server.LogLevel)
 	}
 
 	return nil

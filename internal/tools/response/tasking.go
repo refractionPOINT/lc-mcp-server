@@ -43,7 +43,7 @@ func RegisterReliableTasking() {
 				return tools.ErrorResult("command parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -89,7 +89,7 @@ func RegisterListReliableTasks() {
 			mcp.WithDescription("List pending reliable tasks"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -124,7 +124,7 @@ func RegisterDeleteSensor() {
 				return tools.ErrorResult("sid parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

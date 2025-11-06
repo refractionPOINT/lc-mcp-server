@@ -28,7 +28,7 @@ func RegisterGetFPRules() {
 			mcp.WithDescription("Get all false positive rules for the organization"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -66,7 +66,7 @@ func RegisterGetFPRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -121,7 +121,7 @@ func RegisterSetFPRule() {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -173,7 +173,7 @@ func RegisterDeleteFPRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

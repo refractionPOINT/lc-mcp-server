@@ -16,8 +16,20 @@ import (
 // ToolHandler is the function signature for MCP tool handlers
 type ToolHandler func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error)
 
-// ToolRegistration holds a tool's metadata and handler
+// ToolRegistration holds a tool's metadata and handler.
+// It supports both interface-based tools (via Tool field) and legacy struct-based tools
+// (via individual fields). This dual support maintains backward compatibility while
+// enabling migration to the cleaner interface-based architecture.
+//
+// When Tool is set, it takes precedence and the individual fields are ignored.
+// Otherwise, the legacy fields are used for backward compatibility.
 type ToolRegistration struct {
+	// Tool is the interface-based tool implementation (preferred)
+	// If set, this takes precedence over the legacy fields below
+	Tool Tool
+
+	// Legacy struct fields (kept for backward compatibility)
+	// These are used when Tool is nil
 	Name        string
 	Description string
 	Handler     ToolHandler
@@ -317,7 +329,8 @@ func AddOIDToToolSchema(tool mcp.Tool) mcp.Tool {
 	return newTool
 }
 
-// AddToolsToServer adds all tools for a profile to an MCP server
+// AddToolsToServer adds all tools for a profile to an MCP server.
+// It supports both interface-based and legacy struct-based tools.
 func AddToolsToServer(s *server.MCPServer, profile string, authMode auth.AuthMode) error {
 	toolNames := GetToolsForProfile(profile)
 	isUIDMode := IsUIDMode(authMode)
@@ -329,10 +342,22 @@ func AddToolsToServer(s *server.MCPServer, profile string, authMode auth.AuthMod
 			continue
 		}
 
-		schema := reg.Schema
+		// Get schema from either interface or legacy fields
+		var schema mcp.Tool
+		var requiresOID bool
+
+		if reg.Tool != nil {
+			// Use interface-based tool
+			schema = reg.Tool.Schema()
+			requiresOID = reg.Tool.RequiresOID()
+		} else {
+			// Use legacy struct fields
+			schema = reg.Schema
+			requiresOID = reg.RequiresOID
+		}
 
 		// Dynamically add OID parameter if tool requires it and we're in UID mode
-		if reg.RequiresOID && isUIDMode {
+		if requiresOID && isUIDMode {
 			schema = AddOIDToToolSchema(schema)
 		}
 
@@ -347,14 +372,27 @@ func AddToolsToServer(s *server.MCPServer, profile string, authMode auth.AuthMod
 }
 
 // wrapHandler converts our ToolHandler to mcp-go's expected signature,
-// handles OID switching for tools that require it, and wraps large results with GCS if available
+// handles OID switching for tools that require it, and wraps large results with GCS if available.
+// It supports both interface-based and legacy struct-based tools.
 func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Extract arguments using the method
 		args := request.GetArguments()
 
+		// Determine if tool requires OID from either interface or legacy fields
+		var requiresOID bool
+		var toolName string
+
+		if reg.Tool != nil {
+			requiresOID = reg.Tool.RequiresOID()
+			toolName = reg.Tool.Name()
+		} else {
+			requiresOID = reg.RequiresOID
+			toolName = reg.Name
+		}
+
 		// Automatically handle OID switching for tools that require it in UID mode
-		if reg.RequiresOID && isUIDMode {
+		if requiresOID && isUIDMode {
 			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
 				var err error
 				// Pass nil logger - WithOID will use slog.Default() as fallback
@@ -365,55 +403,31 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 			}
 		}
 
-		// Call the actual handler
-		result, err := reg.Handler(ctx, args)
+		// Call the appropriate handler (interface or legacy)
+		var result *mcp.CallToolResult
+		var err error
+
+		if reg.Tool != nil {
+			// Use interface-based tool
+			result, err = reg.Tool.Handle(ctx, args)
+		} else {
+			// Use legacy handler
+			result, err = reg.Handler(ctx, args)
+		}
+
 		if err != nil {
 			return result, err
 		}
 
-		// Try to wrap large results with GCS by working with JSON representation
-		// Marshal the result to JSON to inspect its structure
-		resultJSON, err := json.Marshal(result)
-		if err != nil {
-			// Can't marshal - return as-is
-			return result, nil
+		// Try to wrap large results with GCS
+		wrappedResult := gcs.WrapMCPResult(ctx, result, toolName)
+
+		// Type assert back to *mcp.CallToolResult
+		if mcpResult, ok := wrappedResult.(*mcp.CallToolResult); ok {
+			return mcpResult, nil
 		}
 
-		// Parse as map to extract text content
-		var resultMap map[string]interface{}
-		if err := json.Unmarshal(resultJSON, &resultMap); err != nil {
-			return result, nil
-		}
-
-		// Check if this is an error result
-		if isError, ok := resultMap["isError"].(bool); ok && isError {
-			return result, nil
-		}
-
-		// Try to extract text from content
-		if contentList, ok := resultMap["content"].([]interface{}); ok && len(contentList) > 0 {
-			if contentItem, ok := contentList[0].(map[string]interface{}); ok {
-				if text, ok := contentItem["text"].(string); ok {
-					// Parse the JSON text
-					var data interface{}
-					if err := json.Unmarshal([]byte(text), &data); err != nil {
-						// Not JSON or can't parse - return as-is
-						return result, nil
-					}
-
-					// Try to wrap with GCS
-					wrappedData, err := gcs.MaybeWrapResult(ctx, data, reg.Name)
-					if err != nil {
-						// If wrapping fails, return original
-						return result, nil
-					}
-
-					// Re-encode and create new result
-					return mcp.NewToolResultText(ToJSON(wrappedData)), nil
-				}
-			}
-		}
-
+		// If type assertion fails, return original
 		return result, nil
 	}
 }

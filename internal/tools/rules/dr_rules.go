@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -23,14 +22,6 @@ func init() {
 	RegisterGetDetectionRules()
 }
 
-// getOrganization retrieves or creates an Organization instance from context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := auth.GetSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterListDRGeneralRules registers the list_dr_general_rules tool
 func RegisterListDRGeneralRules() {
@@ -43,7 +34,7 @@ func RegisterListDRGeneralRules() {
 			mcp.WithDescription("List all general Detection & Response rules"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -81,7 +72,7 @@ func RegisterGetDRGeneralRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -133,7 +124,7 @@ func RegisterSetDRGeneralRule() {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -193,7 +184,7 @@ func RegisterDeleteDRGeneralRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -223,7 +214,7 @@ func RegisterListDRManagedRules() {
 			mcp.WithDescription("List all managed Detection & Response rules"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -261,7 +252,7 @@ func RegisterGetDRManagedRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -313,7 +304,7 @@ func RegisterSetDRManagedRule() {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -372,7 +363,7 @@ func RegisterDeleteDRManagedRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -402,7 +393,7 @@ func RegisterGetDetectionRules() {
 			mcp.WithDescription("Get all Detection & Response rules from all namespaces"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

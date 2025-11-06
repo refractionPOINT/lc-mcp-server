@@ -43,13 +43,13 @@ func TestLoad(t *testing.T) {
 		cfg, err := Load()
 		require.NoError(t, err)
 
-		assert.Equal(t, "stdio", cfg.Mode)
+		assert.Equal(t, "stdio", cfg.Server.Mode)
 		// When MCP_PROFILE is not set, Profile should be empty string
 		// This enables URL-based routing in HTTP mode, and defaults to "all" in STDIO mode
-		assert.Equal(t, "", cfg.Profile)
-		assert.Equal(t, "info", cfg.LogLevel)
-		assert.False(t, cfg.EnableAudit)
-		assert.Equal(t, 5*time.Minute, cfg.SDKCacheTTL)
+		assert.Equal(t, "", cfg.Server.Profile)
+		assert.Equal(t, "info", cfg.Server.LogLevel)
+		assert.False(t, cfg.Features.EnableAudit)
+		assert.Equal(t, 5*time.Minute, cfg.Features.SDKCacheTTL)
 	})
 
 	t.Run("custom values", func(t *testing.T) {
@@ -64,11 +64,11 @@ func TestLoad(t *testing.T) {
 		cfg, err := Load()
 		require.NoError(t, err)
 
-		assert.Equal(t, "stdio", cfg.Mode)
-		assert.Equal(t, "core", cfg.Profile)
-		assert.Equal(t, "debug", cfg.LogLevel)
-		assert.True(t, cfg.EnableAudit)
-		assert.Equal(t, 10*time.Minute, cfg.SDKCacheTTL)
+		assert.Equal(t, "stdio", cfg.Server.Mode)
+		assert.Equal(t, "core", cfg.Server.Profile)
+		assert.Equal(t, "debug", cfg.Server.LogLevel)
+		assert.True(t, cfg.Features.EnableAudit)
+		assert.Equal(t, 10*time.Minute, cfg.Features.SDKCacheTTL)
 	})
 
 	t.Run("normal mode authentication", func(t *testing.T) {
@@ -147,18 +147,22 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid config",
 			config: &Config{
-				Mode:     "stdio",
-				Profile:  "core",
-				LogLevel: "info",
+				Server: ServerConfig{
+					Mode:     "stdio",
+					Profile:  "core",
+					LogLevel: "info",
+				},
 			},
 			wantErr: false,
 		},
 		{
 			name: "invalid profile",
 			config: &Config{
-				Mode:     "stdio",
-				Profile:  "invalid",
-				LogLevel: "info",
+				Server: ServerConfig{
+					Mode:     "stdio",
+					Profile:  "invalid",
+					LogLevel: "info",
+				},
 			},
 			wantErr: true,
 			errMsg:  "invalid profile",
@@ -166,9 +170,11 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid log level",
 			config: &Config{
-				Mode:     "stdio",
-				Profile:  "core",
-				LogLevel: "invalid",
+				Server: ServerConfig{
+					Mode:     "stdio",
+					Profile:  "core",
+					LogLevel: "invalid",
+				},
 			},
 			wantErr: true,
 			errMsg:  "invalid log level",

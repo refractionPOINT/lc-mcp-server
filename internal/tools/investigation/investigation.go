@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -18,20 +17,6 @@ func init() {
 	RegisterGetOSVersion()
 }
 
-// getSDKCache retrieves the SDK cache from context
-func getSDKCache(ctx context.Context) (*auth.SDKCache, error) {
-	return auth.GetSDKCache(ctx)
-}
-
-// getOrganization retrieves or creates an Organization instance from context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := getSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterGetProcesses registers the get_processes tool
 func RegisterGetProcesses() {
@@ -54,7 +39,7 @@ func RegisterGetProcesses() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -102,7 +87,7 @@ func RegisterGetNetworkConnections() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -151,7 +136,7 @@ func RegisterGetOSVersion() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

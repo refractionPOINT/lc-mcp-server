@@ -2,10 +2,10 @@ package core
 
 import (
 	"context"
+	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -19,20 +19,6 @@ func init() {
 	RegisterSearchHosts()
 }
 
-// getSDKCache retrieves the SDK cache from context
-func getSDKCache(ctx context.Context) (*auth.SDKCache, error) {
-	return auth.GetSDKCache(ctx)
-}
-
-// getOrganization retrieves or creates an Organization instance from context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := getSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterTestTool registers the test_tool
 func RegisterTestTool() {
@@ -74,7 +60,7 @@ func RegisterGetSensorInfo() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -146,7 +132,7 @@ func RegisterListSensors() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -223,7 +209,7 @@ func RegisterGetOnlineSensors() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -285,7 +271,7 @@ func RegisterIsOnline() {
 			}
 
 			// OID handling is now automatic via wrapHandler			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -333,7 +319,7 @@ func RegisterSearchHosts() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -372,33 +358,15 @@ func RegisterSearchHosts() {
 	})
 }
 
-// matchHostname performs simple wildcard matching
+// matchHostname performs wildcard matching using filepath.Match
+// Supports patterns like: "web-*", "*-prod", "web-*-prod", "*"
 func matchHostname(hostname, pattern string) bool {
-	// Simple wildcard matching
-	if pattern == "*" {
-		return true
+	// Use filepath.Match for proper glob-style pattern matching
+	// This handles *, ?, and [...] patterns correctly
+	matched, err := filepath.Match(pattern, hostname)
+	if err != nil {
+		// Pattern is invalid, fall back to exact match
+		return hostname == pattern
 	}
-
-	// No wildcards - exact match
-	if pattern == hostname {
-		return true
-	}
-
-	// Prefix match (pattern*)
-	if len(pattern) > 0 && pattern[len(pattern)-1] == '*' {
-		prefix := pattern[:len(pattern)-1]
-		return len(hostname) >= len(prefix) && hostname[:len(prefix)] == prefix
-	}
-
-	// Suffix match (*pattern)
-	if len(pattern) > 0 && pattern[0] == '*' {
-		suffix := pattern[1:]
-		return len(hostname) >= len(suffix) && hostname[len(hostname)-len(suffix):] == suffix
-	}
-
-	// Contains match (*pattern*)
-	// For now, just do simple substring matching if both wildcards present
-	// In production, would use proper glob/regex matching
-
-	return false
+	return matched
 }

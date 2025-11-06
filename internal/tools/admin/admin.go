@@ -6,7 +6,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -28,15 +27,6 @@ func init() {
 	RegisterGetSKUDefinitions()
 }
 
-// getOrganization retrieves or creates an Organization instance from context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := auth.GetSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterGetOrgInfo registers the get_org_info tool
 func RegisterGetOrgInfo() {
@@ -51,7 +41,7 @@ func RegisterGetOrgInfo() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -80,7 +70,7 @@ func RegisterGetUsageStats() {
 			mcp.WithDescription("Get organization usage statistics"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -108,7 +98,7 @@ func RegisterGetBillingDetails() {
 			mcp.WithDescription("Get billing information for the organization"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -159,7 +149,7 @@ func RegisterGetOrgInvoiceURL() {
 				format = f
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -219,7 +209,7 @@ func RegisterCreateOrg() {
 				template = t
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization context: %v", err), nil
 			}
@@ -294,7 +284,7 @@ func RegisterListUserOrgs() {
 				withNames = wn
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization context: %v", err), nil
 			}
@@ -322,7 +312,7 @@ func RegisterGetOrgErrors() {
 			mcp.WithDescription("Get error logs for the organization"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -358,7 +348,7 @@ func RegisterDismissOrgError() {
 				return tools.ErrorResult("component parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -386,7 +376,7 @@ func RegisterListAPIKeys() {
 			mcp.WithDescription("List all API keys for the organization (does not return actual key values)"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -433,7 +423,7 @@ func RegisterCreateAPIKey() {
 				}
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -470,7 +460,7 @@ func RegisterDeleteAPIKey() {
 				return tools.ErrorResult("key_hash parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -498,7 +488,7 @@ func RegisterGetMITREReport() {
 			mcp.WithDescription("Get MITRE ATT&CK coverage report showing detection rule coverage"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -550,7 +540,7 @@ func RegisterGetTimeWhenSensorHasData() {
 				return tools.ErrorResult("end parameter is required and must be a number"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -581,7 +571,7 @@ func RegisterGetSKUDefinitions() {
 			mcp.WithDescription("Get SKU definitions and pricing information"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

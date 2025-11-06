@@ -19,12 +19,16 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	t.Run("creates server successfully", func(t *testing.T) {
+	t.Run("creates STDIO server successfully", func(t *testing.T) {
 		cfg := &config.Config{
-			Mode:        "stdio",
-			Profile:     "core",
-			LogLevel:    "info",
-			SDKCacheTTL: 5 * time.Minute,
+			Server: config.ServerConfig{
+				Mode:     "stdio",
+				Profile:  "core",
+				LogLevel: "info",
+			},
+			Features: config.FeatureConfig{
+				SDKCacheTTL: 5 * time.Minute,
+			},
 			Auth: &auth.AuthContext{
 				Mode:   auth.AuthModeNormal,
 				OID:    "test-org",
@@ -38,17 +42,71 @@ func TestNew(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.NotNil(t, srv)
-		assert.NotNil(t, srv.mcpServer)
-		assert.NotNil(t, srv.sdkCache)
-		assert.Equal(t, cfg, srv.config)
+
+		// Verify it's a STDIO server
+		stdioSrv, ok := srv.(*STDIOServer)
+		assert.True(t, ok, "expected STDIOServer type")
+		if ok {
+			assert.NotNil(t, stdioSrv.mcpServer)
+			assert.NotNil(t, stdioSrv.sdkCache)
+			assert.Equal(t, cfg, stdioSrv.config)
+		}
+	})
+
+	t.Run("creates HTTP server successfully", func(t *testing.T) {
+		cfg := &config.Config{
+			Server: config.ServerConfig{
+				Mode:     "http",
+				Profile:  "core",
+				LogLevel: "info",
+			},
+			HTTP: config.HTTPConfig{
+				Port: 8080,
+			},
+			OAuth: config.OAuthConfig{
+				RedisURL: "redis://localhost:6379",
+			},
+			Features: config.FeatureConfig{
+				SDKCacheTTL: 5 * time.Minute,
+			},
+			Auth: &auth.AuthContext{
+				Mode:   auth.AuthModeNormal,
+				OID:    "test-org",
+				APIKey: "test-key-1234567890",
+			},
+		}
+
+		logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+
+		// Note: This will fail if Redis is not available, which is expected in unit tests
+		// We're just testing that the factory pattern works
+		srv, err := New(cfg, logger)
+
+		// If Redis is not available, we expect an error
+		if err != nil {
+			assert.Contains(t, err.Error(), "Redis", "expected Redis connection error")
+			return
+		}
+
+		// If Redis is available, verify it's an HTTP server
+		assert.NotNil(t, srv)
+		httpSrv, ok := srv.(*HTTPServerWrapper)
+		assert.True(t, ok, "expected HTTPServerWrapper type")
+		if ok {
+			assert.NotNil(t, httpSrv.httpServer)
+		}
 	})
 
 	t.Run("creates server with nil logger", func(t *testing.T) {
 		cfg := &config.Config{
-			Mode:        "stdio",
-			Profile:     "core",
-			LogLevel:    "info",
-			SDKCacheTTL: 5 * time.Minute,
+			Server: config.ServerConfig{
+				Mode:     "stdio",
+				Profile:  "core",
+				LogLevel: "info",
+			},
+			Features: config.FeatureConfig{
+				SDKCacheTTL: 5 * time.Minute,
+			},
 			Auth: &auth.AuthContext{
 				Mode:   auth.AuthModeNormal,
 				OID:    "test-org",
@@ -60,15 +118,25 @@ func TestNew(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.NotNil(t, srv)
-		assert.NotNil(t, srv.logger)
+
+		// Verify logger was created
+		stdioSrv, ok := srv.(*STDIOServer)
+		assert.True(t, ok)
+		if ok {
+			assert.NotNil(t, stdioSrv.logger)
+		}
 	})
 
 	t.Run("registers tools for profile", func(t *testing.T) {
 		cfg := &config.Config{
-			Mode:        "stdio",
-			Profile:     "core",
-			LogLevel:    "info",
-			SDKCacheTTL: 5 * time.Minute,
+			Server: config.ServerConfig{
+				Mode:     "stdio",
+				Profile:  "core",
+				LogLevel: "info",
+			},
+			Features: config.FeatureConfig{
+				SDKCacheTTL: 5 * time.Minute,
+			},
 			Auth: &auth.AuthContext{
 				Mode:   auth.AuthModeNormal,
 				OID:    "test-org",
@@ -84,14 +152,44 @@ func TestNew(t *testing.T) {
 		assert.NotNil(t, srv)
 		// Tools should be registered (we can't easily verify this without exposing internals)
 	})
+
+	t.Run("returns error for unknown mode", func(t *testing.T) {
+		cfg := &config.Config{
+			Server: config.ServerConfig{
+				Mode:     "unknown",
+				Profile:  "core",
+				LogLevel: "info",
+			},
+			Features: config.FeatureConfig{
+				SDKCacheTTL: 5 * time.Minute,
+			},
+			Auth: &auth.AuthContext{
+				Mode:   auth.AuthModeNormal,
+				OID:    "test-org",
+				APIKey: "test-key-1234567890",
+			},
+		}
+
+		logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
+
+		srv, err := New(cfg, logger)
+
+		assert.Error(t, err)
+		assert.Nil(t, srv)
+		assert.Contains(t, err.Error(), "unknown server mode")
+	})
 }
 
-func TestGetters(t *testing.T) {
+func TestSTDIOServerImplementation(t *testing.T) {
 	cfg := &config.Config{
-		Mode:        "stdio",
-		Profile:     "core",
-		LogLevel:    "info",
-		SDKCacheTTL: 5 * time.Minute,
+		Server: config.ServerConfig{
+			Mode:     "stdio",
+			Profile:  "core",
+			LogLevel: "info",
+		},
+		Features: config.FeatureConfig{
+			SDKCacheTTL: 5 * time.Minute,
+		},
 		Auth: &auth.AuthContext{
 			Mode:   auth.AuthModeNormal,
 			OID:    "test-org",
@@ -104,15 +202,25 @@ func TestGetters(t *testing.T) {
 	srv, err := New(cfg, logger)
 	require.NoError(t, err)
 
-	t.Run("GetSDKCache", func(t *testing.T) {
-		cache := srv.GetSDKCache()
-		assert.NotNil(t, cache)
+	stdioSrv, ok := srv.(*STDIOServer)
+	require.True(t, ok, "expected STDIOServer type")
+
+	t.Run("has SDK cache", func(t *testing.T) {
+		assert.NotNil(t, stdioSrv.sdkCache)
 	})
 
-	t.Run("GetLogger", func(t *testing.T) {
-		log := srv.GetLogger()
-		assert.NotNil(t, log)
-		assert.Equal(t, logger, log)
+	t.Run("has logger", func(t *testing.T) {
+		assert.NotNil(t, stdioSrv.logger)
+		assert.Equal(t, logger, stdioSrv.logger)
+	})
+
+	t.Run("has MCP server", func(t *testing.T) {
+		assert.NotNil(t, stdioSrv.mcpServer)
+	})
+
+	t.Run("Close cleanup", func(t *testing.T) {
+		err := stdioSrv.Close()
+		assert.NoError(t, err)
 	})
 }
 
@@ -123,10 +231,14 @@ func TestServerIntegration(t *testing.T) {
 
 	t.Run("server lifecycle", func(t *testing.T) {
 		cfg := &config.Config{
-			Mode:        "stdio",
-			Profile:     "core",
-			LogLevel:    "error",
-			SDKCacheTTL: 5 * time.Minute,
+			Server: config.ServerConfig{
+				Mode:     "stdio",
+				Profile:  "core",
+				LogLevel: "error",
+			},
+			Features: config.FeatureConfig{
+				SDKCacheTTL: 5 * time.Minute,
+			},
 			Auth: &auth.AuthContext{
 				Mode:   auth.AuthModeNormal,
 				OID:    "test-org",

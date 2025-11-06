@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
@@ -26,22 +24,6 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/schemas" // Event schema tools
 )
 
-// parseLogLevel converts a string log level to slog.Level
-func parseLogLevel(level string) slog.Level {
-	switch strings.ToLower(level) {
-	case "debug":
-		return slog.LevelDebug
-	case "info":
-		return slog.LevelInfo
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
-}
-
 func main() {
 	// Load configuration first to determine log level
 	cfg, err := config.Load()
@@ -51,7 +33,7 @@ func main() {
 	}
 
 	// Setup logger with configured level
-	level := parseLogLevel(cfg.LogLevel)
+	level := config.ParseLogLevel(cfg.Server.LogLevel)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: level,
 	}))
@@ -63,8 +45,8 @@ func main() {
 	}
 
 	logger.Info("Starting LimaCharlie MCP Server",
-		"mode", cfg.Mode,
-		"profile", cfg.Profile,
+		"mode", cfg.Server.Mode,
+		"profile", cfg.Server.Profile,
 		"auth_mode", cfg.Auth.Mode.String())
 
 	// Create server
@@ -102,19 +84,4 @@ func main() {
 	}
 
 	logger.Info("Server stopped")
-}
-
-// printBanner prints the server banner
-func printBanner() {
-	banner := `
-╔═══════════════════════════════════════════════════════════════╗
-║                                                               ║
-║           LimaCharlie MCP Server - Go Edition                 ║
-║                                                               ║
-║  A Model Context Protocol server for LimaCharlie             ║
-║  https://limacharlie.io                                       ║
-║                                                               ║
-╚═══════════════════════════════════════════════════════════════╝
-`
-	fmt.Println(banner)
 }

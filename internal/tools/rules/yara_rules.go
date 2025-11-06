@@ -30,7 +30,7 @@ func RegisterListYaraRules() {
 			mcp.WithDescription("List all YARA rules in the organization"),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -68,7 +68,7 @@ func RegisterGetYaraRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -120,7 +120,7 @@ func RegisterSetYaraRule() {
 				return tools.ErrorResult("rule_content parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -176,7 +176,7 @@ func RegisterDeleteYaraRule() {
 				return tools.ErrorResult("rule_name parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

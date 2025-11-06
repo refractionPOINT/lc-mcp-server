@@ -7,7 +7,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -20,20 +19,6 @@ func init() {
 	RegisterGetTimeWhenSensorHasData()
 }
 
-// getSDKCache retrieves the SDK cache from context
-func getSDKCache(ctx context.Context) (*auth.SDKCache, error) {
-	return auth.GetSDKCache(ctx)
-}
-
-// getOrganization retrieves or creates an Organization instance from context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := getSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterRunLCQLQuery registers the run_lcql_query tool
 func RegisterRunLCQLQuery() {
@@ -77,7 +62,7 @@ func RegisterRunLCQLQuery() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -181,7 +166,7 @@ func RegisterGetHistoricDetections() {
 			end := int64(endFloat)
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -242,7 +227,7 @@ func RegisterSearchIOCs() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -284,7 +269,7 @@ func RegisterBatchSearchIOCs() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -322,7 +307,7 @@ func RegisterGetTimeWhenSensorHasData() {
 			}
 
 			// Get organization
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

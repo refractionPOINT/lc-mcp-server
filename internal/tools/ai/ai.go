@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 	"gopkg.in/yaml.v3"
 )
@@ -23,14 +21,6 @@ func init() {
 	RegisterGenerateDetectionSummary()
 }
 
-// getOrganization retrieves the organization from the context
-func getOrganization(ctx context.Context) (*lc.Organization, error) {
-	cache, err := auth.GetSDKCache(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return cache.GetFromContext(ctx)
-}
 
 // RegisterGenerateLCQLQuery registers the generate_lcql_query tool
 func RegisterGenerateLCQLQuery() {
@@ -51,7 +41,7 @@ func RegisterGenerateLCQLQuery() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -163,7 +153,7 @@ func RegisterGenerateDRRuleDetection() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -296,7 +286,7 @@ func RegisterGenerateDRRuleRespond() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/ratelimit"
@@ -19,17 +21,43 @@ const (
 	requestIDKey contextKey = "request_id"
 )
 
+// Metrics holds simple in-memory request metrics
+type Metrics struct {
+	totalRequests   atomic.Int64
+	totalErrors     atomic.Int64
+	requestDuration atomic.Int64 // cumulative duration in nanoseconds
+}
+
+// GetMetrics returns current metrics snapshot
+func (m *Metrics) GetMetrics() (total, errors, avgDurationMs int64) {
+	total = m.totalRequests.Load()
+	errors = m.totalErrors.Load()
+	if total > 0 {
+		avgDurationMs = (m.requestDuration.Load() / total) / int64(time.Millisecond)
+	}
+	return
+}
+
+var globalMetrics = &Metrics{}
+
 // withMiddleware wraps the handler with middleware chain
+// Uses both standalone composable middleware and server-specific middleware
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
-	// Chain middleware (executes in order)
+	// Chain middleware (executes in order, outermost first)
 	handler := next
-	handler = s.requestIDMiddleware(handler)
-	handler = s.rateLimitMiddleware(handler)
-	handler = s.bodySizeLimitMiddleware(handler)
-	handler = s.securityHeadersMiddleware(handler)
-	handler = s.corsMiddleware(handler)
-	handler = s.loggingMiddleware(handler)
-	handler = s.recoveryMiddleware(handler)
+
+	// Server-specific middleware (need access to server state)
+	handler = s.requestIDMiddleware(handler)      // Adds request ID to context
+	handler = s.rateLimitMiddleware(handler)      // Rate limiting per endpoint
+	handler = s.bodySizeLimitMiddleware(handler)  // Prevent large request bodies
+	handler = s.securityHeadersMiddleware(handler) // Security headers
+	handler = s.corsMiddleware(handler)           // CORS handling
+
+	// Enhanced standalone middleware (production-ready observability)
+	handler = MetricsMiddleware()(handler)        // Track request metrics
+	handler = RequestLogger(s.logger)(handler)    // Structured logging with request ID
+	handler = PanicRecovery(s.logger)(handler)    // Panic recovery (outermost)
+
 	return handler
 }
 
@@ -105,7 +133,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()")
 
 		// Strict-Transport-Security (HSTS) - ONLY if using HTTPS
-		if s.config.EnableTLS {
+		if s.config.TLS.Enable {
 			// Max age: 2 years, include subdomains, allow preload list inclusion
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
 		}
@@ -118,7 +146,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Get allowed origins from config
-		allowedOrigins := s.config.CORSAllowedOrigins
+		allowedOrigins := s.config.HTTP.CORSAllowedOrigins
 		origin := r.Header.Get("Origin")
 
 		// Check if origin is allowed
@@ -278,4 +306,133 @@ func getClientIP(r *http.Request) string {
 
 	// Fallback to RemoteAddr
 	return r.RemoteAddr
+}
+
+// ======================================================================
+// STANDALONE MIDDLEWARE FUNCTIONS (Composable, production-ready)
+// ======================================================================
+
+// RequestLogger returns middleware that logs all HTTP requests with structured fields
+// including request ID, duration, status code, method, path, and user agent
+func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+
+			// Wrap response writer to capture status code
+			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+			// Process request
+			next.ServeHTTP(wrapped, r)
+
+			// Log request details with structured fields
+			duration := time.Since(start)
+			requestID := r.Context().Value(requestIDKey)
+
+			logger.Info("HTTP request completed",
+				"request_id", requestID,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", wrapped.statusCode,
+				"duration_ms", duration.Milliseconds(),
+				"user_agent", r.UserAgent(),
+				"remote_addr", getClientIP(r))
+		})
+	}
+}
+
+// PanicRecovery returns middleware that recovers from panics and logs them
+// This prevents the entire server from crashing due to a panic in a handler
+func PanicRecovery(logger *slog.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if err := recover(); err != nil {
+					requestID := r.Context().Value(requestIDKey)
+
+					logger.Error("Panic recovered in HTTP handler",
+						"error", err,
+						"request_id", requestID,
+						"method", r.Method,
+						"path", r.URL.Path,
+						"remote_addr", getClientIP(r))
+
+					// Return 500 Internal Server Error
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(`{"error":"internal_server_error","error_description":"An internal error occurred"}`))
+				}
+			}()
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequestID returns middleware that adds a unique request ID to each request
+// The request ID is either extracted from the X-Request-ID header (if present)
+// or generated as a new random ID. It's added to both the request context
+// and the response headers for traceability
+func RequestID() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check if request ID already exists in header
+			requestID := r.Header.Get("X-Request-ID")
+
+			// Generate new ID if not present
+			if requestID == "" {
+				requestID = generateRequestID()
+			}
+
+			// Store in context for use by handlers and other middleware
+			ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+
+			// Add to response header for client traceability
+			w.Header().Set("X-Request-ID", requestID)
+
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// MetricsMiddleware returns middleware that tracks request metrics
+// It uses simple in-memory atomic counters to track:
+// - Total number of requests
+// - Total number of errors (status >= 400)
+// - Cumulative request duration
+func MetricsMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+
+			// Wrap response writer to capture status code
+			wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+			// Process request
+			next.ServeHTTP(wrapped, r)
+
+			// Update metrics
+			duration := time.Since(start)
+			globalMetrics.totalRequests.Add(1)
+			globalMetrics.requestDuration.Add(int64(duration))
+
+			// Track errors (4xx and 5xx status codes)
+			if wrapped.statusCode >= 400 {
+				globalMetrics.totalErrors.Add(1)
+			}
+		})
+	}
+}
+
+// GetRequestID extracts the request ID from the context
+func GetRequestID(ctx context.Context) string {
+	if reqID, ok := ctx.Value(requestIDKey).(string); ok {
+		return reqID
+	}
+	return ""
+}
+
+// GetGlobalMetrics returns the current global metrics
+func GetGlobalMetrics() (total, errors, avgDurationMs int64) {
+	return globalMetrics.GetMetrics()
 }

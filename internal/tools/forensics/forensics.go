@@ -618,7 +618,7 @@ func RegisterGetHistoricEvents() {
 				return tools.ErrorResult("end parameter is required"), nil
 			}
 
-			org, err := getOrganization(ctx)
+			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
