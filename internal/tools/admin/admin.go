@@ -237,10 +237,6 @@ func RegisterListUserOrgs() {
 		RequiresOID: false,
 		Schema: mcp.NewTool("list_user_orgs",
 			mcp.WithDescription("List all organizations accessible to the authenticated user (user-level operation)"),
-			mcp.WithNumber("offset",
-				mcp.Description("Starting index for pagination")),
-			mcp.WithNumber("limit",
-				mcp.Description("Maximum number of results to return")),
 			mcp.WithString("filter",
 				mcp.Description("Optional filter string")),
 			mcp.WithString("sort_by",
@@ -251,18 +247,7 @@ func RegisterListUserOrgs() {
 				mcp.Description("Whether to include organization names (\"true\" or \"false\", default: \"true\")")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			var offset, limit *int
 			var filter, sortBy, sortOrder *string
-
-			if o, ok := args["offset"].(float64); ok {
-				offsetInt := int(o)
-				offset = &offsetInt
-			}
-
-			if l, ok := args["limit"].(float64); ok {
-				limitInt := int(l)
-				limit = &limitInt
-			}
 
 			if f, ok := args["filter"].(string); ok && f != "" {
 				filter = &f
@@ -288,13 +273,35 @@ func RegisterListUserOrgs() {
 				return tools.ErrorResultf("failed to get organization context: %v", err), nil
 			}
 
-			orgs, err := org.ListUserOrgs(offset, limit, filter, sortBy, sortOrder, withNames)
-			if err != nil {
-				return tools.ErrorResultf("failed to list user organizations: %v", err), nil
+			// Fetch all organizations using pagination
+			// Use a reasonable page size for API efficiency
+			pageSize := 100
+			offset := 0
+			allOrgs := []lc.UserOrgInfo{}
+
+			for {
+				offsetPtr := &offset
+				limitPtr := &pageSize
+
+				orgs, err := org.ListUserOrgs(offsetPtr, limitPtr, filter, sortBy, sortOrder, withNames)
+				if err != nil {
+					return tools.ErrorResultf("failed to list user organizations: %v", err), nil
+				}
+
+				allOrgs = append(allOrgs, orgs...)
+
+				// If we got fewer results than the page size, we've reached the last page
+				if len(orgs) < pageSize {
+					break
+				}
+
+				// Move to next page
+				offset += pageSize
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
-				"orgs": orgs,
+				"orgs":  allOrgs,
+				"count": len(allOrgs),
 			}), nil
 		},
 	})

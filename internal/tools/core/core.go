@@ -121,8 +121,6 @@ func RegisterListSensors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_sensors",
 			mcp.WithDescription("List all sensors in the organization with optional filtering"),
-			mcp.WithNumber("limit",
-				mcp.Description("Maximum number of sensors to return")),
 			mcp.WithString("with_hostname_prefix",
 				mcp.Description("Filter sensors with hostname starting with this prefix")),
 			mcp.WithString("with_ip",
@@ -136,15 +134,8 @@ func RegisterListSensors() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Build options
-			opts := lc.ListSensorsOptions{}
-
-			if limit, ok := args["limit"].(float64); ok {
-				opts.Limit = int(limit)
-			}
-
-			// List sensors (takes varargs)
-			sensors, err := org.ListSensors(opts)
+			// List all sensors - SDK handles pagination internally using continuation tokens
+			sensors, err := org.ListSensors(lc.ListSensorsOptions{})
 			if err != nil {
 				return tools.ErrorResultf("failed to list sensors: %v", err), nil
 			}
