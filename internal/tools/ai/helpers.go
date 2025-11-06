@@ -173,29 +173,28 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 
 // validateLCQLQuery validates an LCQL query using the SDK
 func validateLCQLQuery(org *lc.Organization, query string) (bool, string) {
-	// Use the SDK's LCQL validation
-	// Note: This requires the Replay functionality from the SDK
-	// For now, we'll do basic validation and rely on the LLM to fix issues
-
 	if query == "" {
 		return false, "query is empty"
 	}
 
-	// Basic syntax check: should have pipe separators
-	parts := strings.Split(query, "|")
-	if len(parts) < 4 {
-		return false, "query must have at least 4 components separated by pipes (timeframe|sensors|events|filter)"
+	// Use SDK's LCQL validation via replay service
+	resp, err := org.ValidateLCQLQuery(query)
+	if err != nil {
+		return false, fmt.Sprintf("validation error: %v", err)
 	}
 
-	// TODO: When SDK adds proper LCQL validation, use it here
-	// For now, we accept the query as valid if it has the right structure
+	// Check if validation found an error
+	if resp.Error != "" {
+		return false, resp.Error
+	}
+
 	return true, ""
 }
 
 // validateDRRule validates a D&R rule using the SDK
 func validateDRRule(org *lc.Organization, ruleYAML string) (bool, string) {
-	// Parse the YAML
-	var rule map[string]interface{}
+	// Parse the YAML to a Dict
+	var rule lc.Dict
 	if err := yaml.Unmarshal([]byte(ruleYAML), &rule); err != nil {
 		return false, fmt.Sprintf("invalid YAML: %v", err)
 	}
@@ -208,8 +207,17 @@ func validateDRRule(org *lc.Organization, ruleYAML string) (bool, string) {
 		return false, "rule must have at least a 'detect' or 'respond' component"
 	}
 
-	// TODO: When SDK adds proper D&R validation, use it here
-	// For now, we accept the rule as valid if it has the right structure
+	// Use SDK's D&R validation via replay service
+	resp, err := org.ValidateDRRule(rule)
+	if err != nil {
+		return false, fmt.Sprintf("validation error: %v", err)
+	}
+
+	// Check if validation found an error
+	if resp.Error != "" {
+		return false, resp.Error
+	}
+
 	return true, ""
 }
 
