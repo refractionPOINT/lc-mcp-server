@@ -6,11 +6,11 @@ import (
 
 func TestParseTimeframe(t *testing.T) {
 	tests := []struct {
-		name          string
-		query         string
-		wantHas       bool
-		wantDays      float64
-		wantErr       bool
+		name     string
+		query    string
+		wantHas  bool
+		wantDays float64
+		wantErr  bool
 	}{
 		{
 			name:     "No timeframe",

@@ -296,7 +296,7 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 
 	// Extract parameters
 	sessionID := r.FormValue("session")
-	code := r.FormValue("code")
+	code := r.FormValue("verification_code")
 
 	if sessionID == "" || code == "" {
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{

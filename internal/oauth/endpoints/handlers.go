@@ -447,7 +447,11 @@ func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, se
 func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessionID, code string) {
 	mfaSession, _ := h.stateManager.ConsumeMFASession(r.Context(), sessionID)
 	if mfaSession == nil {
-		writeHTML(w, http.StatusBadRequest, "<h1>MFA Error</h1><p>Session expired</p>")
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":           false,
+			"error":             "invalid_request",
+			"error_description": "Session expired or invalid",
+		})
 		return
 	}
 
@@ -455,18 +459,26 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	resp, err := h.firebaseClient.FinalizeMFASignIn(r.Context(), mfaSession.MFAPendingCredential, mfaSession.MFAEnrollmentID, code)
 	if err != nil {
 		h.logger.Error("MFA verification failed", "error", err, "session_id", sessionID)
-		writeHTML(w, http.StatusBadRequest, "<h1>MFA Error</h1><p>Invalid code</p>")
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":           false,
+			"error":             "invalid_code",
+			"error_description": "Invalid verification code. Please try again.",
+		})
 		return
 	}
 
 	// Get original OAuth state
 	oauthState, _ := h.stateManager.GetOAuthState(r.Context(), mfaSession.OAuthState)
 	if oauthState == nil {
-		writeHTML(w, http.StatusBadRequest, "<h1>Error</h1><p>OAuth state expired</p>")
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":           false,
+			"error":             "invalid_request",
+			"error_description": "OAuth state expired. Please restart the authentication flow.",
+		})
 		return
 	}
 
-	// Generate authorization code and redirect
+	// Generate authorization code
 	authCode, _ := h.stateManager.GenerateAuthorizationCode()
 	expiresIn := int64(3600)
 	if resp.ExpiresIn != "" {
@@ -477,8 +489,12 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
 	h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData)
 
+	// Return JSON with redirect URL instead of HTTP redirect
 	redirectURL := oauthState.RedirectURI + "?code=" + authCode + "&state=" + oauthState.State
-	http.Redirect(w, r, redirectURL, http.StatusFound)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"success":      true,
+		"redirect_url": redirectURL,
+	})
 }
 
 // HandleProtectedResourceMetadata handles RFC 9728 Protected Resource Metadata requests
