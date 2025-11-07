@@ -500,10 +500,86 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	}
 	expiresAt := time.Now().Unix() + expiresIn
 
-	// Use LocalID from MFA session (captured during initial sign-in) since Firebase doesn't return it in MFA finalization
-	uid := mfaSession.LocalID
+	// SECURITY FIX: Validate UID consistency between Firebase response and MFA session
+	// This prevents UID tampering attacks via Redis modification
+	h.logger.Info("MFA UID validation",
+		"firebase_local_id", resp.LocalID,
+		"session_local_id", mfaSession.LocalID,
+		"has_firebase_uid", resp.LocalID != "",
+		"has_session_uid", mfaSession.LocalID != "")
+
+	// Verify Firebase's LocalID matches the session LocalID (if Firebase returns it)
+	if resp.LocalID != "" && resp.LocalID != mfaSession.LocalID {
+		h.logger.Error("SECURITY ALERT: UID mismatch detected - possible Redis tampering",
+			"session_uid", mfaSession.LocalID,
+			"firebase_uid", resp.LocalID,
+			"session_id", sessionID,
+			"email", mfaSession.Email)
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":           false,
+			"error":             "invalid_request",
+			"error_description": "Authentication session is invalid. Please restart the login process.",
+		})
+		return
+	}
+
+	// Use Firebase's LocalID as authoritative source, with fallback to session
+	uid := resp.LocalID
+	uidSource := "firebase_response"
+	if uid == "" {
+		// Fallback to session LocalID only if Firebase doesn't return it
+		uid = mfaSession.LocalID
+		uidSource = "session_fallback"
+		h.logger.Warn("Firebase did not return LocalID in MFA finalization response, using session LocalID",
+			"uid", uid,
+			"session_id", sessionID)
+	}
+
+	// Additional validation: UID must not be empty
+	if uid == "" {
+		h.logger.Error("SECURITY ALERT: Empty UID after MFA verification",
+			"session_id", sessionID,
+			"email", mfaSession.Email)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success":           false,
+			"error":             "server_error",
+			"error_description": "Authentication failed. Please contact support.",
+		})
+		return
+	}
+
+	// SECURITY FIX: Defense-in-depth validation of ID token's sub claim
+	// Verify that the ID token's subject matches the UID we're using
+	if resp.IDToken != "" {
+		tokenUID, err := firebase.ExtractUIDFromIDToken(resp.IDToken)
+		if err != nil {
+			h.logger.Warn("Failed to extract UID from ID token for validation",
+				"error", err,
+				"session_id", sessionID)
+		} else if tokenUID != uid {
+			h.logger.Error("SECURITY ALERT: UID mismatch between ID token and determined UID",
+				"token_uid", tokenUID,
+				"used_uid", uid,
+				"session_id", sessionID,
+				"email", mfaSession.Email)
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"success":           false,
+				"error":             "invalid_request",
+				"error_description": "Authentication verification failed.",
+			})
+			return
+		} else {
+			h.logger.Info("ID token sub claim validated successfully",
+				"uid", uid,
+				"session_id", sessionID)
+		}
+	}
+
 	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, uid, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
-	h.logger.Info("Storing authorization code after MFA", "uid", uid, "has_uid", uid != "", "from_mfa_session", true)
+	h.logger.Info("Storing authorization code after MFA",
+		"uid", uid,
+		"source", uidSource,
+		"session_id", sessionID)
 	h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData)
 
 	// Return JSON with redirect URL instead of HTTP redirect

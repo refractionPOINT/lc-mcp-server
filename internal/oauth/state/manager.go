@@ -507,35 +507,53 @@ func (m *Manager) GenerateMFASessionID() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreMFASession stores an MFA challenge session
+// StoreMFASession stores an MFA challenge session with encryption and integrity protection
 func (m *Manager) StoreMFASession(ctx context.Context, sessionID string, session *MFASession) error {
 	key := MFAPrefix + sessionID
 
+	// Marshal session data
 	data, err := json.Marshal(session)
 	if err != nil {
 		return fmt.Errorf("failed to marshal MFA session: %w", err)
 	}
 
-	if err := m.redis.SetEX(ctx, key, string(data), MFATTL); err != nil {
+	// SECURITY FIX: Encrypt session data for confidentiality and integrity protection
+	// AES-256-GCM provides both encryption and authentication tag verification
+	encryptedData, err := m.encryption.Encrypt(string(data))
+	if err != nil {
+		return fmt.Errorf("failed to encrypt MFA session: %w", err)
+	}
+
+	if err := m.redis.SetEX(ctx, key, encryptedData, MFATTL); err != nil {
 		return fmt.Errorf("failed to store MFA session: %w", err)
 	}
 
-	m.logger.Debug("Stored MFA session")
+	m.logger.Debug("Stored MFA session with AES-256-GCM encryption and integrity protection")
 
 	return nil
 }
 
-// GetMFASession retrieves an MFA session (non-destructive)
+// GetMFASession retrieves an MFA session (non-destructive) with decryption and integrity verification
 func (m *Manager) GetMFASession(ctx context.Context, sessionID string) (*MFASession, error) {
 	key := MFAPrefix + sessionID
 
-	data, err := m.redis.Get(ctx, key)
+	encryptedData, err := m.redis.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get MFA session: %w", err)
 	}
 
-	if data == "" {
+	if encryptedData == "" {
 		return nil, nil
+	}
+
+	// SECURITY FIX: Decrypt and verify integrity of MFA session data
+	// AES-256-GCM will fail if data has been tampered with
+	data, err := m.encryption.Decrypt(encryptedData)
+	if err != nil {
+		m.logger.Error("SECURITY ALERT: MFA session decryption failed - possible tampering",
+			"session_id", sessionID,
+			"error", err)
+		return nil, fmt.Errorf("MFA session integrity check failed: %w", err)
 	}
 
 	var session MFASession
@@ -574,18 +592,28 @@ func (m *Manager) IncrementMFAAttempts(ctx context.Context, sessionID string) (i
 	return int(attempts), nil
 }
 
-// ConsumeMFASession atomically retrieves and deletes an MFA session
+// ConsumeMFASession atomically retrieves and deletes an MFA session with decryption and integrity verification
 func (m *Manager) ConsumeMFASession(ctx context.Context, sessionID string) (*MFASession, error) {
 	key := MFAPrefix + sessionID
 	counterKey := MFAPrefix + sessionID + ":attempts"
 
-	data, err := m.redis.AtomicGetAndDelete(ctx, key)
+	encryptedData, err := m.redis.AtomicGetAndDelete(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to consume MFA session: %w", err)
 	}
 
-	if data == "" {
+	if encryptedData == "" {
 		return nil, nil
+	}
+
+	// SECURITY FIX: Decrypt and verify integrity of MFA session data during consumption
+	// AES-256-GCM will fail if data has been tampered with
+	data, err := m.encryption.Decrypt(encryptedData)
+	if err != nil {
+		m.logger.Error("SECURITY ALERT: MFA session decryption failed during consumption - possible tampering",
+			"session_id", sessionID,
+			"error", err)
+		return nil, fmt.Errorf("MFA session integrity check failed: %w", err)
 	}
 
 	var session MFASession
@@ -596,7 +624,7 @@ func (m *Manager) ConsumeMFASession(ctx context.Context, sessionID string) (*MFA
 	// Also delete the attempt counter
 	m.redis.Delete(ctx, counterKey)
 
-	m.logger.Debug("Consumed MFA session")
+	m.logger.Debug("Consumed MFA session with verified integrity")
 
 	return &session, nil
 }
