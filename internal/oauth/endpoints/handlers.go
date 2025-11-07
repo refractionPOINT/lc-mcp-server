@@ -196,8 +196,8 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	oauthStateParam := stateData["oauth_state"]
 
-	// Get OAuth state
-	oauthState, err := h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam)
+	// Get OAuth state (don't consume yet - may need it for MFA flow)
+	oauthState, err := h.stateManager.GetOAuthState(r.Context(), oauthStateParam)
 	if err != nil || oauthState == nil {
 		h.logger.Error("Failed to get OAuth state")
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>State expired</p>")
@@ -233,6 +233,14 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		h.logger.Error("Firebase sign-in failed", "error", err, "provider", oauthState.Provider)
+		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
+		return
+	}
+
+	// No MFA required - consume OAuth state now that we're completing the flow
+	_, err = h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam)
+	if err != nil {
+		h.logger.Error("Failed to consume OAuth state")
 		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
 		return
 	}
@@ -467,9 +475,9 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 		return
 	}
 
-	// Get original OAuth state
-	oauthState, _ := h.stateManager.GetOAuthState(r.Context(), mfaSession.OAuthState)
-	if oauthState == nil {
+	// Get and consume original OAuth state (MFA flow is completing)
+	oauthState, err := h.stateManager.ConsumeOAuthState(r.Context(), mfaSession.OAuthState)
+	if err != nil || oauthState == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"success":           false,
 			"error":             "invalid_request",
