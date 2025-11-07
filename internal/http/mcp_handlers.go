@@ -190,12 +190,13 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 }
 
 func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id interface{}) {
-	// Get active profile - uses URL-based routing if MCP_PROFILE not set
-	activeProfile := s.getActiveProfile(r)
-	s.logger.Debug("Listing tools for profile", "profile", activeProfile, "url_path", r.URL.Path)
-
-	// Get tools for the active profile
-	toolNames := tools.GetToolsForProfile(activeProfile)
+	// Get tools for this request (may be from profile or X-MCP-Tools header)
+	toolNames, err := s.getToolsForRequest(r)
+	if err != nil {
+		// Error from header parsing/validation
+		s.writeJSONRPCError(w, id, -32602, "Invalid params", err.Error())
+		return
+	}
 
 	toolList := make([]map[string]interface{}, 0, len(toolNames))
 	for _, name := range toolNames {

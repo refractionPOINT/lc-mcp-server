@@ -278,6 +278,21 @@ func GetToolsForProfile(profile string) []string {
 	return tools
 }
 
+// ValidateToolNames checks if all provided tool names exist in the registry
+// Returns error with list of invalid tools if any are found
+func ValidateToolNames(toolNames []string) error {
+	var invalidTools []string
+	for _, name := range toolNames {
+		if _, exists := registry[name]; !exists {
+			invalidTools = append(invalidTools, name)
+		}
+	}
+	if len(invalidTools) > 0 {
+		return fmt.Errorf("invalid tool names: %s", strings.Join(invalidTools, ", "))
+	}
+	return nil
+}
+
 // IsUIDMode checks if the auth mode supports OID switching
 func IsUIDMode(authMode auth.AuthMode) bool {
 	return authMode == auth.AuthModeUIDKey || authMode == auth.AuthModeUIDOAuth

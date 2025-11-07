@@ -24,6 +24,11 @@ import (
 	"log/slog"
 )
 
+const (
+	// HeaderMCPTools is the HTTP header for specifying a CSV list of tools
+	HeaderMCPTools = "X-MCP-Tools"
+)
+
 // Server represents the HTTP server for MCP OAuth mode
 type Server struct {
 	config           *config.Config
@@ -169,6 +174,74 @@ func (s *Server) getActiveProfile(r *http.Request) string {
 	// If not a valid profile, default to "all"
 	s.logger.Warn("Invalid profile in URL path, defaulting to 'all'", "path", path, "profile", profile)
 	return "all"
+}
+
+// parseToolsFromHeader extracts and parses the X-MCP-Tools header
+// Returns nil slice if header not present or empty after parsing
+func (s *Server) parseToolsFromHeader(r *http.Request) ([]string, error) {
+	headerValue := r.Header.Get(HeaderMCPTools)
+	if headerValue == "" {
+		return nil, nil
+	}
+
+	// Parse CSV
+	parts := strings.Split(headerValue, ",")
+	var toolsList []string
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			toolsList = append(toolsList, trimmed)
+		}
+	}
+
+	// If empty after parsing, return nil (triggers fallback)
+	if len(toolsList) == 0 {
+		return nil, nil
+	}
+
+	return toolsList, nil
+}
+
+// getToolsForRequest determines which tools should be available for this request
+// Returns tool names or error if validation fails
+func (s *Server) getToolsForRequest(r *http.Request) ([]string, error) {
+	// Check if profile is explicitly configured via MCP_PROFILE env var
+	if s.profile != "" {
+		return tools.GetToolsForProfile(s.profile), nil
+	}
+
+	// Check URL path for profile
+	path := r.URL.Path
+
+	// Skip root and /mcp paths - these don't specify a profile
+	if path != "/" && path != "/mcp" {
+		// Extract profile from path
+		profileFromPath := strings.TrimPrefix(path, "/")
+
+		// Validate that it's a real profile
+		if _, exists := tools.ProfileDefinitions[profileFromPath]; exists {
+			return tools.GetToolsForProfile(profileFromPath), nil
+		}
+	}
+
+	// No explicit profile set (would default to "all")
+	// Check for X-MCP-Tools header
+	headerTools, err := s.parseToolsFromHeader(r)
+	if err != nil {
+		return nil, err
+	}
+
+	// If header provided tools, validate and use them
+	if headerTools != nil {
+		if err := tools.ValidateToolNames(headerTools); err != nil {
+			return nil, fmt.Errorf("invalid tools in %s header: %w", HeaderMCPTools, err)
+		}
+		s.logger.Debug("Using tools from header", "count", len(headerTools), "tools", headerTools)
+		return headerTools, nil
+	}
+
+	// Default to "all" profile
+	return tools.GetToolsForProfile("all"), nil
 }
 
 // createTLSConfig creates a secure TLS configuration
