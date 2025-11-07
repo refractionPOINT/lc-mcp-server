@@ -100,7 +100,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 
 				// Exchange Firebase token for LimaCharlie JWT
 				// This matches Python SDK behavior in Manager.py _refreshJWT (lines 200-212)
-				limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(newIDToken, "", m.logger)
+				limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(newIDToken, "-", m.logger)
 				if err != nil {
 					m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 					return &ValidationResult{
@@ -124,7 +124,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 
 	// Exchange Firebase token for LimaCharlie JWT
 	// This matches Python SDK behavior in Manager.py _refreshJWT (lines 200-212)
-	limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(tokenData.FirebaseIDToken, "", m.logger)
+	limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(tokenData.FirebaseIDToken, "-", m.logger)
 	if err != nil {
 		m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 		return &ValidationResult{
