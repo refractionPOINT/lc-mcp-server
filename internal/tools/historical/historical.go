@@ -242,18 +242,18 @@ func RegisterSearchIOCs() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("search_iocs",
-			mcp.WithDescription("Search for Indicators of Compromise (IOCs) across the organization"),
+			mcp.WithDescription("Search for Indicators of Compromise (IOCs) across the organization. Supports wildcards using '%' character (e.g., '%svchost.exe' for prefix match)."),
 			mcp.WithString("ioc_type",
 				mcp.Required(),
-				mcp.Description("Type of IOC: 'hash', 'domain', 'ip', 'file_path', etc.")),
+				mcp.Description("Type of IOC: 'file_hash', 'domain', 'ip', 'file_path', 'file_name', 'user', 'service_name', 'package_name', 'hostname'")),
 			mcp.WithString("ioc_value",
 				mcp.Required(),
-				mcp.Description("The IOC value to search for (supports wildcards with *)")),
+				mcp.Description("The IOC value to search for (supports wildcards with % character, e.g., '%svchost.exe')")),
 			mcp.WithString("info_type",
 				mcp.Required(),
-				mcp.Description("Type of information to retrieve: 'summary', 'locations', etc.")),
-			mcp.WithNumber("limit",
-				mcp.Description("Maximum number of results to return")),
+				mcp.Description("Type of information to retrieve: 'summary' (occurrence counts) or 'locations' (specific sensor locations)")),
+			mcp.WithBoolean("case_sensitive",
+				mcp.Description("Whether the search should be case-sensitive (default: false, always false for location searches)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract parameters
@@ -272,10 +272,39 @@ func RegisterSearchIOCs() {
 				return tools.ErrorResult("info_type parameter is required"), nil
 			}
 
+			caseSensitive := false
+			if cs, ok := args["case_sensitive"].(bool); ok {
+				caseSensitive = cs
+			}
+
 			// Get organization
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Handle hostname specially (different endpoint)
+			if iocType == "hostname" {
+				results, err := org.SearchHostname(iocValue)
+				if err != nil {
+					return tools.ErrorResultf("failed to search hostname: %v", err), nil
+				}
+
+				// Format results for better readability
+				formattedResults := make([]map[string]interface{}, len(results))
+				for i, result := range results {
+					formattedResults[i] = map[string]interface{}{
+						"sensor_id": result.SID,
+						"hostname":  result.Hostname,
+					}
+				}
+
+				return tools.SuccessResult(map[string]interface{}{
+					"ioc_type":  "hostname",
+					"ioc_value": iocValue,
+					"count":     len(results),
+					"results":   formattedResults,
+				}), nil
 			}
 
 			// Map IOC type to InsightObjectType
@@ -298,52 +327,96 @@ func RegisterSearchIOCs() {
 			case "package_name":
 				objectType = lc.InsightObjectTypes.PackageName
 			default:
-				return tools.ErrorResultf("unsupported ioc_type '%s'. Valid types: hash, domain, ip, file_path, file_name, user, service_name, package_name", iocType), nil
+				return tools.ErrorResultf("unsupported ioc_type '%s'. Valid types: file_hash, domain, ip, file_path, file_name, user, service_name, package_name, hostname", iocType), nil
 			}
 
-			// Map info type to InsightObjectTypeInfoType
-			var objectTypeInfo lc.InsightObjectTypeInfoType
+			// Create search parameters
+			params := lc.IOCSearchParams{
+				SearchTerm:    iocValue,
+				ObjectType:    objectType,
+				CaseSensitive: caseSensitive,
+			}
+
+			// Execute search based on info type
 			switch infoType {
 			case "summary":
-				objectTypeInfo = lc.InsightObjectTypeInfoTypes.Summary
+				resp, err := org.SearchIOCSummary(params)
+				if err != nil {
+					return tools.ErrorResultf("failed to search IOC summary: %v", err), nil
+				}
+
+				// Format response for better readability
+				result := map[string]interface{}{
+					"ioc_type":   string(resp.Type),
+					"ioc_value":  resp.Name,
+					"from_cache": resp.FromCache,
+				}
+
+				// Handle time range counts (can be number or map)
+				if resp.Last1Days != nil {
+					if resp.Last1Days.IsWildcard() {
+						result["last_1_days"] = resp.Last1Days.AsMap()
+					} else {
+						result["last_1_days"] = resp.Last1Days.AsNumber()
+					}
+				}
+
+				if resp.Last7Days != nil {
+					if resp.Last7Days.IsWildcard() {
+						result["last_7_days"] = resp.Last7Days.AsMap()
+					} else {
+						result["last_7_days"] = resp.Last7Days.AsNumber()
+					}
+				}
+
+				if resp.Last30Days != nil {
+					if resp.Last30Days.IsWildcard() {
+						result["last_30_days"] = resp.Last30Days.AsMap()
+					} else {
+						result["last_30_days"] = resp.Last30Days.AsNumber()
+					}
+				}
+
+				if resp.Last365Days != nil {
+					if resp.Last365Days.IsWildcard() {
+						result["last_365_days"] = resp.Last365Days.AsMap()
+					} else {
+						result["last_365_days"] = resp.Last365Days.AsNumber()
+					}
+				}
+
+				return tools.SuccessResult(result), nil
+
 			case "locations", "location":
-				objectTypeInfo = lc.InsightObjectTypeInfoTypes.Location
+				resp, err := org.SearchIOCLocations(params)
+				if err != nil {
+					return tools.ErrorResultf("failed to search IOC locations: %v", err), nil
+				}
+
+				// Format locations as an array for easier consumption
+				locations := make([]map[string]interface{}, 0, len(resp.Locations))
+				for sensorID, loc := range resp.Locations {
+					locations = append(locations, map[string]interface{}{
+						"sensor_id": sensorID,
+						"hostname":  loc.Hostname,
+						"first_ts":  loc.FirstTS,
+						"last_ts":   loc.LastTS,
+					})
+				}
+
+				result := map[string]interface{}{
+					"ioc_type":   string(resp.Type),
+					"ioc_value":  resp.Name,
+					"from_cache": resp.FromCache,
+					"count":      len(locations),
+					"locations":  locations,
+				}
+
+				return tools.SuccessResult(result), nil
+
 			default:
 				return tools.ErrorResultf("unsupported info_type '%s'. Valid types: summary, locations", infoType), nil
 			}
-
-			// Check if wildcards are present
-			hasWildcards := false
-			if len(iocValue) > 0 {
-				hasWildcards = iocValue[0] == '*' || iocValue[len(iocValue)-1] == '*'
-			}
-
-			// Create the request
-			req := lc.InsightObjectsRequest{
-				IndicatorName:   iocValue,
-				ObjectType:      objectType,
-				ObjectTypeInfo:  objectTypeInfo,
-				IsCaseSensitive: false, // Default to case insensitive
-				AllowWildcards:  hasWildcards,
-				SearchInLogs:    false, // Default to searching in sensor data
-			}
-
-			// Use InsightObjectsPerObject if we want detailed per-object results
-			if objectTypeInfo == lc.InsightObjectTypeInfoTypes.Location {
-				resp, err := org.InsightObjectsPerObject(req)
-				if err != nil {
-					return tools.ErrorResultf("failed to search IOCs: %v", err), nil
-				}
-				return tools.SuccessResult(resp), nil
-			}
-
-			// Use InsightObjects for summary
-			resp, err := org.InsightObjects(req)
-			if err != nil {
-				return tools.ErrorResultf("failed to search IOCs: %v", err), nil
-			}
-
-			return tools.SuccessResult(resp), nil
 		},
 	})
 }
