@@ -6,8 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestTestTool is disabled because the tool registry is not exposed for testing
-// TODO: Implement proper integration tests for tool handlers
+// TestTestTool is disabled because the tool registry is not exposed for testing.
+// Note: Integration tests for tool handlers are implemented in internal/http/server_integration_test.go
 // func TestTestTool(t *testing.T) {
 // 	t.Run("returns success", func(t *testing.T) {
 // 		// Create auth context
