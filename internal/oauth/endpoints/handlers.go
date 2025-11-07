@@ -500,8 +500,10 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	}
 	expiresAt := time.Now().Unix() + expiresIn
 
-	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
-	h.logger.Info("Storing authorization code after MFA", "uid", resp.LocalID, "has_uid", resp.LocalID != "")
+	// Use LocalID from MFA session (captured during initial sign-in) since Firebase doesn't return it in MFA finalization
+	uid := mfaSession.LocalID
+	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, uid, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
+	h.logger.Info("Storing authorization code after MFA", "uid", uid, "has_uid", uid != "", "from_mfa_session", true)
 	h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData)
 
 	// Return JSON with redirect URL instead of HTTP redirect
