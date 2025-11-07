@@ -125,7 +125,9 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 
 		// Content Security Policy - strict default-src
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+		// NOTE: 'unsafe-inline' for script-src is needed for OAuth flow templates with inline JavaScript
+		// TODO: Consider migrating to nonce-based CSP or external JS files for better security
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none'")
 
 		// Referrer policy - limit information leakage
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
