@@ -301,6 +301,9 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Log what we retrieved from the authorization code
+	h.logger.Info("Retrieved authorization code", "uid", authCode.UID, "has_uid", authCode.UID != "", "scope", authCode.Scope)
+
 	// Validate PKCE
 	if !h.validatePKCE(codeVerifier, *authCode.CodeChallenge) {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidGrant, "Invalid code verifier", http.StatusBadRequest))
@@ -475,6 +478,9 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 		return
 	}
 
+	// Log what Firebase returned to debug UID issues
+	h.logger.Info("MFA response received from Firebase", "local_id", resp.LocalID, "has_id_token", resp.IDToken != "", "has_refresh_token", resp.RefreshToken != "")
+
 	// Get and consume original OAuth state (MFA flow is completing)
 	oauthState, err := h.stateManager.ConsumeOAuthState(r.Context(), mfaSession.OAuthState)
 	if err != nil || oauthState == nil {
@@ -495,6 +501,7 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	expiresAt := time.Now().Unix() + expiresIn
 
 	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
+	h.logger.Info("Storing authorization code after MFA", "uid", resp.LocalID, "has_uid", resp.LocalID != "")
 	h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData)
 
 	// Return JSON with redirect URL instead of HTTP redirect
