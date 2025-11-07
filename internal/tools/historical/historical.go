@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -14,10 +17,64 @@ import (
 func init() {
 	// Register historical data tools
 	RegisterRunLCQLQuery()
+	RegisterRunLCQLQueryFree()
 	RegisterGetHistoricDetections()
 	RegisterSearchIOCs()
 	RegisterBatchSearchIOCs()
 	RegisterGetTimeWhenSensorHasData()
+}
+
+// timeframePattern matches LCQL timeframe patterns like -30d, -24h, -30m
+var timeframePattern = regexp.MustCompile(`^-(\d+)([mhd])\s*\|?`)
+
+// parseTimeframe extracts and validates a timeframe from an LCQL query
+// Returns: hasTimeframe, daysEquivalent, error
+func parseTimeframe(query string) (bool, float64, error) {
+	query = strings.TrimSpace(query)
+	matches := timeframePattern.FindStringSubmatch(query)
+	if len(matches) == 0 {
+		return false, 0, nil
+	}
+
+	value, err := strconv.ParseFloat(matches[1], 64)
+	if err != nil {
+		return false, 0, fmt.Errorf("invalid timeframe value: %v", err)
+	}
+
+	unit := matches[2]
+	var days float64
+
+	switch unit {
+	case "m": // minutes
+		days = value / (60 * 24)
+	case "h": // hours
+		days = value / 24
+	case "d": // days
+		days = value
+	default:
+		return false, 0, fmt.Errorf("unsupported timeframe unit: %s", unit)
+	}
+
+	return true, days, nil
+}
+
+// validateAndPrepareQuery validates the timeframe is within 30 days and prepares the query
+func validateAndPrepareQuery(query string) (string, error) {
+	hasTimeframe, days, err := parseTimeframe(query)
+	if err != nil {
+		return "", err
+	}
+
+	if hasTimeframe {
+		if days > 30 {
+			return "", fmt.Errorf("timeframe exceeds free tier limit of 30 days (%.1f days specified). Use 'run_lcql_query' for longer timeframes", days)
+		}
+		// Query already has a valid timeframe, use as-is
+		return query, nil
+	}
+
+	// No timeframe, prepend -30d
+	return "-30d | " + query, nil
 }
 
 // RegisterRunLCQLQuery registers the run_lcql_query tool
@@ -70,6 +127,123 @@ func RegisterRunLCQLQuery() {
 			// Create query request with cursor-based pagination
 			queryReq := lc.QueryRequest{
 				Query:  query,
+				Stream: stream,
+				Cursor: "-", // Enable cursor-based pagination
+			}
+
+			// Get query iterator
+			iter, err := org.QueryAll(queryReq)
+			if err != nil {
+				return tools.ErrorResultf("failed to create query iterator: %v", err), nil
+			}
+
+			// Collect results up to the limit
+			// Use reasonable initial capacity to avoid "makeslice: cap out of range" panic
+			// when limit is math.MaxInt (unlimited)
+			initialCap := 100
+			if limit != math.MaxInt && limit < 1000 {
+				initialCap = limit
+			}
+			results := make([]lc.Dict, 0, initialCap)
+			hasMore := false
+
+			for iter.HasMore() {
+				resp, err := iter.Next()
+				if err != nil {
+					return tools.ErrorResultf("failed to fetch query results: %v", err), nil
+				}
+
+				if resp == nil {
+					break
+				}
+
+				// Add results from this page
+				for _, result := range resp.Results {
+					if len(results) >= limit {
+						hasMore = true
+						break
+					}
+					results = append(results, result)
+				}
+
+				// Stop if we've reached the limit
+				if len(results) >= limit {
+					hasMore = true
+					break
+				}
+			}
+
+			// Check if there are more results available
+			if !hasMore && iter.HasMore() {
+				hasMore = true
+			}
+
+			response := map[string]interface{}{
+				"results":  results,
+				"has_more": hasMore,
+			}
+
+			return tools.SuccessResult(response), nil
+		},
+	})
+}
+
+// RegisterRunLCQLQueryFree registers the run_lcql_query_free tool (limited to 30 days)
+func RegisterRunLCQLQueryFree() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "run_lcql_query_free",
+		Description: "Run a LimaCharlie Query Language (LCQL) query limited to the last 30 days (free tier)",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("run_lcql_query_free",
+			mcp.WithDescription("Run a LimaCharlie Query Language (LCQL) query limited to the last 30 days (free tier). Automatically adds '-30d' timeframe if not specified. If a timeframe is provided, it must be <= 30 days."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("The LCQL query to run (without timeframe, or with timeframe <= 30 days)")),
+			mcp.WithNumber("limit",
+				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
+			mcp.WithString("stream",
+				mcp.Description("Stream to query: 'event', 'detect', or 'audit' (default: 'event')")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Extract query
+			query, ok := args["query"].(string)
+			if !ok || query == "" {
+				return tools.ErrorResult("query parameter is required"), nil
+			}
+
+			// Validate and prepare query with timeframe
+			preparedQuery, err := validateAndPrepareQuery(query)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
+			// Extract limit (unlimited if not specified)
+			limit := math.MaxInt
+			if limitFloat, ok := args["limit"].(float64); ok {
+				limit = int(limitFloat)
+			}
+
+			// Extract stream (default "event")
+			stream := "event"
+			if streamStr, ok := args["stream"].(string); ok && streamStr != "" {
+				stream = streamStr
+			}
+
+			// Validate stream parameter
+			if stream != "event" && stream != "detect" && stream != "audit" {
+				return tools.ErrorResultf("invalid stream '%s' specified. Must be one of: 'event', 'detect', 'audit'", stream), nil
+			}
+
+			// Get organization
+			org, err := tools.GetOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Create query request with cursor-based pagination
+			queryReq := lc.QueryRequest{
+				Query:  preparedQuery,
 				Stream: stream,
 				Cursor: "-", // Enable cursor-based pagination
 			}
