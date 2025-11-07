@@ -78,6 +78,3 @@ require (
 	google.golang.org/grpc v1.76.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
-
-// Use local SDK for development
-replace github.com/refractionPOINT/go-limacharlie/limacharlie => /home/maxime/goProjects/github.com/refractionPOINT/go-limacharlie/limacharlie
