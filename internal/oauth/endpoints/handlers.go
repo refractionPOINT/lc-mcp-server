@@ -444,9 +444,9 @@ func (h *Handlers) validatePKCE(verifier, challenge string) bool {
 
 func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method == http.MethodGet {
-		// Extract CSP nonce from context
+		// Extract CSP nonce from context (using plain string to match middleware)
 		nonce := ""
-		if n, ok := r.Context().Value(contextKey("csp_nonce")).(string); ok {
+		if n, ok := r.Context().Value("csp_nonce").(string); ok {
 			nonce = n
 		}
 
@@ -485,9 +485,9 @@ func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, se
 	// SECURITY FIX: Get current attempt count from Redis
 	attemptsUsed, _ := h.stateManager.GetMFAAttemptCount(r.Context(), sessionID)
 
-	// Extract CSP nonce from context
+	// Extract CSP nonce from context (using plain string to match middleware)
 	nonce := ""
-	if n, ok := r.Context().Value(contextKey("csp_nonce")).(string); ok {
+	if n, ok := r.Context().Value("csp_nonce").(string); ok {
 		nonce = n
 	}
 

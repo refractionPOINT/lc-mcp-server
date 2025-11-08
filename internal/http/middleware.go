@@ -121,8 +121,8 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		// Generate CSP nonce for this request
 		nonce := generateCSPNonce()
 
-		// Store nonce in context for template access
-		ctx := context.WithValue(r.Context(), contextKey("csp_nonce"), nonce)
+		// Store nonce in context for template access (using plain string to allow cross-package access)
+		ctx := context.WithValue(r.Context(), "csp_nonce", nonce)
 
 		// Prevent MIME type sniffing
 		w.Header().Set("X-Content-Type-Options", "nosniff")
