@@ -41,7 +41,7 @@ func ExchangeFirebaseTokenForJWT(firebaseIDToken, oid string, logger *slog.Logge
 	formData := url.Values{}
 	formData.Set("fb_auth", firebaseIDToken)
 
-	if oid != "" && oid != "-" {
+	if oid != "" {
 		formData.Set("oid", oid)
 	}
 
