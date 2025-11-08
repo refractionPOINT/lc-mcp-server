@@ -135,7 +135,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 
 		// SECURITY FIX: Content Security Policy with nonce (removed 'unsafe-inline' for scripts)
 		// Nonce-based CSP provides strong protection against XSS attacks
-		csp := fmt.Sprintf("default-src 'self'; script-src 'self' 'nonce-%s'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none'", nonce)
+		csp := fmt.Sprintf("default-src 'self'; script-src 'self' 'nonce-%s'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com; img-src 'self' data:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none'", nonce)
 		w.Header().Set("Content-Security-Policy", csp)
 
 		// Referrer policy - limit information leakage
