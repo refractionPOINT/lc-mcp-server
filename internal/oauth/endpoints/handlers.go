@@ -1,6 +1,7 @@
 package endpoints
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -8,7 +9,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
@@ -18,31 +18,47 @@ import (
 	"log/slog"
 )
 
+// contextKey is a type for context keys to avoid collisions
+type contextKey string
+
 // Handlers contains all OAuth endpoint handlers
 type Handlers struct {
-	stateManager     *state.Manager
-	tokenManager     *token.Manager
-	firebaseClient   *firebase.Client
-	metadataProvider *metadata.Provider
-	logger           *slog.Logger
-	templates        *template.Template
+	stateManager        *state.Manager
+	tokenManager        *token.Manager
+	firebaseClient      *firebase.Client
+	metadataProvider    *metadata.Provider
+	logger              *slog.Logger
+	templates           *template.Template
+	allowedRedirectURIs []string // Whitelist of allowed redirect URIs for security
 }
 
 // NewHandlers creates new OAuth endpoint handlers
-func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, logger *slog.Logger) (*Handlers, error) {
+func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, logger *slog.Logger, allowedRedirectURIs []string) (*Handlers, error) {
 	// Load templates from files
 	tmpl, err := template.ParseGlob("templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse templates: %w", err)
 	}
 
+	// Validate that at least some redirect URIs are configured
+	if len(allowedRedirectURIs) == 0 {
+		logger.Warn("No allowed redirect URIs configured - defaulting to localhost only")
+		allowedRedirectURIs = []string{
+			"http://localhost/callback",
+			"http://127.0.0.1/callback",
+		}
+	}
+
+	logger.Info("OAuth handlers initialized with redirect URI whitelist", "count", len(allowedRedirectURIs))
+
 	return &Handlers{
-		stateManager:     stateManager,
-		tokenManager:     tokenManager,
-		firebaseClient:   firebaseClient,
-		metadataProvider: metadataProvider,
-		logger:           logger,
-		templates:        tmpl,
+		stateManager:        stateManager,
+		tokenManager:        tokenManager,
+		firebaseClient:      firebaseClient,
+		metadataProvider:    metadataProvider,
+		logger:              logger,
+		templates:           tmpl,
+		allowedRedirectURIs: allowedRedirectURIs,
 	}, nil
 }
 
@@ -80,10 +96,11 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate redirect URI (must be localhost or HTTPS - matches Python implementation)
-	if !isValidRedirectURI(redirectURI) {
-		h.logger.Warn("Invalid redirect_uri (must be localhost or HTTPS)", "uri", redirectURI)
-		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri must be localhost or HTTPS", http.StatusBadRequest))
+	// SECURITY FIX: Validate redirect URI against whitelist with exact match
+	// Prevents open redirect attacks (e.g., https://evil.com)
+	if !h.isValidRedirectURI(r.Context(), redirectURI, clientID) {
+		h.logger.Warn("Invalid redirect_uri (not in whitelist)", "uri", redirectURI, "client_id", clientID)
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri not allowed for this client", http.StatusBadRequest))
 		return
 	}
 
@@ -186,33 +203,28 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	params, _ := url.ParseQuery(queryString)
 	firebaseState := params.Get("state")
 
-	// Get OAuth state from Firebase state mapping
-	stateData, _ := h.stateManager.ConsumeSelectionSession(r.Context(), "oauth:state:"+firebaseState)
-	if stateData == nil {
-		h.logger.Error("OAuth state not found for Firebase state")
+	if firebaseState == "" {
+		h.logger.Error("Missing Firebase state in callback")
+		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>Missing state parameter</p>")
+		return
+	}
+
+	// SECURITY FIX: Atomically consume all OAuth state mappings to prevent TOCTOU race conditions
+	// This prevents attacks where an attacker tries to reuse state mappings between check and use
+	oauthStateParam, sessionID, err := h.stateManager.ConsumeOAuthStateMappings(r.Context(), firebaseState)
+	if err != nil {
+		h.logger.Error("Failed to consume OAuth state mappings", "error", err, "firebase_state", firebaseState)
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>State expired or invalid</p>")
 		return
 	}
 
-	oauthStateParam := stateData["oauth_state"]
-
 	// Get OAuth state (don't consume yet - may need it for MFA flow)
 	oauthState, err := h.stateManager.GetOAuthState(r.Context(), oauthStateParam)
 	if err != nil || oauthState == nil {
-		h.logger.Error("Failed to get OAuth state")
+		h.logger.Error("Failed to get OAuth state", "error", err, "oauth_state", oauthStateParam)
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>State expired</p>")
 		return
 	}
-
-	// Get Firebase session ID
-	sessionData, _ := h.stateManager.ConsumeSelectionSession(r.Context(), "oauth:fbsession:"+firebaseState)
-	if sessionData == nil {
-		h.logger.Error("Firebase session not found")
-		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>Session expired</p>")
-		return
-	}
-
-	sessionID := sessionData["session_id"]
 
 	// Sign in with IdP
 	requestURI := h.metadataProvider.GetServerURL() + "/oauth/callback"
@@ -286,10 +298,10 @@ func (h *Handlers) HandleToken(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.Request) {
 	code := r.FormValue("code")
 	redirectURI := r.FormValue("redirect_uri")
-	_ = r.FormValue("client_id") // client_id validation not implemented
+	clientID := r.FormValue("client_id")
 	codeVerifier := r.FormValue("code_verifier")
 
-	if code == "" || redirectURI == "" || codeVerifier == "" {
+	if code == "" || redirectURI == "" || codeVerifier == "" || clientID == "" {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Missing required parameters", http.StatusBadRequest))
 		return
 	}
@@ -301,8 +313,31 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// SECURITY FIX: Validate client_id matches the one from authorization request
+	// Prevents authorization code theft attacks where attacker uses stolen code with different client
+	if clientID != authCode.ClientID {
+		h.logger.Warn("Client ID mismatch in token exchange",
+			"expected", authCode.ClientID,
+			"received", clientID,
+			"code", code[:10]+"...")
+		WriteOAuthError(w, NewOAuthError(ErrInvalidGrant, "Invalid client credentials", http.StatusBadRequest))
+		return
+	}
+
+	// SECURITY FIX: Validate redirect_uri matches the one from authorization request
+	// Prevents redirect URI manipulation attacks during token exchange
+	if redirectURI != authCode.RedirectURI {
+		h.logger.Warn("Redirect URI mismatch in token exchange",
+			"expected", authCode.RedirectURI,
+			"received", redirectURI,
+			"client_id", clientID,
+			"code", code[:10]+"...")
+		WriteOAuthError(w, NewOAuthError(ErrInvalidGrant, "redirect_uri mismatch", http.StatusBadRequest))
+		return
+	}
+
 	// Log what we retrieved from the authorization code
-	h.logger.Info("Retrieved authorization code", "uid", authCode.UID, "has_uid", authCode.UID != "", "scope", authCode.Scope)
+	h.logger.Info("Retrieved authorization code", "uid", authCode.UID, "has_uid", authCode.UID != "", "scope", authCode.Scope, "client_id", clientID)
 
 	// Validate PKCE
 	if !h.validatePKCE(codeVerifier, *authCode.CodeChallenge) {
@@ -409,10 +444,18 @@ func (h *Handlers) validatePKCE(verifier, challenge string) bool {
 
 func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Request, sessionID string) {
 	if r.Method == http.MethodGet {
+		// Extract CSP nonce from context
+		nonce := ""
+		if n, ok := r.Context().Value(contextKey("csp_nonce")).(string); ok {
+			nonce = n
+		}
+
 		data := struct {
 			SessionID string
+			CSPNonce  string
 		}{
 			SessionID: sessionID,
+			CSPNonce:  nonce,
 		}
 		h.templates.ExecuteTemplate(w, "select_provider.html", data)
 	} else {
@@ -439,29 +482,70 @@ func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, se
 		email = mfaSession.Email
 	}
 
+	// SECURITY FIX: Get current attempt count from Redis
+	attemptsUsed, _ := h.stateManager.GetMFAAttemptCount(r.Context(), sessionID)
+
+	// Extract CSP nonce from context
+	nonce := ""
+	if n, ok := r.Context().Value(contextKey("csp_nonce")).(string); ok {
+		nonce = n
+	}
+
 	data := struct {
 		SessionID         string
 		Email             string
 		MaxAttempts       int
 		AttemptCount      int
 		AttemptsRemaining int
+		CSPNonce          string
 	}{
 		SessionID:         sessionID,
 		Email:             email,
-		MaxAttempts:       3,
-		AttemptCount:      0,
-		AttemptsRemaining: 3,
+		MaxAttempts:       state.MaxMFAAttempts,
+		AttemptCount:      attemptsUsed,
+		AttemptsRemaining: state.MaxMFAAttempts - attemptsUsed,
+		CSPNonce:          nonce,
 	}
 	h.templates.ExecuteTemplate(w, "mfa_challenge.html", data)
 }
 
 func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessionID, code string) {
-	mfaSession, _ := h.stateManager.ConsumeMFASession(r.Context(), sessionID)
-	if mfaSession == nil {
+	// SECURITY FIX: Check and increment attempts BEFORE processing MFA verification
+	// This prevents brute force attacks on MFA codes
+	attempts, err := h.stateManager.IncrementMFAAttempts(r.Context(), sessionID)
+	if err != nil {
+		h.logger.Error("Failed to increment MFA attempts", "error", err, "session_id", sessionID)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success":           false,
+			"error":             "server_error",
+			"error_description": "Failed to process MFA attempt",
+		})
+		return
+	}
+
+	// SECURITY FIX: Check if max attempts exceeded
+	if attempts > state.MaxMFAAttempts {
+		h.logger.Warn("MFA max attempts exceeded", "session_id", sessionID, "attempts", attempts)
+
+		// Consume (delete) the MFA session to prevent further attempts
+		h.stateManager.ConsumeMFASession(r.Context(), sessionID)
+
+		writeJSON(w, http.StatusForbidden, map[string]interface{}{
+			"success":           false,
+			"error":             "too_many_attempts",
+			"error_description": "Maximum verification attempts exceeded. Please restart authentication.",
+		})
+		return
+	}
+
+	// Get MFA session (non-destructive read for now)
+	mfaSession, err := h.stateManager.GetMFASession(r.Context(), sessionID)
+	if mfaSession == nil || err != nil {
+		h.logger.Error("MFA session not found or invalid", "session_id", sessionID, "error", err)
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"success":           false,
 			"error":             "invalid_request",
-			"error_description": "Session expired or invalid",
+			"error_description": "Session expired or invalid. Please restart authentication.",
 		})
 		return
 	}
@@ -469,11 +553,18 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	// Verify MFA code
 	resp, err := h.firebaseClient.FinalizeMFASignIn(r.Context(), mfaSession.MFAPendingCredential, mfaSession.MFAEnrollmentID, code)
 	if err != nil {
-		h.logger.Error("MFA verification failed", "error", err, "session_id", sessionID)
+		h.logger.Error("MFA verification failed",
+			"error", err,
+			"session_id", sessionID,
+			"attempt", attempts,
+			"remaining", state.MaxMFAAttempts-attempts)
+
+		// SECURITY FIX: Include attempts info in error response
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"success":           false,
-			"error":             "invalid_code",
-			"error_description": "Invalid verification code. Please try again.",
+			"success":            false,
+			"error":              "invalid_code",
+			"error_description":  fmt.Sprintf("Invalid verification code. %d attempt(s) remaining.", state.MaxMFAAttempts-attempts),
+			"attempts_remaining": state.MaxMFAAttempts - attempts,
 		})
 		return
 	}
@@ -582,6 +673,9 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 		"session_id", sessionID)
 	h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData)
 
+	// SECURITY FIX: Consume MFA session on success to clean up session and attempt counter
+	h.stateManager.ConsumeMFASession(r.Context(), sessionID)
+
 	// Return JSON with redirect URL instead of HTTP redirect
 	redirectURL := oauthState.RedirectURI + "?code=" + authCode + "&state=" + oauthState.State
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -632,13 +726,37 @@ func (h *Handlers) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate redirect URIs (must be localhost or HTTPS)
+	// SECURITY FIX: Validate redirect URIs with proper URL parsing
+	// Only allow localhost (HTTP) or HTTPS URIs, with proper host validation
 	for _, uri := range req.RedirectURIs {
-		if !isValidRedirectURI(uri) {
+		u, err := url.Parse(uri)
+		if err != nil || u.Host == "" {
 			h.logger.Warn("Invalid redirect URI in registration", "uri", uri, "client_name", req.ClientName)
 			WriteOAuthError(w, NewOAuthError(
 				"invalid_redirect_uri",
-				fmt.Sprintf("Invalid redirect_uri: %s (must be localhost or HTTPS)", uri),
+				fmt.Sprintf("Invalid redirect_uri format: %s", uri),
+				http.StatusBadRequest,
+			))
+			return
+		}
+
+		// Only allow localhost or HTTPS for dynamic registration
+		if u.Scheme == "http" {
+			host := u.Hostname()
+			if host != "localhost" && host != "127.0.0.1" {
+				h.logger.Warn("HTTP redirect URI not allowed (only localhost)", "uri", uri, "client_name", req.ClientName)
+				WriteOAuthError(w, NewOAuthError(
+					"invalid_redirect_uri",
+					fmt.Sprintf("HTTP redirect URIs only allowed for localhost: %s", uri),
+					http.StatusBadRequest,
+				))
+				return
+			}
+		} else if u.Scheme != "https" {
+			h.logger.Warn("Invalid redirect URI scheme", "uri", uri, "scheme", u.Scheme, "client_name", req.ClientName)
+			WriteOAuthError(w, NewOAuthError(
+				"invalid_redirect_uri",
+				fmt.Sprintf("Only HTTP (localhost) and HTTPS schemes allowed: %s", uri),
 				http.StatusBadRequest,
 			))
 			return
@@ -676,10 +794,63 @@ func (h *Handlers) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, response)
 }
 
-// isValidRedirectURI validates redirect URIs for client registration
-func isValidRedirectURI(uri string) bool {
-	// Must be localhost or HTTPS
-	return strings.HasPrefix(uri, "http://localhost") ||
-		strings.HasPrefix(uri, "http://127.0.0.1") ||
-		strings.HasPrefix(uri, "https://")
+// isValidRedirectURI validates redirect URIs against whitelist and registered clients
+// SECURITY FIX: Now uses exact match against whitelist instead of accepting any HTTPS URL
+func (h *Handlers) isValidRedirectURI(ctx context.Context, uri string, clientID string) bool {
+	// Parse URL for validation
+	u, err := url.Parse(uri)
+	if err != nil {
+		h.logger.Warn("Invalid redirect URI format", "uri", uri, "error", err)
+		return false
+	}
+
+	// Check for open redirect patterns
+	if u.Host == "" {
+		h.logger.Warn("Redirect URI missing host", "uri", uri)
+		return false
+	}
+
+	// If dynamic client registration is being used, check registered URIs first
+	if clientID != "" {
+		client, err := h.stateManager.GetClientRegistration(ctx, clientID)
+		if err == nil && client != nil {
+			for _, allowedURI := range client.RedirectURIs {
+				if uri == allowedURI { // Exact match
+					h.logger.Debug("Redirect URI matched registered client URI", "uri", uri, "client_id", clientID)
+					return true
+				}
+			}
+			// If client is registered but URI doesn't match, deny
+			h.logger.Warn("Redirect URI not in client registration", "uri", uri, "client_id", clientID)
+			return false
+		}
+	}
+
+	// Check against global allowed redirect URIs (exact match)
+	for _, allowedURI := range h.allowedRedirectURIs {
+		if uri == allowedURI {
+			return true
+		}
+	}
+
+	// Special case: localhost/127.0.0.1 with proper validation
+	if u.Scheme == "http" {
+		host := u.Hostname() // Use Hostname() to strip port
+		if host == "localhost" || host == "127.0.0.1" {
+			// Only allow if there's a localhost entry in allowed URIs
+			for _, allowedURI := range h.allowedRedirectURIs {
+				allowedURL, _ := url.Parse(allowedURI)
+				if allowedURL != nil {
+					allowedHost := allowedURL.Hostname()
+					if allowedHost == "localhost" || allowedHost == "127.0.0.1" {
+						h.logger.Debug("Allowing localhost redirect", "uri", uri)
+						return true
+					}
+				}
+			}
+		}
+	}
+
+	h.logger.Warn("Redirect URI not in whitelist", "uri", uri, "allowed_count", len(h.allowedRedirectURIs))
+	return false
 }

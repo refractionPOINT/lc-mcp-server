@@ -87,13 +87,14 @@ func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsMa
 	// Initialize rate limiter
 	rateLimiter := ratelimit.NewLimiter(redisClient, logger)
 
-	// Initialize OAuth handlers
+	// Initialize OAuth handlers with redirect URI whitelist
 	oauthHandlers, err := endpoints.NewHandlers(
 		stateManager,
 		tokenManager,
 		firebaseClient,
 		metadataProvider,
 		logger,
+		cfg.OAuth.AllowedRedirectURIs,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OAuth handlers: %w", err)

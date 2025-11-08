@@ -37,16 +37,14 @@ type TokenEncryption struct {
 }
 
 // NewTokenEncryption creates a new token encryption instance
+// SECURITY FIX: Encryption is now MANDATORY - returns error if REDIS_ENCRYPTION_KEY not set
 func NewTokenEncryption(logger *slog.Logger) (*TokenEncryption, error) {
 	// Get encryption key from environment
 	keyB64 := os.Getenv("REDIS_ENCRYPTION_KEY")
 
 	if keyB64 == "" {
-		logger.Warn("REDIS_ENCRYPTION_KEY not set - token encryption DISABLED (security risk)")
-		return &TokenEncryption{
-			enabled: false,
-			logger:  logger,
-		}, nil
+		// SECURITY FIX: Return error instead of continuing without encryption
+		return nil, fmt.Errorf("REDIS_ENCRYPTION_KEY environment variable is required for security (must be base64-encoded 32-byte key). Generate with: openssl rand -base64 32")
 	}
 
 	// Decode base64 key
@@ -87,12 +85,8 @@ func (te *TokenEncryption) IsEnabled() bool {
 
 // Encrypt encrypts a plaintext token
 // Returns base64-encoded ciphertext with format: base64(nonce || ciphertext || tag)
+// SECURITY FIX: Encryption is always enabled - no bypass allowed
 func (te *TokenEncryption) Encrypt(plaintext string) (string, error) {
-	if !te.enabled {
-		// If encryption disabled, return plaintext
-		return plaintext, nil
-	}
-
 	if plaintext == "" {
 		return "", nil
 	}
@@ -119,12 +113,8 @@ func (te *TokenEncryption) Encrypt(plaintext string) (string, error) {
 }
 
 // Decrypt decrypts a base64-encoded ciphertext
+// SECURITY FIX: Encryption is always enabled - no bypass allowed
 func (te *TokenEncryption) Decrypt(ciphertextB64 string) (string, error) {
-	if !te.enabled {
-		// If encryption disabled, return ciphertext as-is
-		return ciphertextB64, nil
-	}
-
 	if ciphertextB64 == "" {
 		return "", nil
 	}

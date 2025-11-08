@@ -3,7 +3,9 @@ package http
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -113,8 +115,15 @@ func (s *Server) bodySizeLimitMiddleware(next http.Handler) http.Handler {
 }
 
 // securityHeadersMiddleware adds security headers to all responses
+// SECURITY FIX: Now uses CSP nonces instead of 'unsafe-inline' for better security
 func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Generate CSP nonce for this request
+		nonce := generateCSPNonce()
+
+		// Store nonce in context for template access
+		ctx := context.WithValue(r.Context(), contextKey("csp_nonce"), nonce)
+
 		// Prevent MIME type sniffing
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 
@@ -124,10 +133,10 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 		// Enable browser XSS protection
 		w.Header().Set("X-XSS-Protection", "1; mode=block")
 
-		// Content Security Policy - strict default-src
-		// NOTE: 'unsafe-inline' for script-src is needed for OAuth flow templates with inline JavaScript
-		// TODO: Consider migrating to nonce-based CSP or external JS files for better security
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none'")
+		// SECURITY FIX: Content Security Policy with nonce (removed 'unsafe-inline' for scripts)
+		// Nonce-based CSP provides strong protection against XSS attacks
+		csp := fmt.Sprintf("default-src 'self'; script-src 'self' 'nonce-%s'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com; connect-src 'self'; frame-ancestors 'none'", nonce)
+		w.Header().Set("Content-Security-Policy", csp)
 
 		// Referrer policy - limit information leakage
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -141,7 +150,7 @@ func (s *Server) securityHeadersMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
 		}
 
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -291,6 +300,13 @@ func generateRequestID() string {
 		return time.Now().Format("20060102150405")
 	}
 	return hex.EncodeToString(b)
+}
+
+// generateCSPNonce generates a random CSP nonce for Content Security Policy
+func generateCSPNonce() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 // getClientIP extracts the client IP from the request

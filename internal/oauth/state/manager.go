@@ -496,6 +496,55 @@ func (m *Manager) ConsumeSelectionSession(ctx context.Context, sessionID string)
 	return params, nil
 }
 
+// ConsumeOAuthStateMappings atomically consumes OAuth state and all related mappings
+// SECURITY FIX: Prevents TOCTOU race conditions during OAuth callback processing
+func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState string) (oauthState string, sessionID string, err error) {
+	// Build keys for atomic multi-get-and-delete
+	keys := []string{
+		SelectionPrefix + "oauth:state:" + firebaseState,
+		SelectionPrefix + "oauth:fbsession:" + firebaseState,
+	}
+
+	results, err := m.redis.AtomicMultiGetAndDelete(ctx, keys)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to consume OAuth state mappings: %w", err)
+	}
+
+	if len(results) != 2 {
+		return "", "", fmt.Errorf("unexpected number of results: %d", len(results))
+	}
+
+	// Parse OAuth state mapping
+	if results[0] != "" {
+		var stateData map[string]string
+		if err := json.Unmarshal([]byte(results[0]), &stateData); err == nil {
+			oauthState = stateData["oauth_state"]
+		}
+	}
+
+	// Parse session ID mapping
+	if results[1] != "" {
+		var sessionData map[string]string
+		if err := json.Unmarshal([]byte(results[1]), &sessionData); err == nil {
+			sessionID = sessionData["session_id"]
+		}
+	}
+
+	if oauthState == "" || sessionID == "" {
+		m.logger.Warn("OAuth state mappings incomplete",
+			"oauth_state", oauthState,
+			"session_id", sessionID,
+			"firebase_state", firebaseState)
+		return "", "", fmt.Errorf("invalid or incomplete OAuth state mappings")
+	}
+
+	m.logger.Debug("Atomically consumed OAuth state mappings",
+		"firebase_state", firebaseState,
+		"oauth_state", oauthState)
+
+	return oauthState, sessionID, nil
+}
+
 // ===== MFA Session Management =====
 
 // GenerateMFASessionID generates a session ID for MFA challenge
@@ -562,6 +611,20 @@ func (m *Manager) GetMFASession(ctx context.Context, sessionID string) (*MFASess
 	}
 
 	return &session, nil
+}
+
+// GetMFAAttemptCount retrieves the current attempt count without incrementing
+func (m *Manager) GetMFAAttemptCount(ctx context.Context, sessionID string) (int, error) {
+	counterKey := MFAPrefix + sessionID + ":attempts"
+
+	data, err := m.redis.Get(ctx, counterKey)
+	if err != nil || data == "" {
+		return 0, nil
+	}
+
+	var count int
+	fmt.Sscanf(data, "%d", &count)
+	return count, nil
 }
 
 // IncrementMFAAttempts atomically increments the MFA attempt counter
