@@ -199,6 +199,12 @@ func validateDRRule(org *lc.Organization, ruleYAML string) (bool, string) {
 		return false, fmt.Sprintf("invalid YAML: %v", err)
 	}
 
+	// Use the dict-based validation
+	return validateDRRuleDict(org, rule)
+}
+
+// validateDRRuleDict validates a D&R rule dict using the SDK
+func validateDRRuleDict(org *lc.Organization, rule lc.Dict) (bool, string) {
 	// Basic validation: should have either "detect" or "respond" or both
 	hasDetect := rule["detect"] != nil
 	hasRespond := rule["respond"] != nil

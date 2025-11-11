@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 	"gopkg.in/yaml.v3"
 )
@@ -202,6 +203,7 @@ func RegisterGenerateDRRuleDetection() {
 				if err := yaml.Unmarshal([]byte(generatedDetection), &parsedDetection); err != nil {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
 					fmt.Printf("D&R detection YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
+					fmt.Printf("AI generated detection YAML that failed parsing:\n%s\n", generatedDetection)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -220,11 +222,18 @@ func RegisterGenerateDRRuleDetection() {
 					continue
 				}
 
+				// Debug: print what the AI generated
+				fmt.Printf("AI generated detection YAML:\n%s\n", generatedDetection)
+
 				// Create a minimal D&R rule structure for validation
-				testRuleYAML := fmt.Sprintf("detect:\n%s\nrespond: []", generatedDetection)
+				// Use proper dict structure instead of string concatenation
+				testRule := lc.Dict{
+					"detect":  parsedDetection,
+					"respond": []interface{}{},
+				}
 
 				// Validate the rule
-				valid, validationError := validateDRRule(org, testRuleYAML)
+				valid, validationError := validateDRRuleDict(org, testRule)
 
 				if valid {
 					fmt.Printf("D&R detection validated successfully on attempt %d\n", iteration+1)
@@ -331,6 +340,7 @@ func RegisterGenerateDRRuleRespond() {
 				if err := yaml.Unmarshal([]byte(generatedRespond), &parsedRespond); err != nil {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
 					fmt.Printf("D&R respond YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
+					fmt.Printf("AI generated respond YAML that failed parsing:\n%s\n", generatedRespond)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -349,11 +359,18 @@ func RegisterGenerateDRRuleRespond() {
 					continue
 				}
 
+				// Debug: print what the AI generated
+				fmt.Printf("AI generated respond YAML:\n%s\n", generatedRespond)
+
 				// Create a minimal D&R rule for validation
-				testRuleYAML := fmt.Sprintf("detect: {}\nrespond:\n%s", generatedRespond)
+				// Use proper dict structure instead of string concatenation
+				testRule := lc.Dict{
+					"detect":  map[string]interface{}{},
+					"respond": parsedRespond,
+				}
 
 				// Validate the rule
-				valid, validationError := validateDRRule(org, testRuleYAML)
+				valid, validationError := validateDRRuleDict(org, testRule)
 
 				if valid {
 					fmt.Printf("D&R respond validated successfully on attempt %d\n", iteration+1)

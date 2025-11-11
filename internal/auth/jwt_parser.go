@@ -65,8 +65,8 @@ type LCClaims struct {
 }
 
 var (
-	apiPublicKey       *rsa.PublicKey
-	loadApiKeyOnce     sync.Once
+	apiPublicKey        *rsa.PublicKey
+	loadApiKeyOnce      sync.Once
 	errLoadingPublicKey error
 )
 
