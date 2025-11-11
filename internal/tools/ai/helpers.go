@@ -8,9 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/generative-ai-go/genai"
+	"google.golang.org/genai"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"google.golang.org/api/option"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,7 +58,12 @@ func getPromptTemplate(promptName string) (string, error) {
 	return strings.TrimSpace(string(content)), nil
 }
 
-// geminiResponse gets a response from Gemini API
+// ptr is a helper function to create a pointer to a value
+func ptr[T any](v T) *T {
+	return &v
+}
+
+// geminiResponse gets a response from Gemini API using the new official SDK
 func geminiResponse(ctx context.Context, messages []map[string]interface{}, systemPrompt string, modelName string, temperature float32) (string, error) {
 	startTime := time.Now()
 	defer func() {
@@ -73,30 +77,17 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 		return "", fmt.Errorf("GOOGLE_API_KEY environment variable not set")
 	}
 
-	// Create client
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	// Create client with new SDK
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{
+		APIKey:  apiKey,
+		Backend: genai.BackendGeminiAPI,
+	})
 	if err != nil {
 		return "", fmt.Errorf("failed to create Gemini client: %w", err)
 	}
-	defer client.Close()
 
-	// Get the model
-	model := client.GenerativeModel(modelName)
-
-	// Set temperature
-	model.Temperature = &temperature
-
-	// Set system instruction if provided
-	if systemPrompt != "" {
-		model.SystemInstruction = &genai.Content{
-			Parts: []genai.Part{genai.Text(systemPrompt)},
-		}
-	}
-
-	// Start chat session
-	cs := model.StartChat()
-
-	// Add message history (excluding the last user message which we'll send separately)
+	// Build chat history for the new SDK
+	var history []*genai.Content
 	for i := 0; i < len(messages)-1; i++ {
 		msg := messages[i]
 		role, ok := msg["role"].(string)
@@ -109,11 +100,11 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 			continue
 		}
 
-		var genaiParts []genai.Part
+		var genaiParts []*genai.Part
 		for _, part := range parts {
 			if partMap, ok := part.(map[string]interface{}); ok {
 				if text, ok := partMap["text"].(string); ok {
-					genaiParts = append(genaiParts, genai.Text(text))
+					genaiParts = append(genaiParts, &genai.Part{Text: text})
 				}
 			}
 		}
@@ -128,10 +119,28 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 			genaiRole = "model"
 		}
 
-		cs.History = append(cs.History, &genai.Content{
+		history = append(history, &genai.Content{
 			Parts: genaiParts,
 			Role:  genaiRole,
 		})
+	}
+
+	// Prepare generation config
+	config := &genai.GenerateContentConfig{
+		Temperature: ptr(temperature),
+	}
+
+	// Set system instruction if provided
+	if systemPrompt != "" {
+		config.SystemInstruction = &genai.Content{
+			Parts: []*genai.Part{{Text: systemPrompt}},
+		}
+	}
+
+	// Create chat with history and config
+	chat, err := client.Chats.Create(ctx, modelName, config, history)
+	if err != nil {
+		return "", fmt.Errorf("failed to create chat: %w", err)
 	}
 
 	// Get the last message (the current prompt)
@@ -141,34 +150,28 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 		return "", fmt.Errorf("invalid message format")
 	}
 
-	var genaiParts []genai.Part
+	var genaiParts []*genai.Part
 	for _, part := range parts {
 		if partMap, ok := part.(map[string]interface{}); ok {
 			if text, ok := partMap["text"].(string); ok {
-				genaiParts = append(genaiParts, genai.Text(text))
+				genaiParts = append(genaiParts, &genai.Part{Text: text})
 			}
 		}
 	}
 
 	// Send message and get response
-	resp, err := cs.SendMessage(ctx, genaiParts...)
+	resp, err := chat.Send(ctx, genaiParts...)
 	if err != nil {
 		return "", fmt.Errorf("failed to get Gemini response: %w", err)
 	}
 
-	// Extract text from response
-	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+	// Extract text from response using the Text() method
+	responseText := resp.Text()
+	if responseText == "" {
 		return "", fmt.Errorf("empty response from Gemini")
 	}
 
-	var responseText strings.Builder
-	for _, part := range resp.Candidates[0].Content.Parts {
-		if text, ok := part.(genai.Text); ok {
-			responseText.WriteString(string(text))
-		}
-	}
-
-	return strings.TrimSpace(responseText.String()), nil
+	return strings.TrimSpace(responseText), nil
 }
 
 // validateLCQLQuery validates an LCQL query using the SDK
