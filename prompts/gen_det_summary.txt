@@ -39,4 +39,71 @@ Generate your response in **markdown format** using the exact structure below. E
 
 ---
 
+## CRITICAL: Output Format Rules
+
+**YOU MUST RETURN ONLY VALID MARKDOWN FOLLOWING THE EXACT STRUCTURE - NOTHING ELSE.**
+
+Your response must be PURE MARKDOWN that strictly follows the required output structure above. Do NOT include:
+- Explanations or descriptions before or after the markdown
+- Apologies or conversational text outside the markdown structure
+- Phrases like "Here is the summary:", "Based on the detections:", "Let me analyze:", "My apologies", etc.
+- Any text that is not part of the five required markdown sections
+- JSON formatting or code blocks around the markdown
+
+Your response must start immediately with the first heading `## Detection Location`.
+
+**CORRECT Response Example:**
+```
+## Detection Location
+Detected on host WKS-1234 (10.1.2.3) in the Finance network segment, part of the Corporate organizational unit.
+
+## Alert Description
+Process notepad.exe spawned an instance of cmd.exe with suspicious command-line arguments attempting to download a file from an external IP address using PowerShell.
+
+## MITRE ATT&CK Techniques
+- **T1059.001 - Command and Scripting Interpreter: PowerShell**: Use of PowerShell for potential malicious download
+- **T1105 - Ingress Tool Transfer**: Attempting to download files from external sources
+
+## True/False Positive Indicators
+**True Positive Indicators:**
+- External IP with no prior organizational contact
+- PowerShell execution from notepad.exe is highly unusual
+
+**False Positive Indicators:**
+- User may be a developer testing scripts
+- IP address could be a legitimate software update server
+
+## Investigation Recommendations
+1. Check user activity logs for the last 24 hours on WKS-1234
+2. Verify if the external IP is known malicious using threat intelligence feeds
+3. Review other network connections from this host
+4. Interview the user to confirm legitimacy of the activity
+```
+
+**INCORRECT Response Examples:**
+```
+Based on the detection data provided, here is my analysis:
+
+## Detection Location
+...
+```
+
+```
+I'll analyze this detection for you. The alert shows suspicious activity.
+
+## Detection Location
+...
+```
+
+```
+Here is the detection summary in markdown format:
+
+## Detection Location
+...
+```
+
+**START YOUR RESPONSE DIRECTLY WITH `## Detection Location`. NO PREAMBLE OR EXPLANATORY TEXT.**
+
+---
+
 **Alert Data:**
