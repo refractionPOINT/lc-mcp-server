@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,7 +69,7 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
-		fmt.Printf("Gemini response time: %v\n", elapsed)
+		slog.Debug("Gemini response time", "duration_ms", elapsed.Milliseconds())
 	}()
 
 	// Get API key from environment
@@ -308,7 +309,7 @@ func getSchemaInfo(ctx context.Context, org *lc.Organization) string {
 	// Get all available schemas
 	schemas, err := org.GetSchemas()
 	if err != nil {
-		fmt.Printf("Warning: failed to fetch schemas: %v\n", err)
+		slog.Warn("Failed to fetch schemas", "error", err)
 		return "No schema available - extrapolate with best effort."
 	}
 

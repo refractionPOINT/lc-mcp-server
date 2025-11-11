@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -47,7 +48,7 @@ func RegisterGenerateLCQLQuery() {
 			}
 
 			startTime := time.Now()
-			fmt.Printf("Tool called: generate_lcql_query(query=%s)\n", query)
+			slog.Info("Tool called: generate_lcql_query", "query", query)
 
 			// Get the prompt template
 			promptTemplate, err := getPromptTemplate("gen_lcql")
@@ -73,7 +74,7 @@ func RegisterGenerateLCQLQuery() {
 			var lastError string
 
 			for iteration := 0; iteration < maxIterations; iteration++ {
-				fmt.Printf("LCQL generation attempt %d/%d\n", iteration+1, maxIterations)
+				slog.Debug("LCQL generation attempt", "iteration", iteration+1, "max", maxIterations)
 
 				// Get the generated query
 				response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
@@ -93,9 +94,8 @@ func RegisterGenerateLCQLQuery() {
 				valid, validationError := validateLCQLQuery(org, generatedQuery)
 
 				if valid {
-					fmt.Printf("LCQL query validated successfully on attempt %d\n", iteration+1)
 					elapsed := time.Since(startTime)
-					fmt.Printf("generate_lcql_query time: %v\n", elapsed)
+					slog.Info("LCQL query validated successfully", "iteration", iteration+1, "duration_ms", elapsed.Milliseconds())
 
 					return tools.SuccessResult(map[string]interface{}{
 						"query":       generatedQuery,
@@ -105,7 +105,7 @@ func RegisterGenerateLCQLQuery() {
 
 				// Query is invalid, prepare for next iteration
 				lastError = validationError
-				fmt.Printf("LCQL validation failed on attempt %d: %s\n", iteration+1, validationError)
+				slog.Debug("LCQL validation failed", "iteration", iteration+1, "error", validationError)
 
 				// Add the assistant's response and the validation error
 				messages = append(messages, map[string]interface{}{
@@ -126,7 +126,7 @@ func RegisterGenerateLCQLQuery() {
 
 			// All iterations failed
 			elapsed := time.Since(startTime)
-			fmt.Printf("generate_lcql_query time: %v\n", elapsed)
+			slog.Info("Failed to generate valid LCQL query", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error", lastError)
 
 			return tools.ErrorResultf("Failed to generate valid LCQL query after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
@@ -158,7 +158,7 @@ func RegisterGenerateDRRuleDetection() {
 			}
 
 			startTime := time.Now()
-			fmt.Printf("Tool called: generate_dr_rule_detection(query=%s)\n", query)
+			slog.Info("Tool called: generate_dr_rule_detection", "query", query)
 
 			// Get the prompt template
 			promptTemplate, err := getPromptTemplate("gen_dr_detect")
@@ -184,7 +184,7 @@ func RegisterGenerateDRRuleDetection() {
 			var lastError string
 
 			for iteration := 0; iteration < maxIterations; iteration++ {
-				fmt.Printf("D&R detection generation attempt %d/%d\n", iteration+1, maxIterations)
+				slog.Debug("D&R detection generation attempt", "iteration", iteration+1, "max", maxIterations)
 
 				// Get the generated detection
 				response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
@@ -199,7 +199,7 @@ func RegisterGenerateDRRuleDetection() {
 				var parsedDetection map[string]interface{}
 				if err := yaml.Unmarshal([]byte(generatedDetection), &parsedDetection); err != nil {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
-					fmt.Printf("D&R detection YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
+					slog.Debug("D&R detection YAML parsing failed", "iteration", iteration+1, "error", lastError)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -229,9 +229,8 @@ func RegisterGenerateDRRuleDetection() {
 				valid, validationError := validateDRRuleDict(org, testRule)
 
 				if valid {
-					fmt.Printf("D&R detection validated successfully on attempt %d\n", iteration+1)
 					elapsed := time.Since(startTime)
-					fmt.Printf("generate_dr_rule_detection time: %v\n", elapsed)
+					slog.Info("D&R detection validated successfully", "iteration", iteration+1, "duration_ms", elapsed.Milliseconds())
 
 					return tools.SuccessResult(map[string]interface{}{
 						"detection": generatedDetection,
@@ -240,7 +239,7 @@ func RegisterGenerateDRRuleDetection() {
 
 				// Rule is invalid
 				lastError = validationError
-				fmt.Printf("D&R detection validation failed on attempt %d: %s\n", iteration+1, validationError)
+				slog.Debug("D&R detection validation failed", "iteration", iteration+1, "error", validationError)
 
 				messages = append(messages, map[string]interface{}{
 					"role": "model",
@@ -260,7 +259,7 @@ func RegisterGenerateDRRuleDetection() {
 
 			// All iterations failed
 			elapsed := time.Since(startTime)
-			fmt.Printf("generate_dr_rule_detection time: %v\n", elapsed)
+			slog.Info("Failed to generate valid D&R detection", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error", lastError)
 
 			return tools.ErrorResultf("Failed to generate valid D&R detection after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
@@ -292,7 +291,7 @@ func RegisterGenerateDRRuleRespond() {
 			}
 
 			startTime := time.Now()
-			fmt.Printf("Tool called: generate_dr_rule_respond(query=%s)\n", query)
+			slog.Info("Tool called: generate_dr_rule_respond", "query", query)
 
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_dr_respond")
@@ -314,7 +313,7 @@ func RegisterGenerateDRRuleRespond() {
 			var lastError string
 
 			for iteration := 0; iteration < maxIterations; iteration++ {
-				fmt.Printf("D&R respond generation attempt %d/%d\n", iteration+1, maxIterations)
+				slog.Debug("D&R respond generation attempt", "iteration", iteration+1, "max", maxIterations)
 
 				// Get the generated respond
 				response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
@@ -329,7 +328,7 @@ func RegisterGenerateDRRuleRespond() {
 				var parsedRespond interface{}
 				if err := yaml.Unmarshal([]byte(generatedRespond), &parsedRespond); err != nil {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
-					fmt.Printf("D&R respond YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
+					slog.Debug("D&R respond YAML parsing failed", "iteration", iteration+1, "error", lastError)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -362,9 +361,8 @@ func RegisterGenerateDRRuleRespond() {
 				valid, validationError := validateDRRuleDict(org, testRule)
 
 				if valid {
-					fmt.Printf("D&R respond validated successfully on attempt %d\n", iteration+1)
 					elapsed := time.Since(startTime)
-					fmt.Printf("generate_dr_rule_respond time: %v\n", elapsed)
+					slog.Info("D&R respond validated successfully", "iteration", iteration+1, "duration_ms", elapsed.Milliseconds())
 
 					return tools.SuccessResult(map[string]interface{}{
 						"respond": generatedRespond,
@@ -373,7 +371,7 @@ func RegisterGenerateDRRuleRespond() {
 
 				// Rule is invalid
 				lastError = validationError
-				fmt.Printf("D&R respond validation failed on attempt %d: %s\n", iteration+1, validationError)
+				slog.Debug("D&R respond validation failed", "iteration", iteration+1, "error", validationError)
 
 				messages = append(messages, map[string]interface{}{
 					"role": "model",
@@ -393,7 +391,7 @@ func RegisterGenerateDRRuleRespond() {
 
 			// All iterations failed
 			elapsed := time.Since(startTime)
-			fmt.Printf("generate_dr_rule_respond time: %v\n", elapsed)
+			slog.Info("Failed to generate valid D&R respond", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error", lastError)
 
 			return tools.ErrorResultf("Failed to generate valid D&R respond after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
@@ -420,7 +418,7 @@ func RegisterGenerateSensorSelector() {
 			}
 
 			startTime := time.Now()
-			fmt.Printf("Tool called: generate_sensor_selector(query=%s)\n", query)
+			slog.Info("Tool called: generate_sensor_selector", "query", query)
 
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_sensor_selector")
@@ -452,7 +450,7 @@ func RegisterGenerateSensorSelector() {
 			}
 
 			elapsed := time.Since(startTime)
-			fmt.Printf("generate_sensor_selector time: %v\n", elapsed)
+			slog.Debug("generate_sensor_selector completed", "duration_ms", elapsed.Milliseconds())
 
 			return tools.SuccessResult(map[string]interface{}{
 				"selector":    selector,
@@ -482,7 +480,7 @@ func RegisterGeneratePythonPlaybook() {
 			}
 
 			startTime := time.Now()
-			fmt.Printf("Tool called: generate_python_playbook(query=%s)\n", query)
+			slog.Info("Tool called: generate_python_playbook", "query", query)
 
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_playbook")
@@ -512,7 +510,7 @@ func RegisterGeneratePythonPlaybook() {
 			playbook = strings.TrimSpace(playbook)
 
 			elapsed := time.Since(startTime)
-			fmt.Printf("generate_python_playbook time: %v\n", elapsed)
+			slog.Debug("generate_python_playbook completed", "duration_ms", elapsed.Milliseconds())
 
 			return tools.SuccessResult(map[string]interface{}{
 				"playbook": playbook,
@@ -541,7 +539,7 @@ func RegisterGenerateDetectionSummary() {
 			}
 
 			startTime := time.Now()
-			fmt.Printf("Tool called: generate_detection_summary\n")
+			slog.Info("Tool called: generate_detection_summary")
 
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_det_summary")
@@ -565,7 +563,7 @@ func RegisterGenerateDetectionSummary() {
 			}
 
 			elapsed := time.Since(startTime)
-			fmt.Printf("generate_detection_summary time: %v\n", elapsed)
+			slog.Debug("generate_detection_summary completed", "duration_ms", elapsed.Milliseconds())
 
 			return tools.SuccessResult(map[string]interface{}{
 				"summary": response,
