@@ -106,6 +106,9 @@ func RegisterGenerateLCQLQuery() {
 				// Query is invalid, prepare for next iteration
 				lastError = validationError
 				slog.Debug("LCQL validation failed", "iteration", iteration+1, "error", validationError)
+				fmt.Printf("LCQL validation failed on attempt %d: %s\n", iteration+1, lastError)
+				fmt.Printf("AI generated query that failed validation:\n%s\n", generatedQuery)
+				fmt.Printf("Original AI response before extraction:\n%s\n", response)
 
 				// Add the assistant's response and the validation error
 				messages = append(messages, map[string]interface{}{
@@ -118,7 +121,7 @@ func RegisterGenerateLCQLQuery() {
 					"role": "user",
 					"parts": []interface{}{
 						map[string]interface{}{
-							"text": fmt.Sprintf("The previous query generated was invalid with this error: %s\nPlease fix the query and try again.", validationError),
+							"text": fmt.Sprintf("The previous query generated was invalid with this error: %s\n\nCRITICAL REMINDER: You MUST follow the exact output format. Your response must start with the LCQL query on the FIRST LINE, followed by explanation. Do NOT include phrases like 'Here is the query:' or 'My apologies' before the query. START DIRECTLY WITH THE QUERY.", validationError),
 						},
 					},
 				})

@@ -269,6 +269,45 @@ Here is the schema for the relevant platform:
 
 {lcql_schema}
 
+## CRITICAL: Output Format Rules
+
+**YOU MUST FOLLOW THE EXACT OUTPUT FORMAT - NOTHING ELSE.**
+
+Your response must follow the exact format specified above: LCQL query on the first line, followed by explanation starting from the second line. Do NOT include:
+- Explanations or preamble before the query
+- Apologies or conversational text
+- Phrases like "Here is the query:", "Let me fix that:", "My apologies", etc.
+- Any text that is not part of the specified output format
+
+Your response must start immediately with the LCQL query on the first line (e.g., `-1h | plat == windows | * | / exists`).
+
+**CORRECT Response Example:**
+```
+-1h | plat == windows | NEW_PROCESS | event/FILE_PATH contains 'cmd.exe' | event/COMMAND_LINE
+
+**Query to find cmd.exe command lines in the last hour**
+* `-1h`: last hour
+* `plat == windows`: Windows sensors only
+* `NEW_PROCESS`: process creation events
+* `event/FILE_PATH contains 'cmd.exe'`: processes with cmd.exe in path
+* `event/COMMAND_LINE`: return command line field
+```
+
+**INCORRECT Response Examples:**
+```
+Here is the LCQL query you requested:
+-1h | plat == windows | NEW_PROCESS | event/FILE_PATH contains 'cmd.exe'
+...
+```
+
+```
+My apologies for the error. The corrected query is:
+-1h | plat == windows | NEW_PROCESS | event/FILE_PATH contains 'cmd.exe'
+...
+```
+
+**START YOUR RESPONSE DIRECTLY WITH THE LCQL QUERY ON THE FIRST LINE. NO PREAMBLE.**
+
 ## Task
 Generate an LCQL query based on the following description:
 
