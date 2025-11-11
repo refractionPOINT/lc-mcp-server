@@ -531,14 +531,14 @@ func RegisterGenerateDetectionSummary() {
 		RequiresOID: false,
 		Schema: mcp.NewTool("generate_detection_summary",
 			mcp.WithDescription("Generate a human-readable summary of detection data using Google Gemini AI"),
-			mcp.WithString("detections",
+			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("JSON string of detection data to summarize")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			detections, ok := args["detections"].(string)
-			if !ok || detections == "" {
-				return tools.ErrorResult("detections parameter is required"), nil
+			query, ok := args["query"].(string)
+			if !ok || query == "" {
+				return tools.ErrorResult("query parameter is required"), nil
 			}
 
 			startTime := time.Now()
@@ -555,7 +555,7 @@ func RegisterGenerateDetectionSummary() {
 				{
 					"role": "user",
 					"parts": []interface{}{
-						map[string]interface{}{"text": detections},
+						map[string]interface{}{"text": query},
 					},
 				},
 			}
