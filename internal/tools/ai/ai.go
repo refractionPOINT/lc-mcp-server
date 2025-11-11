@@ -200,8 +200,6 @@ func RegisterGenerateDRRuleDetection() {
 				if err := yaml.Unmarshal([]byte(generatedDetection), &parsedDetection); err != nil {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
 					fmt.Printf("D&R detection YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
-					fmt.Printf("AI generated detection YAML that failed parsing:\n%s\n", generatedDetection)
-					fmt.Printf("Original AI response before extraction:\n%s\n", response)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -219,9 +217,6 @@ func RegisterGenerateDRRuleDetection() {
 					})
 					continue
 				}
-
-				// Debug: print what the AI generated
-				fmt.Printf("AI generated detection YAML:\n%s\n", generatedDetection)
 
 				// Create a minimal D&R rule structure for validation
 				// Use proper dict structure instead of string concatenation
@@ -335,8 +330,6 @@ func RegisterGenerateDRRuleRespond() {
 				if err := yaml.Unmarshal([]byte(generatedRespond), &parsedRespond); err != nil {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
 					fmt.Printf("D&R respond YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
-					fmt.Printf("AI generated respond YAML that failed parsing:\n%s\n", generatedRespond)
-					fmt.Printf("Original AI response before extraction:\n%s\n", response)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -354,9 +347,6 @@ func RegisterGenerateDRRuleRespond() {
 					})
 					continue
 				}
-
-				// Debug: print what the AI generated
-				fmt.Printf("AI generated respond YAML:\n%s\n", generatedRespond)
 
 				// Create a minimal D&R rule for validation
 				// Use dummy detect component matching Python implementation
