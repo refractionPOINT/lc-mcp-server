@@ -177,8 +177,10 @@ func WithOID(ctx context.Context, oid string, logger *slog.Logger) (context.Cont
 	newAuth := auth.Clone()
 	newAuth.OID = oid
 
-	// In UID OAuth mode, regenerate JWT with the OID claim
+	// In UID OAuth mode with Firebase token, regenerate JWT with the OID claim
 	// This ensures the JWT contains the proper oid claim for API authorization
+	// For JWT passthrough mode (no Firebase token), just update the OID
+	// The JWT already has permissions, we just need to set the org context
 	if auth.Mode == AuthModeUIDOAuth && auth.FirebaseIDToken != "" {
 		if logger == nil {
 			logger = slog.Default()
@@ -196,6 +198,10 @@ func WithOID(ctx context.Context, oid string, logger *slog.Logger) (context.Cont
 		logger.Debug("Regenerated JWT with OID for org switching",
 			"oid", oid,
 			"jwt_prefix", safePrefix(limaCharlieJWT, 20))
+	} else if logger != nil {
+		// JWT passthrough mode - just update OID without regenerating JWT
+		logger.Debug("Using existing JWT with new OID (passthrough mode)",
+			"oid", oid)
 	}
 
 	return WithAuthContext(ctx, newAuth), nil

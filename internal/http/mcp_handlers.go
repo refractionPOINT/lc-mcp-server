@@ -140,6 +140,9 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
 	}
 
+	// JWT passthrough mode detection: no Firebase token means direct JWT
+	isJWTPassthrough := firebaseIDToken == ""
+
 	// Create request context with auth
 	ctx := r.Context()
 	ctx = auth.WithRequestID(ctx, requestID)
@@ -164,6 +167,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 				s.writeJSONRPCError(w, id, -32000, "Invalid OID", fmt.Sprintf("Failed to switch OID: %v", err))
 				return
 			}
+		} else if isJWTPassthrough {
+			// JWT passthrough mode requires OID in tool arguments
+			s.writeJSONRPCError(w, id, -32602, "Missing parameter",
+				fmt.Sprintf("'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
+			return
 		}
 	}
 
@@ -226,6 +234,25 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 }
 
 func (s *Server) extractUIDFromToken(token string) (string, string, string, error) {
+	// Try parsing as LimaCharlie JWT first (for API gateway / internal services)
+	if auth.IsJWTFormat(token) {
+		claims, err := auth.ParseAndValidateLimaCharlieJWT(token)
+		if err == nil {
+			// Valid LimaCharlie JWT - passthrough mode
+			s.logger.Info("Authenticated via LimaCharlie JWT passthrough",
+				"uid", claims.UID,
+				"ident", claims.Ident,
+				"is_user_token", claims.IsUserToken,
+				"oids", claims.OIDs)
+
+			// Return: (uid, jwt token itself, empty firebase token, nil)
+			// Empty firebase token signals JWT passthrough mode
+			return claims.UID, token, "", nil
+		}
+		s.logger.Debug("Not a valid LimaCharlie JWT, trying OAuth token validation", "error", err)
+	}
+
+	// Fall back to MCP OAuth access token validation (for external clients)
 	// SECURITY: Validate MCP OAuth access token (NOT Firebase token directly)
 	// The Bearer token here is the MCP-issued access token from /token endpoint
 
