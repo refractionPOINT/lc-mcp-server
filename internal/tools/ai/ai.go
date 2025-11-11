@@ -359,9 +359,12 @@ func RegisterGenerateDRRuleRespond() {
 				fmt.Printf("AI generated respond YAML:\n%s\n", generatedRespond)
 
 				// Create a minimal D&R rule for validation
-				// Use proper dict structure instead of string concatenation
+				// Use dummy detect component matching Python implementation
 				testRule := lc.Dict{
-					"detect":  map[string]interface{}{},
+					"detect": map[string]interface{}{
+						"op":   "exists",
+						"path": "/",
+					},
 					"respond": parsedRespond,
 				}
 
