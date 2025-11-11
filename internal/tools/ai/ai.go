@@ -192,11 +192,8 @@ func RegisterGenerateDRRuleDetection() {
 					return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
 				}
 
-				// Remove markdown formatting if present
-				generatedDetection := strings.TrimSpace(response)
-				generatedDetection = strings.ReplaceAll(generatedDetection, "```yaml", "")
-				generatedDetection = strings.ReplaceAll(generatedDetection, "```", "")
-				generatedDetection = strings.TrimSpace(generatedDetection)
+				// Clean markdown formatting from response
+				generatedDetection := cleanYAMLResponse(response)
 
 				// Try to parse the YAML first
 				var parsedDetection map[string]interface{}
@@ -204,6 +201,7 @@ func RegisterGenerateDRRuleDetection() {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
 					fmt.Printf("D&R detection YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
 					fmt.Printf("AI generated detection YAML that failed parsing:\n%s\n", generatedDetection)
+					fmt.Printf("Original AI response before extraction:\n%s\n", response)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -215,7 +213,7 @@ func RegisterGenerateDRRuleDetection() {
 						"role": "user",
 						"parts": []interface{}{
 							map[string]interface{}{
-								"text": fmt.Sprintf("The previous detection rule generated had invalid YAML syntax with this error: %s\nPlease fix the YAML syntax and try again.", lastError),
+								"text": fmt.Sprintf("The previous detection rule generated had invalid YAML syntax with this error: %s\n\nCRITICAL REMINDER: You MUST return ONLY valid YAML with NO explanations, apologies, or conversational text. Your response must start directly with the YAML (either a comment # or a field name like event:). Do NOT include phrases like 'Here is the YAML:' or 'My apologies'. Return PURE YAML ONLY.", lastError),
 							},
 						},
 					})
@@ -329,11 +327,8 @@ func RegisterGenerateDRRuleRespond() {
 					return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
 				}
 
-				// Remove markdown formatting
-				generatedRespond := strings.TrimSpace(response)
-				generatedRespond = strings.ReplaceAll(generatedRespond, "```yaml", "")
-				generatedRespond = strings.ReplaceAll(generatedRespond, "```", "")
-				generatedRespond = strings.TrimSpace(generatedRespond)
+				// Clean markdown formatting from response
+				generatedRespond := cleanYAMLResponse(response)
 
 				// Try to parse the YAML
 				var parsedRespond interface{}
@@ -341,6 +336,7 @@ func RegisterGenerateDRRuleRespond() {
 					lastError = fmt.Sprintf("Invalid YAML syntax: %v", err)
 					fmt.Printf("D&R respond YAML parsing failed on attempt %d: %s\n", iteration+1, lastError)
 					fmt.Printf("AI generated respond YAML that failed parsing:\n%s\n", generatedRespond)
+					fmt.Printf("Original AI response before extraction:\n%s\n", response)
 
 					messages = append(messages, map[string]interface{}{
 						"role": "model",
@@ -352,7 +348,7 @@ func RegisterGenerateDRRuleRespond() {
 						"role": "user",
 						"parts": []interface{}{
 							map[string]interface{}{
-								"text": fmt.Sprintf("The previous respond rule generated had invalid YAML syntax with this error: %s\nPlease fix the YAML syntax and try again.", lastError),
+								"text": fmt.Sprintf("The previous respond rule generated had invalid YAML syntax with this error: %s\n\nCRITICAL REMINDER: You MUST return ONLY valid YAML with NO explanations, apologies, or conversational text. Your response must start directly with the YAML (either a comment # or a list item -). Do NOT include phrases like 'Here is the YAML:' or 'My apologies'. Return PURE YAML ONLY.", lastError),
 							},
 						},
 					})

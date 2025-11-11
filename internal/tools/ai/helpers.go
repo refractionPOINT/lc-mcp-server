@@ -227,6 +227,16 @@ func validateDRRuleDict(org *lc.Organization, rule lc.Dict) (bool, string) {
 	return true, ""
 }
 
+// cleanYAMLResponse removes markdown formatting from AI-generated YAML
+func cleanYAMLResponse(response string) string {
+	// Remove markdown code fences and trim whitespace
+	response = strings.TrimSpace(response)
+	response = strings.ReplaceAll(response, "```yaml", "")
+	response = strings.ReplaceAll(response, "```yml", "")
+	response = strings.ReplaceAll(response, "```", "")
+	return strings.TrimSpace(response)
+}
+
 // schemaTypeCodeToString converts a schema type code to a string
 func schemaTypeCodeToString(code string) string {
 	switch code {
