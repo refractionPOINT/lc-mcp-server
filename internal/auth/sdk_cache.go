@@ -139,8 +139,10 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 			} else {
 				jwtPrefix = currentJWT
 			}
-			c.logger.Debug(fmt.Sprintf("Organization from cached client - OID: %s, JWT present: %t, JWT prefix: %s",
-				auth.OID, len(currentJWT) > 0, jwtPrefix))
+			c.logger.Debug("Organization from cached client",
+				"oid", auth.OID,
+				"jwt_present", len(currentJWT) > 0,
+				"jwt_prefix", jwtPrefix)
 
 			return org, nil
 		}
@@ -192,8 +194,10 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 	} else {
 		jwtPrefix = opts.JWT
 	}
-	c.logger.Debug(fmt.Sprintf("Created new SDK client - OID: %s, JWT present: %t, JWT prefix: %s",
-		auth.OID, len(opts.JWT) > 0, jwtPrefix))
+	c.logger.Debug("Created new SDK client",
+		"oid", auth.OID,
+		"jwt_present", len(opts.JWT) > 0,
+		"jwt_prefix", jwtPrefix)
 
 	// Cache the client instance (NOT the organization)
 	// Organization will be created fresh on each request to prevent Spout reuse
@@ -226,8 +230,10 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 	} else {
 		newJWTPrefix = currentJWT
 	}
-	c.logger.Debug(fmt.Sprintf("Organization from new client - OID: %s, JWT present: %t, JWT prefix: %s",
-		auth.OID, len(currentJWT) > 0, newJWTPrefix))
+	c.logger.Debug("Organization from new client",
+		"oid", auth.OID,
+		"jwt_present", len(currentJWT) > 0,
+		"jwt_prefix", newJWTPrefix)
 
 	return org, nil
 }

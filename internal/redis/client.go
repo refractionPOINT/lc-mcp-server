@@ -152,6 +152,10 @@ func (c *Client) TTL(ctx context.Context, key string) (time.Duration, error) {
 func (c *Client) AtomicGetAndDelete(ctx context.Context, key string) (string, error) {
 	result, err := c.atomicGetAndDelete.Run(ctx, c.client, []string{key}).Result()
 	if err != nil {
+		// redis.Nil means the key didn't exist, which is not an error for this operation
+		if err == redis.Nil {
+			return "", nil
+		}
 		return "", err
 	}
 

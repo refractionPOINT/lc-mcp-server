@@ -6,31 +6,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestTestTool is disabled because the tool registry is not exposed for testing.
-// Note: Integration tests for tool handlers are implemented in internal/http/server_integration_test.go
-// func TestTestTool(t *testing.T) {
-// 	t.Run("returns success", func(t *testing.T) {
-// 		// Create auth context
-// 		authCtx := &auth.AuthContext{
-// 			Mode:   auth.AuthModeNormal,
-// 			OID:    "test-org",
-// 			APIKey: "test-key-1234567890",
-// 		}
-// 		ctx := auth.WithAuthContext(context.Background(), authCtx)
-//
-// 		// Get test_tool registration
-// 		reg, ok := getToolRegistration("test_tool")
-// 		require.True(t, ok, "test_tool should be registered")
-//
-// 		// Call handler
-// 		result, err := reg.Handler(ctx, map[string]interface{}{})
-//
-// 		// Verify
-// 		require.NoError(t, err)
-// 		assert.NotNil(t, result)
-// 	})
-// }
-
 func TestMatchHostname(t *testing.T) {
 	tests := []struct {
 		name     string

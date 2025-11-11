@@ -254,8 +254,6 @@ func (c *Client) ValidateProviderCallback(callbackPath string) (string, error) {
 		return "", fmt.Errorf("OAuth error: %s - %s", errCode, errDesc)
 	}
 
-	// c.logger.WithField("params", len(params)).Debug("Validated provider callback")
-
 	return queryString, nil
 }
 

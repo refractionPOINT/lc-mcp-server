@@ -106,9 +106,6 @@ func RegisterGenerateLCQLQuery() {
 				// Query is invalid, prepare for next iteration
 				lastError = validationError
 				slog.Debug("LCQL validation failed", "iteration", iteration+1, "error", validationError)
-				fmt.Printf("LCQL validation failed on attempt %d: %s\n", iteration+1, lastError)
-				fmt.Printf("AI generated query that failed validation:\n%s\n", generatedQuery)
-				fmt.Printf("Original AI response before extraction:\n%s\n", response)
 
 				// Add the assistant's response and the validation error
 				messages = append(messages, map[string]interface{}{

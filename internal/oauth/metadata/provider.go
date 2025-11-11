@@ -151,8 +151,6 @@ func (p *Provider) GenerateWWWAuthenticateHeader(error, errorDescription, scope 
 	// Join all parts
 	header := strings.Join(parts, ", ")
 
-	// p.logger.WithField("header", header[:min(100, len(header))]).Debug("Generated WWW-Authenticate header")
-
 	return header
 }
 
