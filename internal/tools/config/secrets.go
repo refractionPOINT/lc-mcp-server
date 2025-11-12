@@ -39,7 +39,7 @@ func RegisterListSecrets() {
 			// List all secrets from the secret hive
 			secrets, err := hive.List(lc.HiveArgs{
 				HiveName:     "secret",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list secrets: %v", err), nil
@@ -89,7 +89,7 @@ func RegisterGetSecret() {
 			// Get secret value
 			secret, err := hive.Get(lc.HiveArgs{
 				HiveName:     "secret",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          secretName,
 			})
 			if err != nil {
@@ -151,7 +151,7 @@ func RegisterSetSecret() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     "secret",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          secretName,
 				Data: lc.Dict{
 					"value": secretValue,
@@ -200,7 +200,7 @@ func RegisterDeleteSecret() {
 			// Delete secret
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     "secret",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          secretName,
 			})
 			if err != nil {

@@ -41,7 +41,7 @@ func RegisterListLookups() {
 			// List all lookups from the lookup hive
 			lookups, err := hive.List(lc.HiveArgs{
 				HiveName:     "lookup",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list lookups: %v", err), nil
@@ -97,7 +97,7 @@ func RegisterGetLookup() {
 			// Get lookup table
 			lookup, err := hive.Get(lc.HiveArgs{
 				HiveName:     "lookup",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          lookupName,
 			})
 			if err != nil {
@@ -163,7 +163,7 @@ func RegisterSetLookup() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     "lookup",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          lookupName,
 				Data:         lc.Dict(lookupData),
 				Enabled:      &enabled,
@@ -210,7 +210,7 @@ func RegisterDeleteLookup() {
 			// Delete lookup table
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     "lookup",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          lookupName,
 			})
 			if err != nil {
@@ -263,7 +263,7 @@ func RegisterQueryLookup() {
 			// Get lookup table
 			lookup, err := hive.Get(lc.HiveArgs{
 				HiveName:     "lookup",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          lookupName,
 			})
 			if err != nil {
