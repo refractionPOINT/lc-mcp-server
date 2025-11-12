@@ -229,14 +229,8 @@ func TestAllow_FailOpen(t *testing.T) {
 	})
 }
 
-// NOTE: Reset tests are currently disabled due to a bug in the production code.
-// The Reset method uses redis.Del(ctx, pattern) but Redis DEL doesn't support patterns.
-// This needs to be fixed in the production code to use KEYS + DEL or SCAN + DEL.
-// See: internal/ratelimit/limiter.go:67-71
-//
-// TODO: Fix Reset() to properly delete keys matching pattern, then re-enable these tests
+// Reset tests - now fixed to use SCAN+DEL pattern via DeleteByPattern
 func TestReset(t *testing.T) {
-	t.Skip("Reset functionality is currently broken - DEL doesn't support patterns in Redis. Needs fix in production code.")
 
 	limiter, _ := setupTestLimiter(t)
 	ctx := context.Background()
@@ -356,6 +350,20 @@ func TestAllow_EdgeCases(t *testing.T) {
 		allowed, err := limiter.Allow(ctx, "test-short-window", cfg)
 		assert.NoError(t, err)
 		assert.True(t, allowed)
+	})
+
+	t.Run("rejects sub-second windows", func(t *testing.T) {
+		cfg := Config{
+			MaxRequests: 10,
+			Window:      500 * time.Millisecond, // Sub-second window
+		}
+
+		// Should return error for invalid window
+		allowed, err := limiter.Allow(ctx, "test-subsecond", cfg)
+		assert.Error(t, err, "Should error with sub-second window")
+		assert.Contains(t, err.Error(), "must be >= 1 second")
+		// Should still allow request (fail open)
+		assert.True(t, allowed, "Should fail open even with invalid config")
 	})
 
 	t.Run("handles empty key", func(t *testing.T) {

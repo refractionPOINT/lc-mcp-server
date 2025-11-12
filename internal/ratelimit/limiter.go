@@ -35,8 +35,15 @@ func (l *Limiter) Allow(ctx context.Context, key string, cfg Config) (bool, erro
 	// Use Redis INCR and EXPIRE for simple rate limiting
 	// This implements a fixed window counter
 
+	// Validate window to prevent divide-by-zero
+	windowSeconds := int64(cfg.Window.Seconds())
+	if windowSeconds == 0 {
+		l.logger.Error("Invalid rate limit window: must be at least 1 second", "window", cfg.Window)
+		return true, fmt.Errorf("invalid rate limit window: %v (must be >= 1 second)", cfg.Window)
+	}
+
 	// Generate Redis key with timestamp bucket
-	bucketKey := fmt.Sprintf("ratelimit:%s:%d", key, time.Now().Unix()/int64(cfg.Window.Seconds()))
+	bucketKey := fmt.Sprintf("ratelimit:%s:%d", key, time.Now().Unix()/windowSeconds)
 
 	// Increment counter
 	count, err := l.redis.Incr(ctx, bucketKey)
@@ -63,11 +70,12 @@ func (l *Limiter) Allow(ctx context.Context, key string, cfg Config) (bool, erro
 	return allowed, nil
 }
 
-// Reset clears rate limit for a key
+// Reset clears rate limit for a key by deleting all time buckets
+// Uses SCAN to safely iterate and delete matching keys without blocking Redis
 func (l *Limiter) Reset(ctx context.Context, key string) error {
 	// Delete all keys matching the pattern
 	pattern := fmt.Sprintf("ratelimit:%s:*", key)
-	return l.redis.Del(ctx, pattern)
+	return l.redis.DeleteByPattern(ctx, pattern)
 }
 
 // DefaultConfigs provides default rate limit configurations for different endpoint types

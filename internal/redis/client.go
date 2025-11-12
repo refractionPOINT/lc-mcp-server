@@ -225,6 +225,39 @@ func (c *Client) Health(ctx context.Context) (map[string]interface{}, error) {
 }
 
 // Close closes the Redis client
+// DeleteByPattern deletes all keys matching a pattern using SCAN for safety
+// This is safer than KEYS * which can block Redis on large datasets
+func (c *Client) DeleteByPattern(ctx context.Context, pattern string) error {
+	var cursor uint64
+	var deletedCount int64
+
+	for {
+		// SCAN with pattern matching
+		keys, nextCursor, err := c.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("failed to scan keys: %w", err)
+		}
+
+		// Delete matching keys in batches
+		if len(keys) > 0 {
+			deleted, err := c.client.Del(ctx, keys...).Result()
+			if err != nil {
+				return fmt.Errorf("failed to delete keys: %w", err)
+			}
+			deletedCount += deleted
+		}
+
+		// Check if scan is complete
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+
+	c.logger.Debug("Deleted keys by pattern", "pattern", pattern, "count", deletedCount)
+	return nil
+}
+
 func (c *Client) Close() error {
 	return c.client.Close()
 }
