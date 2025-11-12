@@ -25,7 +25,7 @@ type contextKey string
 type Handlers struct {
 	stateManager        *state.Manager
 	tokenManager        *token.Manager
-	firebaseClient      *firebase.Client
+	firebaseClient      firebase.ClientInterface
 	metadataProvider    *metadata.Provider
 	logger              *slog.Logger
 	templates           *template.Template
@@ -33,7 +33,7 @@ type Handlers struct {
 }
 
 // NewHandlers creates new OAuth endpoint handlers
-func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient *firebase.Client, metadataProvider *metadata.Provider, logger *slog.Logger, allowedRedirectURIs []string) (*Handlers, error) {
+func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, firebaseClient firebase.ClientInterface, metadataProvider *metadata.Provider, logger *slog.Logger, allowedRedirectURIs []string) (*Handlers, error) {
 	// Load templates from files
 	tmpl, err := template.ParseGlob("templates/*.html")
 	if err != nil {
@@ -327,11 +327,16 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 	// SECURITY FIX: Validate redirect_uri matches the one from authorization request
 	// Prevents redirect URI manipulation attacks during token exchange
 	if redirectURI != authCode.RedirectURI {
+		// Safely truncate code for logging (handle codes shorter than 10 chars)
+		codeLog := code
+		if len(code) > 10 {
+			codeLog = code[:10] + "..."
+		}
 		h.logger.Warn("Redirect URI mismatch in token exchange",
 			"expected", authCode.RedirectURI,
 			"received", redirectURI,
 			"client_id", clientID,
-			"code", code[:10]+"...")
+			"code", codeLog)
 		WriteOAuthError(w, NewOAuthError(ErrInvalidGrant, "redirect_uri mismatch", http.StatusBadRequest))
 		return
 	}

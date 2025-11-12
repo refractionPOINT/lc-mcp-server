@@ -28,6 +28,16 @@ const (
 	defaultTimeout = 10 * time.Second
 )
 
+// ClientInterface defines the interface for Firebase Authentication operations
+// This allows for mocking in tests
+type ClientInterface interface {
+	CreateAuthURI(ctx context.Context, providerID, redirectURI string, scopes []string) (sessionID, authURI string, err error)
+	SignInWithIdp(ctx context.Context, requestURI, queryString, sessionID, providerID string) (*SignInWithIdpResponse, error)
+	RefreshIDToken(ctx context.Context, refreshToken string) (idToken string, expiresAt int64, err error)
+	FinalizeMFASignIn(ctx context.Context, mfaPendingCredential, mfaEnrollmentID, verificationCode string) (*FinalizeMFAResponse, error)
+	ValidateProviderCallback(callbackPath string) (string, error)
+}
+
 // Client handles Firebase Authentication API interactions
 type Client struct {
 	apiKey     string

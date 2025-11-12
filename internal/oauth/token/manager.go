@@ -14,7 +14,7 @@ import (
 // Manager manages OAuth token validation and lifecycle
 type Manager struct {
 	stateManager   *state.Manager
-	firebaseClient *firebase.Client
+	firebaseClient firebase.ClientInterface
 	logger         *slog.Logger
 }
 
@@ -51,7 +51,7 @@ type IntrospectionResponse struct {
 }
 
 // NewManager creates a new OAuth token manager
-func NewManager(stateManager *state.Manager, firebaseClient *firebase.Client, logger *slog.Logger) *Manager {
+func NewManager(stateManager *state.Manager, firebaseClient firebase.ClientInterface, logger *slog.Logger) *Manager {
 	return &Manager{
 		stateManager:   stateManager,
 		firebaseClient: firebaseClient,
