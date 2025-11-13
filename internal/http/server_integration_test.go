@@ -20,6 +20,7 @@ import (
 	// Import tool packages to trigger init() registration
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/admin"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/ai"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/api"          // Generic API access tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/artifacts"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
@@ -602,6 +603,180 @@ func TestRootEndpointVersionInfo(t *testing.T) {
 	require.True(t, ok, "endpoints should be present in root response")
 	assert.NotEmpty(t, endpoints["mcp"])
 	assert.NotEmpty(t, endpoints["mcp_v1"])
+}
+
+// Test Profile-Based Tool Filtering
+func TestProfileBasedToolFiltering(t *testing.T) {
+	server := createTestServer(t)
+	// Clear the hardcoded profile to enable URL-based routing
+	server.profile = ""
+
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	}
+
+	body, err := json.Marshal(requestBody)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		path          string
+		expectedTools []string
+		description   string
+	}{
+		{
+			name:          "api_access profile returns only lc_api_call",
+			path:          "/mcp/api_access",
+			expectedTools: []string{"lc_api_call"},
+			description:   "api_access profile should return only the lc_api_call tool",
+		},
+		{
+			name:          "versioned api_access profile returns only lc_api_call",
+			path:          "/mcp/v1/api_access",
+			expectedTools: []string{"lc_api_call"},
+			description:   "versioned api_access profile should return only the lc_api_call tool",
+		},
+		{
+			name: "core profile returns only core tools",
+			path: "/mcp/core",
+			expectedTools: []string{
+				"test_tool",
+				"get_sensor_info",
+				"list_sensors",
+				"get_online_sensors",
+				"is_online",
+				"search_hosts",
+			},
+			description: "core profile should return only core tools",
+		},
+		{
+			name: "versioned core profile returns only core tools",
+			path: "/mcp/v1/core",
+			expectedTools: []string{
+				"test_tool",
+				"get_sensor_info",
+				"list_sensors",
+				"get_online_sensors",
+				"is_online",
+				"search_hosts",
+			},
+			description: "versioned core profile should return only core tools",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code, "Request should succeed")
+
+			var response map[string]interface{}
+			err = json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err, "Response should be valid JSON")
+
+			// Extract tools from response
+			result, ok := response["result"].(map[string]interface{})
+			require.True(t, ok, "Response should have result field")
+
+			toolsList, ok := result["tools"].([]interface{})
+			require.True(t, ok, "Result should have tools array")
+
+			// Extract tool names
+			toolNames := make([]string, len(toolsList))
+			for i, tool := range toolsList {
+				toolMap, ok := tool.(map[string]interface{})
+				require.True(t, ok, "Tool should be an object")
+				toolNames[i] = toolMap["name"].(string)
+			}
+
+			// Verify exact match of tools
+			assert.ElementsMatch(t, tt.expectedTools, toolNames,
+				"%s: expected %v, got %v", tt.description, tt.expectedTools, toolNames)
+		})
+	}
+}
+
+// Test Default Profile Returns All Tools
+func TestDefaultProfileReturnsAllTools(t *testing.T) {
+	server := createTestServer(t)
+	// Clear the hardcoded profile to enable URL-based routing
+	server.profile = ""
+
+	requestBody := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	}
+
+	body, err := json.Marshal(requestBody)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		path        string
+		description string
+	}{
+		{
+			name:        "root /mcp returns all tools",
+			path:        "/mcp",
+			description: "default /mcp endpoint should return all tools",
+		},
+		{
+			name:        "versioned /mcp/v1 returns all tools",
+			path:        "/mcp/v1",
+			description: "versioned /mcp/v1 endpoint should return all tools",
+		},
+		{
+			name:        "explicit all profile returns all tools",
+			path:        "/mcp/all",
+			description: "/mcp/all profile should return all tools",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			server.mux.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusOK, w.Code, "Request should succeed")
+
+			var response map[string]interface{}
+			err = json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err, "Response should be valid JSON")
+
+			// Extract tools from response
+			result, ok := response["result"].(map[string]interface{})
+			require.True(t, ok, "Response should have result field")
+
+			toolsList, ok := result["tools"].([]interface{})
+			require.True(t, ok, "Result should have tools array")
+
+			// Should return many tools (at least 50 based on profile definitions)
+			assert.Greater(t, len(toolsList), 50, "%s: should return many tools, got %d", tt.description, len(toolsList))
+
+			// Verify it includes tools from multiple profiles
+			toolNames := make(map[string]bool)
+			for _, tool := range toolsList {
+				toolMap, ok := tool.(map[string]interface{})
+				require.True(t, ok, "Tool should be an object")
+				toolNames[toolMap["name"].(string)] = true
+			}
+
+			// Check that it includes tools from different profiles
+			assert.True(t, toolNames["lc_api_call"], "Should include api_access profile tool")
+			assert.True(t, toolNames["get_sensor_info"], "Should include core profile tool")
+			assert.True(t, toolNames["run_lcql_query"], "Should include historical_data profile tool")
+		})
+	}
 }
 
 // Benchmark MCP Request Handling

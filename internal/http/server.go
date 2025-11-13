@@ -222,43 +222,30 @@ func (s *Server) parseToolsFromHeader(r *http.Request) ([]string, error) {
 // getToolsForRequest determines which tools should be available for this request
 // Returns tool names or error if validation fails
 func (s *Server) getToolsForRequest(r *http.Request) ([]string, error) {
-	// Check if profile is explicitly configured via MCP_PROFILE env var
-	if s.profile != "" {
-		return tools.GetToolsForProfile(s.profile), nil
-	}
+	// Get the active profile for this request
+	// This handles MCP_PROFILE env var, URL-based routing, and defaults
+	profile := s.getActiveProfile(r)
 
-	// Check URL path for profile
-	path := r.URL.Path
+	// Check for X-MCP-Tools header (only if profile is "all")
+	// This allows clients to request specific tools when using the default endpoint
+	if profile == "all" {
+		headerTools, err := s.parseToolsFromHeader(r)
+		if err != nil {
+			return nil, err
+		}
 
-	// Skip root and /mcp paths - these don't specify a profile
-	if path != "/" && path != "/mcp" {
-		// Extract profile from path
-		profileFromPath := strings.TrimPrefix(path, "/")
-
-		// Validate that it's a real profile
-		if _, exists := tools.ProfileDefinitions[profileFromPath]; exists {
-			return tools.GetToolsForProfile(profileFromPath), nil
+		// If header provided tools, validate and use them
+		if headerTools != nil {
+			if err := tools.ValidateToolNames(headerTools); err != nil {
+				return nil, fmt.Errorf("invalid tools in %s header: %w", HeaderMCPTools, err)
+			}
+			s.logger.Debug("Using tools from header", "count", len(headerTools), "tools", headerTools)
+			return headerTools, nil
 		}
 	}
 
-	// No explicit profile set (would default to "all")
-	// Check for X-MCP-Tools header
-	headerTools, err := s.parseToolsFromHeader(r)
-	if err != nil {
-		return nil, err
-	}
-
-	// If header provided tools, validate and use them
-	if headerTools != nil {
-		if err := tools.ValidateToolNames(headerTools); err != nil {
-			return nil, fmt.Errorf("invalid tools in %s header: %w", HeaderMCPTools, err)
-		}
-		s.logger.Debug("Using tools from header", "count", len(headerTools), "tools", headerTools)
-		return headerTools, nil
-	}
-
-	// Default to "all" profile
-	return tools.GetToolsForProfile("all"), nil
+	// Return tools for the detected profile
+	return tools.GetToolsForProfile(profile), nil
 }
 
 // createTLSConfig creates a secure TLS configuration
