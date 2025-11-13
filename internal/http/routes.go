@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
 // setupRoutes configures HTTP routes
@@ -52,17 +54,13 @@ func (s *Server) setupRoutes() {
 	// Profile-specific endpoints - register all valid profiles
 	// This allows URL-based profile routing when MCP_PROFILE is not set
 	// Register both unversioned (latest) and versioned variants
-	profiles := []string{
-		"all",
-		"core",
-		"historical_data",
-		"historical_data_readonly",
-		"live_investigation",
-		"threat_response",
-		"fleet_management",
-		"detection_engineering",
-		"platform_admin",
-		"ai_powered",
+	// Dynamically load profiles from tools.ProfileDefinitions
+	profiles := make([]string, 0, len(tools.ProfileDefinitions)+1)
+	// Add "all" profile first (special profile that includes all tools)
+	profiles = append(profiles, "all")
+	// Add all other profiles from ProfileDefinitions
+	for profile := range tools.ProfileDefinitions {
+		profiles = append(profiles, profile)
 	}
 	for _, profile := range profiles {
 		// Unversioned route (maps to latest)
