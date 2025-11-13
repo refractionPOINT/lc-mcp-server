@@ -241,6 +241,10 @@ var ProfileDefinitions = map[string][]string{
 		"generate_python_playbook",
 		"generate_detection_summary",
 	},
+	"api_access": {
+		// Generic API access for advanced use cases
+		"lc_api_call",
+	},
 }
 
 // RegisterTool adds a tool to the registry

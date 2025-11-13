@@ -13,6 +13,7 @@ import (
 	// Import tool packages to trigger init() registration
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/admin"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/ai"        // AI-powered generation tools
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/api"       // Generic API access tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/artifacts" // Artifact tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"    // Platform configuration tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
