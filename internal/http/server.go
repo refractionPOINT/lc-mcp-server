@@ -164,12 +164,28 @@ func (s *Server) getActiveProfile(r *http.Request) string {
 		return "all"
 	}
 
-	// Extract profile from path (e.g., "/historical_data" -> "historical_data")
-	profile := strings.TrimPrefix(path, "/")
+	// Extract profile from path
+	// Patterns:
+	//   /mcp/api_access -> "api_access"
+	//   /mcp/v1/api_access -> "api_access"
+	profile := strings.TrimPrefix(path, "/mcp/")
+
+	// If path has version, strip it (e.g., "v1/api_access" -> "api_access")
+	if strings.HasPrefix(profile, "v") {
+		parts := strings.SplitN(profile, "/", 2)
+		if len(parts) == 2 {
+			profile = parts[1]
+		}
+	}
 
 	// Validate that it's a real profile
 	if _, exists := tools.ProfileDefinitions[profile]; exists {
 		return profile
+	}
+
+	// Special case: "all" profile
+	if profile == "all" {
+		return "all"
 	}
 
 	// If not a valid profile, default to "all"

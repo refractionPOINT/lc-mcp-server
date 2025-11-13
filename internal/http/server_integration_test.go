@@ -364,7 +364,7 @@ func TestProfileSelection(t *testing.T) {
 	// Test with explicit profile set
 	server.profile = "core"
 
-	req := httptest.NewRequest(http.MethodGet, "/historical_data", nil)
+	req := httptest.NewRequest(http.MethodGet, "/mcp/historical_data", nil)
 	activeProfile := server.getActiveProfile(req)
 
 	// Should use explicit profile, not URL
@@ -373,7 +373,7 @@ func TestProfileSelection(t *testing.T) {
 	// Test with no explicit profile (URL-based routing)
 	server.profile = ""
 
-	req = httptest.NewRequest(http.MethodGet, "/historical_data", nil)
+	req = httptest.NewRequest(http.MethodGet, "/mcp/historical_data", nil)
 	activeProfile = server.getActiveProfile(req)
 
 	// Should extract from URL
@@ -516,18 +516,18 @@ func TestVersionedProfileRoutes(t *testing.T) {
 	}{
 		{
 			name:            "all profile",
-			unversionedPath: "/all",
-			versionedPath:   "/v1/all",
+			unversionedPath: "/mcp/all",
+			versionedPath:   "/mcp/v1/all",
 		},
 		{
 			name:            "core profile",
-			unversionedPath: "/core",
-			versionedPath:   "/v1/core",
+			unversionedPath: "/mcp/core",
+			versionedPath:   "/mcp/v1/core",
 		},
 		{
 			name:            "historical_data profile",
-			unversionedPath: "/historical_data",
-			versionedPath:   "/v1/historical_data",
+			unversionedPath: "/mcp/historical_data",
+			versionedPath:   "/mcp/v1/historical_data",
 		},
 	}
 
@@ -566,7 +566,7 @@ func TestVersionedProfileRoutes(t *testing.T) {
 	}
 
 	t.Run("invalid version on profile route returns 404", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodPost, "/v999/all", bytes.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/mcp/v999/all", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 

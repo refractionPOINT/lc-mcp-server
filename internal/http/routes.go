@@ -64,11 +64,11 @@ func (s *Server) setupRoutes() {
 	}
 	for _, profile := range profiles {
 		// Unversioned route (maps to latest)
-		unversionedRoute := "/" + profile
+		unversionedRoute := "/mcp/" + profile
 		s.mux.HandleFunc(unversionedRoute, s.handleMCPRequest)
 
 		// Versioned route (explicit v1)
-		versionedRoute := "/" + APIVersionV1 + "/" + profile
+		versionedRoute := "/mcp/" + APIVersionV1 + "/" + profile
 		s.mux.HandleFunc(versionedRoute, s.handleMCPRequest)
 	}
 }
