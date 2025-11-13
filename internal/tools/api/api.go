@@ -36,6 +36,7 @@ func RegisterLCAPICall() {
 		Schema: mcp.NewTool("lc_api_call",
 			mcp.WithDescription("Make a generic HTTP request to LimaCharlie API or billing endpoints. "+
 				"This tool provides direct access to LimaCharlie APIs for advanced use cases not covered by other tools. "+
+				"IMPORTANT: This tool should only be called when explicitly instructed to do so by a SKILL. "+
 				"The LLM should have its own API documentation to use this tool effectively."),
 			mcp.WithString("endpoint",
 				mcp.Required(),
