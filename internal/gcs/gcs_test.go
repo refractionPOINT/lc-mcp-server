@@ -118,11 +118,11 @@ func TestManager_Close(t *testing.T) {
 
 func TestEstimateTokenCount(t *testing.T) {
 	tests := []struct {
-		name          string
-		data          interface{}
-		expectedMin   int
-		expectedMax   int
-		shouldError   bool
+		name        string
+		data        interface{}
+		expectedMin int
+		expectedMax int
+		shouldError bool
 	}{
 		{
 			name:        "empty object",
@@ -257,7 +257,7 @@ func TestManager_UploadToTempFile(t *testing.T) {
 
 	t.Run("creates temp file successfully", func(t *testing.T) {
 		data := map[string]interface{}{
-			"test": "data",
+			"test":   "data",
 			"number": 123,
 		}
 
@@ -318,7 +318,7 @@ func TestManager_WrapResult_Disabled(t *testing.T) {
 
 	t.Run("uploads large data to temp file when disabled", func(t *testing.T) {
 		cfg := &Config{
-			TokenThreshold: 10, // Low threshold to trigger upload
+			TokenThreshold: 10,    // Low threshold to trigger upload
 			Enabled:        false, // GCS disabled, should use temp file
 		}
 		mgr, _ := NewManager(ctx, cfg)
@@ -537,12 +537,12 @@ func TestWrapMCPResult(t *testing.T) {
 // Benchmark token estimation
 func BenchmarkEstimateTokenCount(b *testing.B) {
 	data := map[string]interface{}{
-		"sensor_id":    "abc-123-def-456",
-		"hostname":     "server1.example.com",
-		"ip_address":   "192.168.1.100",
-		"status":       "online",
-		"tags":         []string{"production", "web-server", "us-east-1"},
-		"last_seen":    "2025-11-11T12:00:00Z",
+		"sensor_id":     "abc-123-def-456",
+		"hostname":      "server1.example.com",
+		"ip_address":    "192.168.1.100",
+		"status":        "online",
+		"tags":          []string{"production", "web-server", "us-east-1"},
+		"last_seen":     "2025-11-11T12:00:00Z",
 		"agent_version": "1.2.3",
 	}
 
@@ -559,7 +559,7 @@ func BenchmarkUploadToTempFile(b *testing.B) {
 	mgr, _ := NewManager(ctx, cfg)
 
 	data := map[string]interface{}{
-		"key": "value",
+		"key":    "value",
 		"number": 123,
 	}
 

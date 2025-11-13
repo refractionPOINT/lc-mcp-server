@@ -22,7 +22,7 @@ func RegisterListPlaybooks() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "list_playbooks",
 		Description: "List all playbooks in the organization",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_playbooks",
 			mcp.WithDescription("List all playbooks in the organization"),
@@ -70,7 +70,7 @@ func RegisterGetPlaybook() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_playbook",
 		Description: "Get a specific playbook definition",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_playbook",
 			mcp.WithDescription("Get a specific playbook definition"),
@@ -127,7 +127,7 @@ func RegisterSetPlaybook() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "set_playbook",
 		Description: "Create or update a playbook",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_playbook",
 			mcp.WithDescription("Create or update a playbook"),
@@ -183,7 +183,7 @@ func RegisterDeletePlaybook() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "delete_playbook",
 		Description: "Delete a playbook",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("delete_playbook",
 			mcp.WithDescription("Delete a playbook"),

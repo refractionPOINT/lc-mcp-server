@@ -17,13 +17,13 @@ type MockOrganization struct {
 	GetUsageStatsFunc func() (*lc.UsageStats, error)
 
 	// Sensor Operations
-	GetSensorFunc              func(sid string) *lc.Sensor
-	GetSensorsFunc             func(sids []string) map[string]*lc.Sensor
-	ListSensorsFunc            func(options ...lc.ListSensorsOptions) (map[string]*lc.Sensor, error)
-	ActiveSensorsFunc          func(sids []string) (map[string]bool, error)
+	GetSensorFunc                func(sid string) *lc.Sensor
+	GetSensorsFunc               func(sids []string) map[string]*lc.Sensor
+	ListSensorsFunc              func(options ...lc.ListSensorsOptions) (map[string]*lc.Sensor, error)
+	ActiveSensorsFunc            func(sids []string) (map[string]bool, error)
 	GetTimeWhenSensorHasDataFunc func(sid string, start, end int64) (*lc.SensorTimeData, error)
-	GetSensorsWithTagFunc      func(tag string) (map[string][]string, error)
-	GetAllTagsFunc             func() ([]string, error)
+	GetSensorsWithTagFunc        func(tag string) (map[string][]string, error)
+	GetAllTagsFunc               func() ([]string, error)
 
 	// Detection & Response Rules
 	DRRulesFunc      func(filters ...lc.DRRuleFilter) (map[string]lc.Dict, error)
@@ -36,28 +36,28 @@ type MockOrganization struct {
 	FPRuleDeleteFunc func(name lc.FPRuleName) error
 
 	// YARA Rules
-	YaraListRulesFunc   func() (lc.YaraRules, error)
-	YaraGetSourceFunc   func(sourceName string) (string, error)
-	YaraSourceAddFunc   func(sourceName string, source lc.YaraSource) error
+	YaraListRulesFunc    func() (lc.YaraRules, error)
+	YaraGetSourceFunc    func(sourceName string) (string, error)
+	YaraSourceAddFunc    func(sourceName string, source lc.YaraSource) error
 	YaraSourceDeleteFunc func(sourceName string) error
 
 	// Historical Data & Queries
-	GetHistoricEventsFunc        func(sensorID string, req lc.HistoricEventsRequest) (chan lc.IteratedEvent, func(), error)
-	QueryFunc                    func(req lc.QueryRequest) (*lc.QueryResponse, error)
-	QueryAllFunc                 func(req lc.QueryRequest) (*lc.QueryIterator, error)
-	QueryAllWithContextFunc      func(ctx context.Context, req lc.QueryRequest) (*lc.QueryIterator, error)
-	QueryWithContextFunc         func(ctx context.Context, req lc.QueryRequest) (*lc.QueryResponse, error)
-	HistoricalDetectionsFunc     func(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
-	InsightObjectsFunc           func(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
-	InsightObjectsBatchFunc      func(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
+	GetHistoricEventsFunc    func(sensorID string, req lc.HistoricEventsRequest) (chan lc.IteratedEvent, func(), error)
+	QueryFunc                func(req lc.QueryRequest) (*lc.QueryResponse, error)
+	QueryAllFunc             func(req lc.QueryRequest) (*lc.QueryIterator, error)
+	QueryAllWithContextFunc  func(ctx context.Context, req lc.QueryRequest) (*lc.QueryIterator, error)
+	QueryWithContextFunc     func(ctx context.Context, req lc.QueryRequest) (*lc.QueryResponse, error)
+	HistoricalDetectionsFunc func(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
+	InsightObjectsFunc       func(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
+	InsightObjectsBatchFunc  func(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
 
 	// Artifacts
 	ExportArtifactFunc func(artifactID string, deadline time.Time) (io.ReadCloser, error)
 
 	// Outputs
-	OutputsFunc    func() (lc.OutputsByName, error)
-	OutputAddFunc  func(output lc.OutputConfig) (lc.OutputConfig, error)
-	OutputDelFunc  func(name string) (lc.GenericJSON, error)
+	OutputsFunc   func() (lc.OutputsByName, error)
+	OutputAddFunc func(output lc.OutputConfig) (lc.OutputConfig, error)
+	OutputDelFunc func(name string) (lc.GenericJSON, error)
 
 	// Installation Keys
 	InstallationKeysFunc   func() ([]lc.InstallationKey, error)
@@ -66,15 +66,15 @@ type MockOrganization struct {
 	DelInstallationKeyFunc func(iid string) error
 
 	// API Keys
-	GetAPIKeysFunc    func() ([]lc.APIKeyInfo, error)
-	CreateAPIKeyFunc  func(name string, permissions []string) (*lc.APIKeyCreate, error)
-	DeleteAPIKeyFunc  func(keyHash string) error
+	GetAPIKeysFunc   func() ([]lc.APIKeyInfo, error)
+	CreateAPIKeyFunc func(name string, permissions []string) (*lc.APIKeyCreate, error)
+	DeleteAPIKeyFunc func(keyHash string) error
 
 	// Schemas
-	GetSchemaFunc            func(name string) (*lc.SchemaResponse, error)
-	GetSchemasFunc           func() (*lc.Schemas, error)
+	GetSchemaFunc             func(name string) (*lc.SchemaResponse, error)
+	GetSchemasFunc            func() (*lc.Schemas, error)
 	GetSchemasForPlatformFunc func(platform string) (*lc.Schemas, error)
-	GetPlatformNamesFunc     func() ([]string, error)
+	GetPlatformNamesFunc      func() ([]string, error)
 
 	// Extensions
 	ExtensionsFunc               func() ([]lc.ExtensionName, error)
@@ -88,8 +88,8 @@ type MockOrganization struct {
 	CreateOrganizationFunc func(location, name string, template ...interface{}) (lc.NewOrganizationResponse, error)
 
 	// Billing
-	GetBillingOrgDetailsFunc  func() (*lc.BillingOrgDetails, error)
-	GetBillingInvoiceURLFunc  func(year, month int, format string) (map[string]interface{}, error)
+	GetBillingOrgDetailsFunc func() (*lc.BillingOrgDetails, error)
+	GetBillingInvoiceURLFunc func(year, month int, format string) (map[string]interface{}, error)
 
 	// MITRE ATT&CK
 	GetMITREReportFunc func() (*lc.MITREReport, error)

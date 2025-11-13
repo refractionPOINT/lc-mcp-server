@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/genai"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
 

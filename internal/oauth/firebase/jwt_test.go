@@ -88,8 +88,8 @@ func TestParseIDTokenClaims(t *testing.T) {
 
 	t.Run("handles special characters in claims", func(t *testing.T) {
 		claims := map[string]interface{}{
-			"sub":  "user-with-special-chars-@#$%",
-			"name": "Test User 日本語",
+			"sub":   "user-with-special-chars-@#$%",
+			"name":  "Test User 日本語",
 			"email": "test+tag@example.com",
 		}
 		token := createFakeJWT(claims)
@@ -233,14 +233,14 @@ func TestRealWorldFirebaseTokenStructure(t *testing.T) {
 	t.Run("parses typical Firebase auth token claims", func(t *testing.T) {
 		// Typical Firebase ID token claims structure
 		claims := map[string]interface{}{
-			"iss": "https://securetoken.google.com/project-id",
-			"aud": "project-id",
-			"auth_time": 1234567890,
-			"user_id": "abc123def456",
-			"sub": "abc123def456",
-			"iat": 1234567890,
-			"exp": 1234571490,
-			"email": "user@example.com",
+			"iss":            "https://securetoken.google.com/project-id",
+			"aud":            "project-id",
+			"auth_time":      1234567890,
+			"user_id":        "abc123def456",
+			"sub":            "abc123def456",
+			"iat":            1234567890,
+			"exp":            1234571490,
+			"email":          "user@example.com",
 			"email_verified": true,
 			"firebase": map[string]interface{}{
 				"identities": map[string]interface{}{
@@ -268,15 +268,15 @@ func TestRealWorldFirebaseTokenStructure(t *testing.T) {
 
 	t.Run("handles Google OAuth provider token", func(t *testing.T) {
 		claims := map[string]interface{}{
-			"sub": "google-user-12345",
-			"email": "user@gmail.com",
+			"sub":            "google-user-12345",
+			"email":          "user@gmail.com",
 			"email_verified": true,
-			"name": "Test User",
-			"picture": "https://example.com/photo.jpg",
+			"name":           "Test User",
+			"picture":        "https://example.com/photo.jpg",
 			"firebase": map[string]interface{}{
 				"identities": map[string]interface{}{
 					"google.com": []string{"1234567890"},
-					"email": []string{"user@gmail.com"},
+					"email":      []string{"user@gmail.com"},
 				},
 				"sign_in_provider": "google.com",
 			},

@@ -2,24 +2,20 @@ package endpoints
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
-	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
-	"github.com/refractionpoint/lc-mcp-go/internal/oauth/token"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
 // ===== HandleAuthorize Tests =====
 
 func TestHandleAuthorize_ValidRequest(t *testing.T) {
@@ -1107,9 +1103,4 @@ func TestHandleIntrospect_MissingToken(t *testing.T) {
 	handlers.HandleIntrospect(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-// Helper function
-func stringPtr(s string) *string {
-	return &s
 }

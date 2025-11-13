@@ -22,7 +22,7 @@ func RegisterListRules() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "list_rules",
 		Description: "List all rules from a specific hive",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_rules",
 			mcp.WithDescription("List all rules from a specific hive (e.g., 'dr-general', 'dr-managed', 'fp')"),
@@ -78,7 +78,7 @@ func RegisterGetRule() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_rule",
 		Description: "Get a specific rule from a hive",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_rule",
 			mcp.WithDescription("Get a specific rule from a hive"),
@@ -143,7 +143,7 @@ func RegisterSetRule() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "set_rule",
 		Description: "Create or update a rule in a hive",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_rule",
 			mcp.WithDescription("Create or update a rule in a hive"),
@@ -207,7 +207,7 @@ func RegisterDeleteRule() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "delete_rule",
 		Description: "Delete a rule from a hive",
-		Profile:     "detection_engineering",
+		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("delete_rule",
 			mcp.WithDescription("Delete a rule from a hive"),

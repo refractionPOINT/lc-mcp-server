@@ -22,7 +22,7 @@ func RegisterListCloudSensors() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "list_cloud_sensors",
 		Description: "List all cloud sensor configurations",
-		Profile:     "platform_admin",
+		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_cloud_sensors",
 			mcp.WithDescription("List all cloud sensor configurations"),
@@ -70,7 +70,7 @@ func RegisterGetCloudSensor() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_cloud_sensor",
 		Description: "Get a specific cloud sensor configuration",
-		Profile:     "platform_admin",
+		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_cloud_sensor",
 			mcp.WithDescription("Get a specific cloud sensor configuration"),
@@ -127,7 +127,7 @@ func RegisterSetCloudSensor() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "set_cloud_sensor",
 		Description: "Create or update a cloud sensor configuration",
-		Profile:     "platform_admin",
+		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_cloud_sensor",
 			mcp.WithDescription("Create or update a cloud sensor configuration"),
@@ -183,7 +183,7 @@ func RegisterDeleteCloudSensor() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "delete_cloud_sensor",
 		Description: "Delete a cloud sensor configuration",
-		Profile:     "platform_admin",
+		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("delete_cloud_sensor",
 			mcp.WithDescription("Delete a cloud sensor configuration"),
