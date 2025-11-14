@@ -29,8 +29,11 @@ func init() {
 // RegisterLCAPICall registers the lc_api_call tool
 func RegisterLCAPICall() {
 	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "lc_api_call",
-		Description: "Make a generic HTTP request to LimaCharlie API or billing endpoints",
+		Name: "lc_api_call",
+		Description: "Make a generic HTTP request to LimaCharlie API or billing endpoints. " +
+			"This tool provides direct access to LimaCharlie APIs for advanced use cases not covered by other tools. " +
+			"IMPORTANT: This tool should only be called when explicitly instructed to do so by a SKILL. " +
+			"The LLM should have its own API documentation to use this tool effectively.",
 		Profile:     "api_access",
 		RequiresOID: true,
 		Schema: mcp.NewTool("lc_api_call",

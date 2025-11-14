@@ -223,7 +223,7 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 
 		toolList = append(toolList, map[string]interface{}{
 			"name":        tool.Name,
-			"description": tool.Description,
+			"description": schema.Description,
 			"inputSchema": schema.InputSchema,
 		})
 	}
