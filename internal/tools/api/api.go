@@ -50,6 +50,8 @@ func RegisterLCAPICall() {
 			mcp.WithString("path",
 				mcp.Required(),
 				mcp.Description("API path (e.g., '/v1/orgs/{oid}/sensors'). Should start with '/'")),
+			mcp.WithString("oid",
+				mcp.Description("Organization ID")),
 			mcp.WithObject("query_params",
 				mcp.Description("Optional URL query parameters as key-value pairs")),
 			mcp.WithObject("headers",

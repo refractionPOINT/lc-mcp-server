@@ -304,8 +304,22 @@ func IsUIDMode(authMode auth.AuthMode) bool {
 
 // AddOIDToToolSchema adds the OID parameter to a tool's input schema
 // This function creates a deep copy of the schema to avoid modifying shared state
+// If the tool's base schema already defines "oid" as optional (in properties but not required),
+// that choice is respected. Otherwise, "oid" is added as a required parameter.
 func AddOIDToToolSchema(tool mcp.Tool) mcp.Tool {
 	schema := tool.InputSchema
+
+	// Check if OID was already in the original schema's required list
+	oidInOriginalRequired := false
+	for _, req := range schema.Required {
+		if req == "oid" {
+			oidInOriginalRequired = true
+			break
+		}
+	}
+
+	// Check if OID exists in original properties
+	_, oidInOriginalProperties := schema.Properties["oid"]
 
 	// Deep copy Properties map to avoid modifying the original
 	newProperties := make(map[string]any, len(schema.Properties)+1)
@@ -313,8 +327,8 @@ func AddOIDToToolSchema(tool mcp.Tool) mcp.Tool {
 		newProperties[k] = v
 	}
 
-	// Only add OID parameter if not already present
-	if _, exists := newProperties["oid"]; !exists {
+	// Add OID parameter if not already present in properties
+	if !oidInOriginalProperties {
 		newProperties["oid"] = map[string]any{
 			"type":        "string",
 			"description": "Organization ID",
@@ -322,19 +336,27 @@ func AddOIDToToolSchema(tool mcp.Tool) mcp.Tool {
 	}
 
 	// Deep copy Required slice to avoid modifying the original
-	newRequired := make([]string, len(schema.Required), len(schema.Required)+1)
+	newRequired := make([]string, len(schema.Required))
 	copy(newRequired, schema.Required)
 
-	// Only append "oid" if not already in Required list
-	hasOID := false
-	for _, req := range newRequired {
-		if req == "oid" {
-			hasOID = true
-			break
+	// Determine if we should add "oid" to required list:
+	// - If oid was in original required → keep it required
+	// - If oid was in original properties but NOT required → keep it optional (tool's choice)
+	// - If oid was NOT in original schema at all → add as required (default behavior)
+	shouldAddOIDToRequired := oidInOriginalRequired || !oidInOriginalProperties
+
+	if shouldAddOIDToRequired {
+		// Check if "oid" is not already in the new required list
+		oidAlreadyInNewRequired := false
+		for _, req := range newRequired {
+			if req == "oid" {
+				oidAlreadyInNewRequired = true
+				break
+			}
 		}
-	}
-	if !hasOID {
-		newRequired = append(newRequired, "oid")
+		if !oidAlreadyInNewRequired {
+			newRequired = append(newRequired, "oid")
+		}
 	}
 
 	// Create new schema with copied data
