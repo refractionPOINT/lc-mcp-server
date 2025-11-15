@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -22,8 +23,69 @@ const (
 	defaultTimeout = 30 * time.Second
 )
 
+var (
+	// Cache for replay URLs per OID
+	replayURLCache = make(map[string]string)
+	replayURLMutex sync.RWMutex
+)
+
 func init() {
 	RegisterLCAPICall()
+}
+
+// getReplayURL resolves the replay URL for a given OID
+// It caches the result to avoid repeated API calls
+func getReplayURL(ctx context.Context, oid string) (string, error) {
+	// Check cache first
+	replayURLMutex.RLock()
+	if cachedURL, ok := replayURLCache[oid]; ok {
+		replayURLMutex.RUnlock()
+		return cachedURL, nil
+	}
+	replayURLMutex.RUnlock()
+
+	// Not in cache, fetch from API
+	urlEndpoint := fmt.Sprintf("%s/orgs/%s/url", apiRootURL, oid)
+
+	reqCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", urlEndpoint, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request for replay URL: %w", err)
+	}
+
+	req.Header.Set("User-Agent", "limacharlie-mcp-server")
+
+	client := &http.Client{Timeout: defaultTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch replay URL: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("failed to get replay URL (status %d): %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var urlsResponse map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&urlsResponse); err != nil {
+		return "", fmt.Errorf("failed to decode replay URL response: %w", err)
+	}
+
+	replayURL, ok := urlsResponse["replay"]
+	if !ok || replayURL == "" {
+		return "", fmt.Errorf("replay URL not found in response")
+	}
+
+	// Cache the result
+	replayURLMutex.Lock()
+	replayURLCache[oid] = replayURL
+	replayURLMutex.Unlock()
+
+	return replayURL, nil
 }
 
 // RegisterLCAPICall registers the lc_api_call tool
@@ -43,7 +105,7 @@ func RegisterLCAPICall() {
 				"The LLM should have its own API documentation to use this tool effectively."),
 			mcp.WithString("endpoint",
 				mcp.Required(),
-				mcp.Description("Target endpoint: 'api' for api.limacharlie.io or 'billing' for billing.limacharlie.io")),
+				mcp.Description("Target endpoint: 'api' for api.limacharlie.io, 'billing' for billing.limacharlie.io, or 'replay' for LCQL/replay queries (dynamically resolves per-OID replay URL)")),
 			mcp.WithString("method",
 				mcp.Required(),
 				mcp.Description("HTTP method: GET, POST, PUT, DELETE, or PATCH")),
@@ -72,8 +134,8 @@ func handleLCAPICall(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		return tools.ErrorResult("endpoint parameter is required and must be a string"), nil
 	}
 	endpoint = strings.ToLower(strings.TrimSpace(endpoint))
-	if endpoint != "api" && endpoint != "billing" {
-		return tools.ErrorResult("endpoint must be either 'api' or 'billing'"), nil
+	if endpoint != "api" && endpoint != "billing" && endpoint != "replay" {
+		return tools.ErrorResult("endpoint must be one of: 'api', 'billing', or 'replay'"), nil
 	}
 
 	// Extract and validate HTTP method
@@ -131,8 +193,22 @@ func handleLCAPICall(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 	var baseURL string
 	if endpoint == "api" {
 		baseURL = apiRootURL
-	} else {
+	} else if endpoint == "billing" {
 		baseURL = billingRootURL
+	} else if endpoint == "replay" {
+		// For replay endpoint, we need the OID to resolve the replay URL
+		oid, ok := args["oid"].(string)
+		if !ok || oid == "" {
+			return tools.ErrorResult("oid parameter is required for replay endpoint"), nil
+		}
+
+		// Resolve the replay URL for this OID
+		replayURL, err := getReplayURL(ctx, oid)
+		if err != nil {
+			return tools.ErrorResultf("failed to resolve replay URL: %v", err), nil
+		}
+
+		baseURL = fmt.Sprintf("https://%s", replayURL)
 	}
 	fullURL := baseURL + path
 
