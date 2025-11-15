@@ -60,6 +60,8 @@ func NewManager(stateManager *state.Manager, firebaseClient firebase.ClientInter
 }
 
 // ValidateAccessToken validates an MCP access token and optionally refreshes Firebase tokens
+// IMPORTANT: This method now also handles automatic MCP token lifetime extension
+// to ensure tokens remain valid transparently for the client (e.g., Claude Code)
 func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, autoRefresh bool) (*ValidationResult, error) {
 	// Look up token in Redis
 	tokenData, err := m.stateManager.GetAccessTokenData(ctx, accessToken)
@@ -68,38 +70,177 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	}
 
 	if tokenData == nil {
-		m.logger.Debug("Access token not found or expired", "token", accessToken[:min(10, len(accessToken))]+"...")
+		m.logger.Debug("Access token not found", "token", accessToken[:min(10, len(accessToken))]+"...")
 		return &ValidationResult{
 			Valid: false,
 			Error: "invalid or expired access token",
 		}, nil
 	}
 
-	// Check if Firebase token needs refresh
-	firebaseExpiresIn := tokenData.FirebaseExpiresAt - time.Now().Unix()
-	needsRefresh := firebaseExpiresIn < 300 // Refresh if < 5 minutes remaining
+	now := time.Now().Unix()
+	mcpTokenExpiresIn := tokenData.ExpiresAt - now
 
-	if needsRefresh && autoRefresh && tokenData.FirebaseRefreshToken != "" {
-		m.logger.Info("Firebase token expiring soon, refreshing...",
+	// Check if MCP token is expired (within grace period, since we still have the data)
+	if mcpTokenExpiresIn <= 0 {
+		// Token is expired but still in grace period (we have the data)
+		// Check if we're within the grace period for auto-refresh
+		if mcpTokenExpiresIn > -state.TokenGracePeriod && autoRefresh && tokenData.FirebaseRefreshToken != "" {
+			// SECURITY: Check extension limits before allowing recovery
+			if tokenData.ExtensionCount >= state.MaxTokenExtensions {
+				m.logger.Warn("Token extension limit reached, forcing re-authentication",
+					"token", accessToken[:10]+"...",
+					"uid", tokenData.UID,
+					"extension_count", tokenData.ExtensionCount,
+					"max_extensions", state.MaxTokenExtensions)
+				return &ValidationResult{
+					Valid: false,
+					Error: "token extension limit reached, please re-authenticate",
+				}, nil
+			}
+
+			m.logger.Info("MCP access token expired but within grace period, auto-extending...",
+				"token", accessToken[:10]+"...",
+				"expired_ago_seconds", -mcpTokenExpiresIn,
+				"uid", tokenData.UID,
+				"extension_count", tokenData.ExtensionCount)
+
+			// Extend MCP token lifetime by another TokenTTL
+			newExpiresAt := now + int64(state.TokenTTL)
+
+			// First refresh Firebase token since it's likely expired too
+			newIDToken, newFBExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, tokenData.FirebaseRefreshToken)
+			if err != nil {
+				m.logger.Error("Failed to refresh Firebase ID token during MCP token extension", "error", err, "uid", tokenData.UID)
+				return &ValidationResult{
+					Valid: false,
+					Error: fmt.Sprintf("token expired and refresh failed: %v", err),
+				}, nil
+			}
+
+			// Update both Firebase tokens AND MCP token expiration
+			tokenData.FirebaseIDToken = newIDToken
+			tokenData.FirebaseExpiresAt = newFBExpiresAt
+			tokenData.ExpiresAt = newExpiresAt
+			tokenData.ExtensionCount++
+			tokenData.LastExtendedAt = now
+
+			if err := m.stateManager.StoreAccessToken(ctx, tokenData); err != nil {
+				m.logger.Error("Failed to extend MCP token lifetime", "error", err, "uid", tokenData.UID)
+				return &ValidationResult{
+					Valid: false,
+					Error: "failed to extend token lifetime",
+				}, nil
+			}
+
+			m.logger.Info("Successfully extended MCP token lifetime (grace period recovery)",
+				"uid", tokenData.UID,
+				"new_expires_at", newExpiresAt,
+				"new_fb_expires_at", newFBExpiresAt,
+				"extension_count", tokenData.ExtensionCount,
+				"max_extensions", state.MaxTokenExtensions)
+
+			// Exchange refreshed Firebase token for LimaCharlie JWT
+			limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(newIDToken, "-", m.logger)
+			if err != nil {
+				m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
+				return &ValidationResult{
+					Valid: false,
+					Error: fmt.Sprintf("JWT exchange failed: %v", err),
+				}, nil
+			}
+
+			return &ValidationResult{
+				Valid:                true,
+				UID:                  tokenData.UID,
+				FirebaseIDToken:      newIDToken,
+				FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
+				LimaCharlieJWT:       limaCharlieJWT,
+				Scope:                tokenData.Scope,
+				Refreshed:            true,
+			}, nil
+		}
+
+		// Token expired and either outside grace period or refresh not available
+		m.logger.Debug("Access token expired beyond grace period",
+			"token", accessToken[:min(10, len(accessToken))]+"...",
+			"expired_ago_seconds", -mcpTokenExpiresIn)
+		return &ValidationResult{
+			Valid: false,
+			Error: "access token expired",
+		}, nil
+	}
+
+	// Check if MCP token needs proactive refresh (before expiration)
+	mcpNeedsRefresh := mcpTokenExpiresIn < int64(state.TokenRefreshBuffer)
+
+	// Check if Firebase token needs refresh
+	firebaseExpiresIn := tokenData.FirebaseExpiresAt - now
+	firebaseNeedsRefresh := firebaseExpiresIn < 300 // 5 minutes
+
+	// Proactively refresh if either token needs it
+	needsRefresh := (mcpNeedsRefresh || firebaseNeedsRefresh) && autoRefresh && tokenData.FirebaseRefreshToken != ""
+
+	// SECURITY: Check extension limits before proactive MCP token extension
+	if mcpNeedsRefresh && tokenData.ExtensionCount >= state.MaxTokenExtensions {
+		m.logger.Warn("Token extension limit reached, not extending further",
 			"token", accessToken[:10]+"...",
-			"expires_in", firebaseExpiresIn)
+			"uid", tokenData.UID,
+			"extension_count", tokenData.ExtensionCount,
+			"max_extensions", state.MaxTokenExtensions,
+			"expires_in", mcpTokenExpiresIn)
+		// Don't extend MCP token, but still allow Firebase refresh for the remaining lifetime
+		mcpNeedsRefresh = false
+		needsRefresh = firebaseNeedsRefresh && autoRefresh && tokenData.FirebaseRefreshToken != ""
+	}
+
+	if needsRefresh {
+		if mcpNeedsRefresh {
+			m.logger.Info("MCP access token expiring soon, proactively refreshing...",
+				"token", accessToken[:10]+"...",
+				"mcp_expires_in", mcpTokenExpiresIn,
+				"firebase_expires_in", firebaseExpiresIn,
+				"uid", tokenData.UID,
+				"extension_count", tokenData.ExtensionCount)
+		} else {
+			m.logger.Info("Firebase token expiring soon, refreshing...",
+				"token", accessToken[:10]+"...",
+				"firebase_expires_in", firebaseExpiresIn,
+				"uid", tokenData.UID)
+		}
 
 		// Refresh Firebase token
-		newIDToken, newExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, tokenData.FirebaseRefreshToken)
+		newIDToken, newFBExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, tokenData.FirebaseRefreshToken)
 		if err != nil {
 			m.logger.Error("Failed to refresh Firebase ID token", "error", err, "uid", tokenData.UID)
 			// Continue with existing token if refresh fails (might still be valid for a short time)
 		} else {
-			// Update token data in Redis
-			if err := m.stateManager.UpdateAccessTokenFirebaseTokens(ctx, accessToken, newIDToken, newExpiresAt); err != nil {
-				m.logger.Error("Failed to update access token with refreshed Firebase tokens", "error", err, "uid", tokenData.UID)
+			// Update Firebase tokens
+			tokenData.FirebaseIDToken = newIDToken
+			tokenData.FirebaseExpiresAt = newFBExpiresAt
+
+			// Also extend MCP token lifetime if it's expiring soon
+			if mcpNeedsRefresh {
+				tokenData.ExpiresAt = now + int64(state.TokenTTL)
+				tokenData.ExtensionCount++
+				tokenData.LastExtendedAt = now
+				m.logger.Info("Extending MCP token lifetime proactively",
+					"uid", tokenData.UID,
+					"new_expires_at", tokenData.ExpiresAt,
+					"extension_count", tokenData.ExtensionCount,
+					"max_extensions", state.MaxTokenExtensions)
+			}
+
+			// Store updated token data
+			if err := m.stateManager.StoreAccessToken(ctx, tokenData); err != nil {
+				m.logger.Error("Failed to update access token", "error", err, "uid", tokenData.UID)
 			} else {
-				m.logger.Info("Successfully refreshed Firebase ID token", "uid", tokenData.UID, "expires_at", newExpiresAt)
-				tokenData.FirebaseIDToken = newIDToken
-				tokenData.FirebaseExpiresAt = newExpiresAt
+				m.logger.Info("Successfully refreshed tokens",
+					"uid", tokenData.UID,
+					"fb_expires_at", newFBExpiresAt,
+					"mcp_expires_at", tokenData.ExpiresAt,
+					"extension_count", tokenData.ExtensionCount)
 
 				// Exchange Firebase token for LimaCharlie JWT
-				// This matches Python SDK behavior in Manager.py _refreshJWT (lines 200-212)
 				limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(newIDToken, "-", m.logger)
 				if err != nil {
 					m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)

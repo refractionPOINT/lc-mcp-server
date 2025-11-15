@@ -344,18 +344,27 @@ func TestAccessTokenLifecycle(t *testing.T) {
 		assert.Equal(t, "firebase-refresh-token-secret", retrieved.FirebaseRefreshToken)
 	})
 
-	t.Run("expired token returns nil", func(t *testing.T) {
+	t.Run("expired token still retrievable within grace period", func(t *testing.T) {
+		creationTime := time.Now()
 		token := NewAccessTokenData("at456", "user456", "id", "refresh",
-			time.Now().Add(1*time.Hour).Unix(), "scope", 1)
+			creationTime.Add(1*time.Hour).Unix(), "scope", 1) // TTL = 1 second
 		err := manager.StoreAccessToken(ctx, token)
 		require.NoError(t, err)
 
-		// Fast forward past expiration
+		// Fast forward past token expiration but within grace period
+		// The Redis TTL was set to ExpiresAt + TokenGracePeriod, so token data remains
 		mr.FastForward(2 * time.Second)
 
+		// Token data is still retrievable (for auto-refresh purposes)
+		// Note: The token's logical expiration (ExpiresAt) was 1 second after creation,
+		// but Redis TTL includes grace period so data is still there
 		retrieved, err := manager.GetAccessTokenData(ctx, "at456")
 		assert.NoError(t, err)
-		assert.Nil(t, retrieved)
+		require.NotNil(t, retrieved, "expired token should still be retrievable within grace period")
+		assert.Equal(t, "user456", retrieved.UID)
+		// Verify the token is logically expired (ExpiresAt was creation + 1 second)
+		// After 2 seconds fast forward, the token is past its expiration
+		assert.Equal(t, creationTime.Unix()+1, retrieved.ExpiresAt, "ExpiresAt should match original expiration")
 	})
 
 	t.Run("revoke access token", func(t *testing.T) {

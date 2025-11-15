@@ -236,7 +236,9 @@ func (m *Manager) StoreAccessToken(ctx context.Context, token *AccessTokenData) 
 		return fmt.Errorf("failed to marshal access token: %w", err)
 	}
 
-	ttl := int(token.ExpiresAt - time.Now().Unix())
+	// Add grace period to Redis TTL so token data persists beyond logical expiration
+	// This allows the server to auto-refresh expired tokens transparently
+	ttl := int(token.ExpiresAt - time.Now().Unix() + TokenGracePeriod)
 	if ttl <= 0 {
 		return fmt.Errorf("token already expired")
 	}
@@ -245,12 +247,13 @@ func (m *Manager) StoreAccessToken(ctx context.Context, token *AccessTokenData) 
 		return fmt.Errorf("failed to store access token: %w", err)
 	}
 
-	m.logger.Debug("Stored access token")
+	m.logger.Debug("Stored access token", "expires_at", token.ExpiresAt, "redis_ttl", ttl)
 
 	return nil
 }
 
 // GetAccessTokenData retrieves and decrypts access token data
+// Returns token data even if expired (within grace period) to allow automatic refresh
 func (m *Manager) GetAccessTokenData(ctx context.Context, accessToken string) (*AccessTokenData, error) {
 	key := TokenPrefix + accessToken
 
@@ -268,10 +271,9 @@ func (m *Manager) GetAccessTokenData(ctx context.Context, accessToken string) (*
 		return nil, fmt.Errorf("failed to unmarshal access token: %w", err)
 	}
 
-	// Check if expired
-	if tokenData.ExpiresAt < time.Now().Unix() {
-		return nil, nil
-	}
+	// NOTE: We no longer return nil for expired tokens here
+	// The token data is kept in Redis beyond ExpiresAt (with grace period)
+	// This allows the caller to check expiration and auto-refresh if needed
 
 	// Decrypt Firebase tokens
 	tokenData.FirebaseIDToken, err = m.encryption.Decrypt(tokenData.FirebaseIDToken)
@@ -285,6 +287,22 @@ func (m *Manager) GetAccessTokenData(ctx context.Context, accessToken string) (*
 	}
 
 	return &tokenData, nil
+}
+
+// ExtendAccessTokenExpiration extends the expiration time of an access token
+// This is used for transparent token refresh without changing the token string
+func (m *Manager) ExtendAccessTokenExpiration(ctx context.Context, accessToken string, newExpiresAt int64) error {
+	// Get existing token data
+	tokenData, err := m.GetAccessTokenData(ctx, accessToken)
+	if tokenData == nil || err != nil {
+		return fmt.Errorf("access token not found: %w", err)
+	}
+
+	// Update expiration time
+	tokenData.ExpiresAt = newExpiresAt
+
+	// Re-store with updated expiration (StoreAccessToken handles Redis TTL)
+	return m.StoreAccessToken(ctx, tokenData)
 }
 
 // UpdateAccessTokenFirebaseTokens updates Firebase tokens for an existing access token

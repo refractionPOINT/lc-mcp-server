@@ -43,6 +43,9 @@ type AccessTokenData struct {
 	Scope                string `json:"scope"`
 	CreatedAt            int64  `json:"created_at"`
 	ExpiresAt            int64  `json:"expires_at"`
+	// Extension tracking for security auditing and limits
+	ExtensionCount int   `json:"extension_count"`  // Number of times token has been auto-extended
+	LastExtendedAt int64 `json:"last_extended_at"` // Timestamp of last extension (0 if never extended)
 }
 
 // RefreshTokenData represents a refresh token mapping
@@ -79,11 +82,25 @@ type MFASession struct {
 const (
 	StateTTL       = 600     // 10 minutes
 	CodeTTL        = 300     // 5 minutes
-	TokenTTL       = 3600    // 1 hour (access token)
+	TokenTTL       = 86400   // 1 day (access token) - extends on each use
 	RefreshTTL     = 2592000 // 30 days (refresh token)
 	SelectionTTL   = 300     // 5 minutes (provider selection)
 	MFATTL         = 300     // 5 minutes (MFA challenge)
 	MaxMFAAttempts = 3       // Maximum failed MFA attempts
+
+	// TokenRefreshBuffer is the time before expiration when we should refresh the MCP token
+	// This ensures the token is refreshed before it expires (1 hour before)
+	TokenRefreshBuffer = 3600 // 1 hour before expiration
+
+	// TokenGracePeriod is extra time to keep token data in Redis after logical expiration
+	// This allows the server to auto-refresh expired tokens transparently
+	// Supports up to 1 week of inactivity before requiring re-authentication
+	TokenGracePeriod = 604800 // 7 days grace period
+
+	// MaxTokenExtensions limits how many times a token can be auto-extended
+	// This prevents indefinite token lifetime and ensures periodic re-authentication
+	// With 1-day TTL, this allows up to 30 days total lifetime (matches refresh token)
+	MaxTokenExtensions = 30
 )
 
 // Key prefixes for Redis

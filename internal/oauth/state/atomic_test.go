@@ -424,11 +424,14 @@ func TestTTLConstants(t *testing.T) {
 	t.Run("TTL constants are reasonable", func(t *testing.T) {
 		assert.Equal(t, 600, StateTTL, "State TTL should be 10 minutes")
 		assert.Equal(t, 300, CodeTTL, "Code TTL should be 5 minutes")
-		assert.Equal(t, 3600, TokenTTL, "Token TTL should be 1 hour")
+		assert.Equal(t, 86400, TokenTTL, "Token TTL should be 1 day")
 		assert.Equal(t, 2592000, RefreshTTL, "Refresh TTL should be 30 days")
 		assert.Equal(t, 300, SelectionTTL, "Selection TTL should be 5 minutes")
 		assert.Equal(t, 300, MFATTL, "MFA TTL should be 5 minutes")
 		assert.Equal(t, 3, MaxMFAAttempts, "Max MFA attempts should be 3")
+		assert.Equal(t, 3600, TokenRefreshBuffer, "Token refresh buffer should be 1 hour")
+		assert.Equal(t, 604800, TokenGracePeriod, "Token grace period should be 1 week")
+		assert.Equal(t, 30, MaxTokenExtensions, "Max token extensions should be 30")
 	})
 }
 
