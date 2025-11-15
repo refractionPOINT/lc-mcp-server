@@ -11,11 +11,15 @@ import (
 	"log/slog"
 )
 
+// JWTExchangeFunc is the function signature for exchanging Firebase tokens for LimaCharlie JWTs
+type JWTExchangeFunc func(firebaseIDToken, oid string, logger *slog.Logger) (string, error)
+
 // Manager manages OAuth token validation and lifecycle
 type Manager struct {
 	stateManager   *state.Manager
 	firebaseClient firebase.ClientInterface
 	logger         *slog.Logger
+	jwtExchange    JWTExchangeFunc
 }
 
 // ValidationResult represents the result of token validation
@@ -56,7 +60,14 @@ func NewManager(stateManager *state.Manager, firebaseClient firebase.ClientInter
 		stateManager:   stateManager,
 		firebaseClient: firebaseClient,
 		logger:         logger,
+		jwtExchange:    auth.ExchangeFirebaseTokenForJWT, // Default to real implementation
 	}
+}
+
+// WithJWTExchange sets a custom JWT exchange function (useful for testing)
+func (m *Manager) WithJWTExchange(fn JWTExchangeFunc) *Manager {
+	m.jwtExchange = fn
+	return m
 }
 
 // ValidateAccessToken validates an MCP access token and optionally refreshes Firebase tokens
@@ -88,7 +99,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			// SECURITY: Check extension limits before allowing recovery
 			if tokenData.ExtensionCount >= state.MaxTokenExtensions {
 				m.logger.Warn("Token extension limit reached, forcing re-authentication",
-					"token", accessToken[:10]+"...",
+					"token", accessToken[:min(10, len(accessToken))]+"...",
 					"uid", tokenData.UID,
 					"extension_count", tokenData.ExtensionCount,
 					"max_extensions", state.MaxTokenExtensions)
@@ -99,7 +110,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			}
 
 			m.logger.Info("MCP access token expired but within grace period, auto-extending...",
-				"token", accessToken[:10]+"...",
+				"token", accessToken[:min(10, len(accessToken))]+"...",
 				"expired_ago_seconds", -mcpTokenExpiresIn,
 				"uid", tokenData.UID,
 				"extension_count", tokenData.ExtensionCount)
@@ -140,7 +151,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 				"max_extensions", state.MaxTokenExtensions)
 
 			// Exchange refreshed Firebase token for LimaCharlie JWT
-			limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(newIDToken, "-", m.logger)
+			limaCharlieJWT, err := m.jwtExchange(newIDToken, "-", m.logger)
 			if err != nil {
 				m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 				return &ValidationResult{
@@ -183,7 +194,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	// SECURITY: Check extension limits before proactive MCP token extension
 	if mcpNeedsRefresh && tokenData.ExtensionCount >= state.MaxTokenExtensions {
 		m.logger.Warn("Token extension limit reached, not extending further",
-			"token", accessToken[:10]+"...",
+			"token", accessToken[:min(10, len(accessToken))]+"...",
 			"uid", tokenData.UID,
 			"extension_count", tokenData.ExtensionCount,
 			"max_extensions", state.MaxTokenExtensions,
@@ -196,14 +207,14 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	if needsRefresh {
 		if mcpNeedsRefresh {
 			m.logger.Info("MCP access token expiring soon, proactively refreshing...",
-				"token", accessToken[:10]+"...",
+				"token", accessToken[:min(10, len(accessToken))]+"...",
 				"mcp_expires_in", mcpTokenExpiresIn,
 				"firebase_expires_in", firebaseExpiresIn,
 				"uid", tokenData.UID,
 				"extension_count", tokenData.ExtensionCount)
 		} else {
 			m.logger.Info("Firebase token expiring soon, refreshing...",
-				"token", accessToken[:10]+"...",
+				"token", accessToken[:min(10, len(accessToken))]+"...",
 				"firebase_expires_in", firebaseExpiresIn,
 				"uid", tokenData.UID)
 		}
@@ -241,7 +252,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 					"extension_count", tokenData.ExtensionCount)
 
 				// Exchange Firebase token for LimaCharlie JWT
-				limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(newIDToken, "-", m.logger)
+				limaCharlieJWT, err := m.jwtExchange(newIDToken, "-", m.logger)
 				if err != nil {
 					m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 					return &ValidationResult{
@@ -265,7 +276,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 
 	// Exchange Firebase token for LimaCharlie JWT
 	// This matches Python SDK behavior in Manager.py _refreshJWT (lines 200-212)
-	limaCharlieJWT, err := auth.ExchangeFirebaseTokenForJWT(tokenData.FirebaseIDToken, "-", m.logger)
+	limaCharlieJWT, err := m.jwtExchange(tokenData.FirebaseIDToken, "-", m.logger)
 	if err != nil {
 		m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 		return &ValidationResult{

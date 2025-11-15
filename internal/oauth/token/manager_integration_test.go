@@ -3,6 +3,7 @@ package token
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -57,6 +58,16 @@ func (m *mockFirebaseClient) FinalizeMFASignIn(ctx context.Context, mfaPendingCr
 	}, nil
 }
 
+// mockJWTExchange creates a mock JWT exchange function for testing
+func mockJWTExchange(jwt string, shouldError error) JWTExchangeFunc {
+	return func(firebaseIDToken, oid string, logger *slog.Logger) (string, error) {
+		if shouldError != nil {
+			return "", shouldError
+		}
+		return jwt, nil
+	}
+}
+
 func setupTestManager(t *testing.T) (*Manager, *state.Manager, *mockFirebaseClient) {
 	t.Helper()
 
@@ -64,6 +75,8 @@ func setupTestManager(t *testing.T) (*Manager, *state.Manager, *mockFirebaseClie
 	mockFB := newMockFirebaseClient()
 
 	manager := NewManager(stateManager, mockFB, testLogger())
+	// Set default mock JWT exchange that returns a valid JWT
+	manager.WithJWTExchange(mockJWTExchange("mock-limacharlie-jwt", nil))
 
 	return manager, stateManager, mockFB
 }
@@ -365,24 +378,33 @@ func TestTokenExtension_LimitsEnforced(t *testing.T) {
 		// Validation should succeed and increment extension count
 		result, err := manager.ValidateAccessToken(ctx, "almost-maxed-token", true)
 
-		// Note: This will fail because we don't have auth.ExchangeFirebaseTokenForJWT mocked
-		// But we can verify the extension tracking logic was reached
-		if err == nil && result != nil {
-			if result.Valid {
-				// Verify extension count was incremented
-				updatedToken, _ := stateManager.GetAccessTokenData(ctx, "almost-maxed-token")
-				if updatedToken != nil {
-					assert.Equal(t, state.MaxTokenExtensions, updatedToken.ExtensionCount)
-					assert.NotEqual(t, int64(0), updatedToken.LastExtendedAt)
-				}
-			}
-		}
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.True(t, result.Valid, "Token below max extensions should be extended successfully")
+		assert.True(t, result.Refreshed, "Token should be marked as refreshed")
+		assert.Equal(t, "user", result.UID)
+		assert.Equal(t, "new-fb-id-token", result.FirebaseIDToken)
+		assert.Equal(t, "mock-limacharlie-jwt", result.LimaCharlieJWT)
+
+		// Verify extension count was incremented
+		updatedToken, err := stateManager.GetAccessTokenData(ctx, "almost-maxed-token")
+		require.NoError(t, err)
+		require.NotNil(t, updatedToken)
+		assert.Equal(t, state.MaxTokenExtensions, updatedToken.ExtensionCount, "Extension count should now be at max")
+		assert.NotEqual(t, int64(0), updatedToken.LastExtendedAt, "LastExtendedAt should be set")
+		// Verify token expiration was extended
+		assert.Greater(t, updatedToken.ExpiresAt, time.Now().Unix(), "Token should have future expiration")
 	})
 }
 
 func TestTokenExtension_CountIncrementsOnExtension(t *testing.T) {
-	manager, stateManager, _ := setupTestManager(t)
+	manager, stateManager, mockFB := setupTestManager(t)
 	ctx := context.Background()
+
+	// Mock Firebase to return valid tokens
+	mockFB.refreshIDTokenFunc = func(ctx context.Context, refreshToken string) (string, int64, error) {
+		return "refreshed-fb-id-token", time.Now().Add(1 * time.Hour).Unix(), nil
+	}
 
 	// Create initial token
 	tokens, err := manager.CreateTokenResponse(ctx, "user", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid")
@@ -392,9 +414,26 @@ func TestTokenExtension_CountIncrementsOnExtension(t *testing.T) {
 	tokenData, err := stateManager.GetAccessTokenData(ctx, tokens.AccessToken)
 	require.NoError(t, err)
 	assert.Equal(t, 0, tokenData.ExtensionCount, "Initial extension count should be 0")
+	assert.Equal(t, int64(0), tokenData.LastExtendedAt, "LastExtendedAt should not be set initially")
 
-	// Note: To fully test extension, we'd need to mock the JWT exchange
-	// For now, this test verifies the initial state is correct
+	// Set token to be expiring soon (within refresh buffer)
+	tokenData.ExpiresAt = time.Now().Add(30 * time.Minute).Unix() // Less than 1 hour buffer
+	err = stateManager.StoreAccessToken(ctx, tokenData)
+	require.NoError(t, err)
+
+	// Validate token - should proactively extend it
+	result, err := manager.ValidateAccessToken(ctx, tokens.AccessToken, true)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Valid, "Token should be valid after extension")
+	assert.True(t, result.Refreshed, "Token should be marked as refreshed")
+
+	// Verify extension count was incremented
+	updatedToken, err := stateManager.GetAccessTokenData(ctx, tokens.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, 1, updatedToken.ExtensionCount, "Extension count should be incremented to 1")
+	assert.NotEqual(t, int64(0), updatedToken.LastExtendedAt, "LastExtendedAt should now be set")
+	assert.Greater(t, updatedToken.ExpiresAt, tokenData.ExpiresAt, "Token expiration should be extended")
 }
 
 func TestTokenExtension_MaxExtensionsConstant(t *testing.T) {
@@ -410,9 +449,9 @@ func TestTokenExtension_MaxExtensionsConstant(t *testing.T) {
 }
 
 func TestTokenGracePeriod_Constants(t *testing.T) {
-	t.Run("grace period supports week-long inactivity", func(t *testing.T) {
-		// Grace period should be at least 1 week (604800 seconds)
-		assert.GreaterOrEqual(t, state.TokenGracePeriod, 604800, "Grace period should be at least 1 week")
+	t.Run("grace period supports reasonable inactivity", func(t *testing.T) {
+		// Grace period should be 23 hours (82800 seconds) to balance security and UX
+		assert.Equal(t, 82800, state.TokenGracePeriod, "Grace period should be 23 hours")
 	})
 
 	t.Run("token refresh buffer is reasonable", func(t *testing.T) {

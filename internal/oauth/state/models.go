@@ -94,8 +94,8 @@ const (
 
 	// TokenGracePeriod is extra time to keep token data in Redis after logical expiration
 	// This allows the server to auto-refresh expired tokens transparently
-	// Supports up to 1 week of inactivity before requiring re-authentication
-	TokenGracePeriod = 604800 // 7 days grace period
+	// Supports up to 23 hours of inactivity before requiring re-authentication
+	TokenGracePeriod = 82800 // 23 hours grace period
 
 	// MaxTokenExtensions limits how many times a token can be auto-extended
 	// This prevents indefinite token lifetime and ensures periodic re-authentication
