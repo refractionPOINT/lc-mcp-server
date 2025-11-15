@@ -45,7 +45,7 @@ func getReplayURL(ctx context.Context, oid string) (string, error) {
 	replayURLMutex.RUnlock()
 
 	// Not in cache, fetch from API
-	urlEndpoint := fmt.Sprintf("%s/orgs/%s/url", apiRootURL, oid)
+	urlEndpoint := fmt.Sprintf("%s/v1/orgs/%s/url", apiRootURL, oid)
 
 	reqCtx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
@@ -69,13 +69,15 @@ func getReplayURL(ctx context.Context, oid string) (string, error) {
 		return "", fmt.Errorf("failed to get replay URL (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response
-	var urlsResponse map[string]string
+	// Parse response - the API returns {"url": {"replay": "...", "hooks": "...", ...}, "certs": {...}}
+	var urlsResponse struct {
+		URLs map[string]string `json:"url"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&urlsResponse); err != nil {
 		return "", fmt.Errorf("failed to decode replay URL response: %w", err)
 	}
 
-	replayURL, ok := urlsResponse["replay"]
+	replayURL, ok := urlsResponse.URLs["replay"]
 	if !ok || replayURL == "" {
 		return "", fmt.Errorf("replay URL not found in response")
 	}
