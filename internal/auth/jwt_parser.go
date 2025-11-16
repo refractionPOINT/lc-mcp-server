@@ -64,6 +64,10 @@ type LCClaims struct {
 	Permissions map[string][]string // Org ID -> permissions mapping
 }
 
+// Expected audience claim for LimaCharlie JWTs
+// This ensures tokens are intended for the LimaCharlie control plane
+const expectedAudience = "lce_control_plane"
+
 var (
 	apiPublicKey        *rsa.PublicKey
 	loadApiKeyOnce      sync.Once
@@ -95,7 +99,7 @@ func ParseAndValidateLimaCharlieJWT(jwtString string) (*LCClaims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return apiPublicKey, nil
-	})
+	}, jwt.WithAudience(expectedAudience)) // Validate audience claim for security
 
 	if err1 == nil && token.Valid {
 		if claims, ok := token.Claims.(*lcOrgClaims); ok {
@@ -130,7 +134,7 @@ func ParseAndValidateLimaCharlieJWT(jwtString string) (*LCClaims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return apiPublicKey, nil
-	})
+	}, jwt.WithAudience(expectedAudience)) // Validate audience claim for security
 
 	if err2 == nil && token.Valid {
 		if claims, ok := token.Claims.(*lcUserClaims); ok {

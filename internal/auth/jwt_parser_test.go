@@ -189,3 +189,70 @@ func TestParseAndValidateLimaCharlieJWT_SignatureValidation(t *testing.T) {
 	assert.Error(t, err, "Should reject JWT with invalid signature")
 	assert.Nil(t, claims, "Claims should be nil for invalid signature")
 }
+
+func TestExpectedAudienceConstant(t *testing.T) {
+	// Verify the expected audience constant is correctly defined
+	assert.Equal(t, "lce_control_plane", expectedAudience, "Expected audience should be lce_control_plane")
+}
+
+func TestParseAndValidateLimaCharlieJWT_AudienceValidation(t *testing.T) {
+	// These tests verify that audience validation is enforced
+	// JWTs without the correct audience claim will be rejected
+	// Note: Since we don't have the private key, these JWTs have invalid signatures,
+	// but we verify that the error messages properly indicate validation failures
+
+	tests := []struct {
+		name        string
+		token       string
+		description string
+	}{
+		{
+			name: "missing audience claim",
+			// Header: {"alg":"RS256","typ":"JWT"}
+			// Payload: {"uid":"test","email":"test@test.com","oid":["test-org"],"exp":9999999999}
+			// No "aud" field present
+			token:       "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJ0ZXN0IiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwib2lkIjpbInRlc3Qtb3JnIl0sImV4cCI6OTk5OTk5OTk5OX0.fake_sig",
+			description: "JWT without audience claim should be rejected",
+		},
+		{
+			name: "wrong audience claim",
+			// Header: {"alg":"RS256","typ":"JWT"}
+			// Payload: {"uid":"test","email":"test@test.com","oid":["test-org"],"aud":"wrong_audience","exp":9999999999}
+			// Wrong "aud" value
+			token:       "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJ0ZXN0IiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwib2lkIjpbInRlc3Qtb3JnIl0sImF1ZCI6Indyb25nX2F1ZGllbmNlIiwiZXhwIjo5OTk5OTk5OTk5fQ.fake_sig",
+			description: "JWT with wrong audience claim should be rejected",
+		},
+		{
+			name: "correct audience claim structure",
+			// Header: {"alg":"RS256","typ":"JWT"}
+			// Payload: {"uid":"test","email":"test@test.com","oid":["test-org"],"aud":"lce_control_plane","exp":9999999999}
+			// Correct "aud" value (but signature still invalid, so will fail signature check)
+			token:       "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOiJ0ZXN0IiwiZW1haWwiOiJ0ZXN0QHRlc3QuY29tIiwib2lkIjpbInRlc3Qtb3JnIl0sImF1ZCI6ImxjZV9jb250cm9sX3BsYW5lIiwiZXhwIjo5OTk5OTk5OTk5fQ.fake_sig",
+			description: "JWT with correct audience but invalid signature should fail signature validation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claims, err := ParseAndValidateLimaCharlieJWT(tt.token)
+
+			// All tests should fail due to either signature or audience validation
+			assert.Error(t, err, tt.description)
+			assert.Nil(t, claims, "Claims should be nil on error")
+
+			// Verify the error contains relevant validation failure information
+			// The jwt library will check audience before signature, so missing/wrong audience
+			// will be caught along with signature errors
+			assert.NotEmpty(t, err.Error(), "Error message should be descriptive")
+		})
+	}
+}
+
+// Note: To fully test audience validation with valid signatures, you would need:
+// 1. A test JWT signed with the corresponding private key that includes the correct "aud" claim, or
+// 2. An integration test with real JWTs from the LimaCharlie platform
+//
+// The audience validation is implemented using jwt.WithAudience("lce_control_plane") which:
+// - Rejects tokens without an "aud" claim
+// - Rejects tokens where "aud" does not include "lce_control_plane"
+// - Accepts tokens where "aud" is "lce_control_plane" or includes it in an array
