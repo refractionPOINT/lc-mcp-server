@@ -193,36 +193,8 @@ func BenchmarkTokenResponse(b *testing.B) {
 	}
 }
 
-// Test documentation of security considerations
-func TestSecurityDocumentation(t *testing.T) {
-	t.Run("refresh token rotation prevents token theft", func(t *testing.T) {
-		// The RefreshAccessToken function implements refresh token rotation
-		// (see manager.go:148-149 comment)
-		// This is a critical security feature that prevents token theft:
-		// - Old refresh token is invalidated immediately
-		// - New refresh token is issued
-		// - If stolen token is used, legitimate user's token also fails
-		// - This alerts us to token compromise
-
-		// This test documents the security property
-		assert.True(t, true, "Refresh token rotation is implemented")
-	})
-
-	t.Run("auto-refresh prevents expired tokens mid-request", func(t *testing.T) {
-		// ValidateAccessToken with autoRefresh=true will refresh Firebase tokens
-		// that are close to expiry (< 5 minutes remaining)
-		// This prevents tokens from expiring during long-running operations
-
-		assert.True(t, true, "Auto-refresh feature documented")
-	})
-
-	t.Run("JWT exchange provides defense in depth", func(t *testing.T) {
-		// After validating Firebase token, we exchange it for a LimaCharlie JWT
-		// This provides defense in depth:
-		// - Validates token is still valid with Firebase
-		// - Ensures LimaCharlie recognizes the user
-		// - Fresh JWT for each request
-
-		assert.True(t, true, "JWT exchange defense-in-depth documented")
-	})
-}
+// NOTE: Security properties such as refresh token rotation, auto-refresh behavior,
+// and JWT exchange are documented in the production code comments (manager.go).
+// Actual behavioral tests for these features require integration testing with
+// real Firebase and LimaCharlie services, or comprehensive mocking of the
+// firebase.ClientInterface and stateManager dependencies.
