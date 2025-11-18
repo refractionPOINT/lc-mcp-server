@@ -110,8 +110,8 @@ type UploadResult struct {
 
 // uploadToTempFile saves data to a temporary file and returns the path
 func (m *Manager) uploadToTempFile(data interface{}, toolName string) (*UploadResult, error) {
-	// Convert data to JSON
-	jsonBytes, err := json.MarshalIndent(data, "", "  ")
+	// Convert data to compact JSON
+	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
 	}
@@ -151,8 +151,8 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 		return m.uploadToTempFile(data, toolName)
 	}
 
-	// Convert data to JSON
-	jsonBytes, err := json.MarshalIndent(data, "", "  ")
+	// Convert data to compact JSON
+	jsonBytes, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
 	}

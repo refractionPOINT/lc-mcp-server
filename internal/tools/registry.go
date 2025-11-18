@@ -475,11 +475,10 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 
 // Helper functions for creating tool results
 
-// ToJSON converts a value to JSON string without HTML escaping
+// ToJSON converts a value to compact JSON string without HTML escaping
 func ToJSON(v interface{}) string {
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
-	encoder.SetIndent("", "  ")
 	encoder.SetEscapeHTML(false) // Prevent &, <, > from being escaped as \u0026, \u003c, \u003e
 
 	if err := encoder.Encode(v); err != nil {

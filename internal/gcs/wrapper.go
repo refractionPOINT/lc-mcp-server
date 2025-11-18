@@ -45,8 +45,8 @@ func WrapMCPResult(ctx context.Context, result interface{}, toolName string) int
 					return result
 				}
 
-				// Re-encode and update the content
-				wrappedJSON, _ := json.MarshalIndent(wrappedData, "", "  ")
+				// Re-encode and update the content with compact JSON
+				wrappedJSON, _ := json.Marshal(wrappedData)
 				contentItem["text"] = string(wrappedJSON)
 
 				// Return the modified result
