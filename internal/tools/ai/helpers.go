@@ -358,3 +358,225 @@ func getSchemaInfo(ctx context.Context, org *lc.Organization, schemaType string)
 
 	return schemaInfo.String()
 }
+
+// detectPlatform uses AI to identify the platform from a user query
+// Returns the detected platform name or empty string if not detected
+func detectPlatform(ctx context.Context, org *lc.Organization, userQuery string) string {
+	// Get available platform names
+	platforms, err := org.GetPlatformNames()
+	if err != nil {
+		slog.Warn("Failed to fetch platform names", "error", err)
+		return ""
+	}
+
+	if len(platforms) == 0 {
+		return ""
+	}
+
+	// Load the platform detection prompt template
+	promptTemplate, err := getPromptTemplate("gen_platform")
+	if err != nil {
+		slog.Warn("Failed to load platform detection prompt", "error", err)
+		return ""
+	}
+
+	// Replace the platforms placeholder
+	prompt := strings.Replace(promptTemplate, "{platforms}", strings.Join(platforms, ", "), -1)
+
+	// Call Gemini with LiteModel for fast, cheap inference
+	messages := []map[string]interface{}{
+		{
+			"role": "user",
+			"parts": []interface{}{
+				map[string]interface{}{"text": userQuery},
+			},
+		},
+	}
+
+	response, err := geminiResponse(ctx, messages, prompt, LiteModel, 0.0)
+	if err != nil {
+		slog.Warn("Failed to detect platform", "error", err)
+		return ""
+	}
+
+	// Clean and validate the response
+	detectedPlatform := strings.TrimSpace(response)
+
+	// Verify the detected platform is in our list
+	for _, p := range platforms {
+		if strings.EqualFold(p, detectedPlatform) {
+			slog.Debug("Platform detected", "platform", p, "query", userQuery)
+			return p
+		}
+	}
+
+	// Empty or invalid response means no platform detected
+	slog.Debug("No platform detected", "query", userQuery)
+	return ""
+}
+
+// selectRelevantEvents uses AI to select relevant event types for a query
+// Returns a list of event type names that are relevant to the query
+func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery string, platform string) []string {
+	// Get schemas based on platform
+	var schemas *lc.Schemas
+	var err error
+
+	if platform != "" {
+		schemas, err = org.GetSchemasForPlatform(platform)
+		if err != nil {
+			slog.Warn("Failed to fetch platform schemas, falling back to all schemas", "platform", platform, "error", err)
+			schemas, err = org.GetSchemas()
+		}
+	} else {
+		schemas, err = org.GetSchemas()
+	}
+
+	if err != nil || schemas == nil || len(schemas.EventTypes) == 0 {
+		slog.Warn("Failed to fetch schemas for event selection", "error", err)
+		return nil
+	}
+
+	// Extract just the event names (without the prefix)
+	eventNames := make([]string, 0, len(schemas.EventTypes))
+	for _, eventType := range schemas.EventTypes {
+		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 {
+			eventNames = append(eventNames, parts[1])
+		}
+	}
+
+	if len(eventNames) == 0 {
+		return nil
+	}
+
+	// Load the event selection prompt template
+	promptTemplate, err := getPromptTemplate("gen_event_list")
+	if err != nil {
+		slog.Warn("Failed to load event selection prompt", "error", err)
+		return nil
+	}
+
+	// Replace the events placeholder
+	prompt := strings.Replace(promptTemplate, "{events}", strings.Join(eventNames, "\n"), -1)
+
+	// Call Gemini with LiteModel for fast, cheap inference
+	messages := []map[string]interface{}{
+		{
+			"role": "user",
+			"parts": []interface{}{
+				map[string]interface{}{"text": userQuery},
+			},
+		},
+	}
+
+	response, err := geminiResponse(ctx, messages, prompt, LiteModel, 0.0)
+	if err != nil {
+		slog.Warn("Failed to select relevant events", "error", err)
+		return nil
+	}
+
+	// Parse the response - one event per line
+	lines := strings.Split(response, "\n")
+	selectedEvents := make([]string, 0, len(lines))
+
+	// Create a map for quick lookup of valid event names
+	validEvents := make(map[string]bool)
+	for _, name := range eventNames {
+		validEvents[name] = true
+	}
+
+	for _, line := range lines {
+		eventName := strings.TrimSpace(line)
+		if eventName == "" {
+			continue
+		}
+		// Validate the event name exists
+		if validEvents[eventName] {
+			selectedEvents = append(selectedEvents, eventName)
+		}
+	}
+
+	slog.Debug("Selected relevant events", "count", len(selectedEvents), "events", selectedEvents, "query", userQuery)
+	return selectedEvents
+}
+
+// getEnhancedSchemaContext gets detailed schema information for selected events
+// Returns a formatted string with event types and their field definitions
+func getEnhancedSchemaContext(ctx context.Context, org *lc.Organization, events []string) string {
+	if len(events) == 0 {
+		return ""
+	}
+
+	var schemaInfo strings.Builder
+	schemaInfo.WriteString(fmt.Sprintf("Detailed schemas for %d relevant event types:\n\n", len(events)))
+
+	fetchedCount := 0
+	for _, eventName := range events {
+		// Fetch detailed schema for this event
+		schema, err := org.GetSchema(eventName)
+		if err != nil {
+			slog.Debug("Failed to fetch schema for event", "event", eventName, "error", err)
+			continue
+		}
+
+		if schema == nil {
+			continue
+		}
+
+		// Convert to map for interpretSchema
+		schemaMap := map[string]interface{}{
+			"schema": map[string]interface{}{
+				"event_type": schema.Schema.EventType,
+				"elements":   convertElementsToInterface(schema.Schema.Elements),
+			},
+		}
+
+		interpreted := interpretSchema(schemaMap)
+		if interpreted != "" {
+			schemaInfo.WriteString(interpreted)
+			schemaInfo.WriteString("\n")
+			fetchedCount++
+		}
+	}
+
+	if fetchedCount == 0 {
+		return ""
+	}
+
+	schemaInfo.WriteString("\nUse these event type names and field paths in your queries. ")
+	schemaInfo.WriteString("Common fields across most events include: routing (with sid, oid, tags, etc.), ")
+	schemaInfo.WriteString("event_type, ts (timestamp).")
+
+	return schemaInfo.String()
+}
+
+// convertElementsToInterface converts []SchemaElement to []interface{} for interpretSchema
+func convertElementsToInterface(elements []lc.SchemaElement) []interface{} {
+	result := make([]interface{}, len(elements))
+	for i, elem := range elements {
+		result[i] = string(elem)
+	}
+	return result
+}
+
+// getSmartSchemaContext performs multi-stage context extraction for AI generation
+// This is the main function that orchestrates platform detection, event selection, and schema fetching
+func getSmartSchemaContext(ctx context.Context, org *lc.Organization, userQuery string, schemaType string) string {
+	// Stage 1: Detect platform from query
+	platform := detectPlatform(ctx, org, userQuery)
+
+	// Stage 2: Select relevant events for the query
+	relevantEvents := selectRelevantEvents(ctx, org, userQuery, platform)
+
+	// Stage 3: Get enhanced schema context if we have relevant events
+	if len(relevantEvents) > 0 {
+		enhancedContext := getEnhancedSchemaContext(ctx, org, relevantEvents)
+		if enhancedContext != "" {
+			return enhancedContext
+		}
+	}
+
+	// Fall back to basic schema info if smart extraction failed
+	slog.Debug("Falling back to basic schema info", "platform", platform, "relevant_events", len(relevantEvents))
+	return getSchemaInfo(ctx, org, schemaType)
+}
