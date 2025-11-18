@@ -57,7 +57,7 @@ func RegisterGenerateLCQLQuery() {
 			}
 
 			// Get schema information from the SDK
-			schema := getSchemaInfo(ctx, org)
+			schema := getSchemaInfo(ctx, org, "")
 			prompt := strings.Replace(promptTemplate, "{lcql_schema}", schema, -1)
 
 			// Loop up to retry count times to generate and validate
@@ -167,7 +167,7 @@ func RegisterGenerateDRRuleDetection() {
 			}
 
 			// Get schema information from the SDK
-			schema := getSchemaInfo(ctx, org)
+			schema := getSchemaInfo(ctx, org, "evt")
 			prompt := strings.Replace(promptTemplate, "{lcql_schema}", schema, -1)
 
 			// Loop up to retry count times

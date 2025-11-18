@@ -324,7 +324,7 @@ func interpretSchema(schema map[string]interface{}) string {
 }
 
 // getSchemaInfo fetches schema information from the SDK
-func getSchemaInfo(ctx context.Context, org *lc.Organization) string {
+func getSchemaInfo(ctx context.Context, org *lc.Organization, schemaType string) string {
 	// Get all available schemas
 	schemas, err := org.GetSchemas()
 	if err != nil {
@@ -340,25 +340,17 @@ func getSchemaInfo(ctx context.Context, org *lc.Organization) string {
 	// Provide a list of available event types rather than full schemas
 	// to avoid overwhelming the prompt with too much data
 	var schemaInfo strings.Builder
-	schemaInfo.WriteString(fmt.Sprintf("Available event types (%d total):\n", len(schemas.EventTypes)))
 
-	// Group into columns for readability
-	for i, eventType := range schemas.EventTypes {
-		// Remove "evt:" prefix if present for cleaner output
-		cleanType := eventType
-		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 {
-			cleanType = parts[1]
-		}
-
-		schemaInfo.WriteString(cleanType)
-
-		// Add separator or newline
-		if (i+1)%3 == 0 {
-			schemaInfo.WriteString("\n")
-		} else if i < len(schemas.EventTypes)-1 {
-			schemaInfo.WriteString(", ")
+	eventTypes := []string{}
+	for _, eventType := range schemas.EventTypes {
+		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 && parts[0] == schemaType || schemaType == "" {
+			eventTypes = append(eventTypes, fmt.Sprintf("%q", parts[1]))
 		}
 	}
+
+	schemaInfo.WriteString(fmt.Sprintf("Available event types (%d total):\n", len(eventTypes)))
+
+	schemaInfo.WriteString(strings.Join(eventTypes, ", "))
 
 	schemaInfo.WriteString("\n\nUse these event type names in your LCQL queries. ")
 	schemaInfo.WriteString("Common fields across most events include: routing (with sid, oid, tags, etc.), ")

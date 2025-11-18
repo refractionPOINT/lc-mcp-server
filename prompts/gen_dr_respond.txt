@@ -1017,12 +1017,4 @@ Here is the corrected YAML:
   name: "Suspicious Activity"
 ```
 
-```
-My apologies for the error. The correct YAML is:
-```yaml
-- action: report
-  name: "Suspicious Activity"
-```
-```
-
 **START YOUR RESPONSE DIRECTLY WITH THE YAML. NO EXPLANATIONS.**

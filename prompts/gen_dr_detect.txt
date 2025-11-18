@@ -928,15 +928,6 @@ op: is
 ...
 ```
 
-```
-My apologies for the syntax error. The corrected detection is:
-```yaml
-event: NEW_PROCESS
-op: is
-...
-```
-```
-
 **START YOUR RESPONSE DIRECTLY WITH THE YAML. NO EXPLANATIONS.**
 
 Here is the description:
