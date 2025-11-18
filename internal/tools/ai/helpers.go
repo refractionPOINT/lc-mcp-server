@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -362,6 +363,10 @@ func getSchemaInfo(ctx context.Context, org *lc.Organization, schemaType string)
 // detectPlatform uses AI to identify the platform from a user query
 // Returns the detected platform name or empty string if not detected
 func detectPlatform(ctx context.Context, org *lc.Organization, userQuery string) string {
+	// Add timeout for this operation
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	// Get available platform names
 	platforms, err := org.GetPlatformNames()
 	if err != nil {
@@ -418,6 +423,10 @@ func detectPlatform(ctx context.Context, org *lc.Organization, userQuery string)
 // selectRelevantEvents uses AI to select relevant event types for a query
 // Returns a list of event type names that are relevant to the query
 func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery string, platform string) []string {
+	// Add timeout for this operation
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
 	// Get schemas based on platform
 	var schemas *lc.Schemas
 	var err error
@@ -437,17 +446,21 @@ func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery s
 		return nil
 	}
 
-	// Extract just the event names (without the prefix)
+	// Extract just the event names - ONLY actual event types (evt: prefix), not detections or other schemas
 	eventNames := make([]string, 0, len(schemas.EventTypes))
 	for _, eventType := range schemas.EventTypes {
-		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 {
+		parts := strings.SplitN(eventType, ":", 2)
+		if len(parts) == 2 && parts[0] == "evt" {
 			eventNames = append(eventNames, parts[1])
 		}
 	}
 
 	if len(eventNames) == 0 {
+		slog.Warn("No event types found after filtering", "total_schemas", len(schemas.EventTypes))
 		return nil
 	}
+
+	slog.Debug("Filtered event types for AI selection", "event_count", len(eventNames), "total_schemas", len(schemas.EventTypes))
 
 	// Load the event selection prompt template
 	promptTemplate, err := getPromptTemplate("gen_event_list")
@@ -502,24 +515,61 @@ func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery s
 
 // getEnhancedSchemaContext gets detailed schema information for selected events
 // Returns a formatted string with event types and their field definitions
+// Fetches all schemas in parallel for performance
 func getEnhancedSchemaContext(ctx context.Context, org *lc.Organization, events []string) string {
 	if len(events) == 0 {
 		return ""
 	}
 
+	// Fetch all schemas in parallel
+	type schemaResult struct {
+		eventName string
+		schema    *lc.SchemaResponse
+		err       error
+	}
+
+	results := make(chan schemaResult, len(events))
+	var wg sync.WaitGroup
+
+	for _, eventName := range events {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			schema, err := org.GetSchema(name)
+			results <- schemaResult{name, schema, err}
+		}(eventName)
+	}
+
+	// Close results channel when all goroutines complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results into a map
+	schemas := make(map[string]*lc.SchemaResponse)
+	for result := range results {
+		if result.err != nil {
+			slog.Debug("Failed to fetch schema for event", "event", result.eventName, "error", result.err)
+			continue
+		}
+		if result.schema != nil {
+			schemas[result.eventName] = result.schema
+		}
+	}
+
+	if len(schemas) == 0 {
+		return ""
+	}
+
+	// Build output in original order for consistency
 	var schemaInfo strings.Builder
-	schemaInfo.WriteString(fmt.Sprintf("Detailed schemas for %d relevant event types:\n\n", len(events)))
+	schemaInfo.WriteString(fmt.Sprintf("Detailed schemas for %d relevant event types:\n\n", len(schemas)))
 
 	fetchedCount := 0
 	for _, eventName := range events {
-		// Fetch detailed schema for this event
-		schema, err := org.GetSchema(eventName)
-		if err != nil {
-			slog.Debug("Failed to fetch schema for event", "event", eventName, "error", err)
-			continue
-		}
-
-		if schema == nil {
+		schema, ok := schemas[eventName]
+		if !ok {
 			continue
 		}
 
