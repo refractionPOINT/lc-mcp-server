@@ -23,6 +23,12 @@ const (
 	DefaultRetryCount = 10
 )
 
+// isDebugAIEnabled checks if DEBUG_AI environment variable is set
+func isDebugAIEnabled() bool {
+	value := strings.ToLower(os.Getenv("DEBUG_AI"))
+	return value == "true" || value == "1" || value == "yes"
+}
+
 // GetRetryCount returns the configured retry count from environment or default
 func GetRetryCount() int {
 	if count := os.Getenv("LLM_YAML_RETRY_COUNT"); count != "" {
@@ -160,6 +166,14 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 		}
 	}
 
+	// Debug logging for AI prompts
+	if isDebugAIEnabled() {
+		slog.Info("DEBUG_AI: System Prompt", "prompt", systemPrompt)
+		for i, part := range genaiParts {
+			slog.Info("DEBUG_AI: User Message", "part_index", i, "text", part.Text)
+		}
+	}
+
 	// Send message and get response
 	resp, err := chat.Send(ctx, genaiParts...)
 	if err != nil {
@@ -170,6 +184,11 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 	responseText := resp.Text()
 	if responseText == "" {
 		return "", fmt.Errorf("empty response from Gemini")
+	}
+
+	// Debug logging for AI response
+	if isDebugAIEnabled() {
+		slog.Info("DEBUG_AI: AI Response", "response", responseText)
 	}
 
 	return strings.TrimSpace(responseText), nil
