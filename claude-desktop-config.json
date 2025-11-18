@@ -1,89 +1,36 @@
 {
   "mcpServers": {
-    "limacharlie-all": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
+    "limacharlie": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
       "env": {
-        "PUBLIC_MODE": "false",
+        "MCP_MODE": "stdio",
         "MCP_PROFILE": "all",
-        "GOOGLE_API_KEY": "your-google-api-key-here",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key",
-        "GCS_BUCKET_NAME": "optional-gcs-bucket-name",
-        "GCS_SIGNER_SERVICE_ACCOUNT": "optional-gcs-signer@project.iam.gserviceaccount.com"
+        "LC_OID": "your-organization-id",
+        "LC_API_KEY": "your-api-key",
+        "LOG_LEVEL": "info"
       }
     },
-    "limacharlie-historical": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
+    "limacharlie-readonly": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
       "env": {
-        "PUBLIC_MODE": "false",
-        "MCP_PROFILE": "historical_data",
-        "GOOGLE_API_KEY": "your-google-api-key-here",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key"
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "historical_data_readonly",
+        "LC_OID": "your-organization-id",
+        "LC_API_KEY": "your-api-key",
+        "LOG_LEVEL": "info"
       }
     },
-    "limacharlie-live-investigation": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
+    "limacharlie-uid-mode": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
       "env": {
-        "PUBLIC_MODE": "false",
-        "MCP_PROFILE": "live_investigation",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key"
-      }
-    },
-    "limacharlie-threat-response": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
-      "env": {
-        "PUBLIC_MODE": "false",
-        "MCP_PROFILE": "threat_response",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key"
-      }
-    },
-    "limacharlie-fleet": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
-      "env": {
-        "PUBLIC_MODE": "false",
-        "MCP_PROFILE": "fleet_management",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key"
-      }
-    },
-    "limacharlie-detections": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
-      "env": {
-        "PUBLIC_MODE": "false",
-        "MCP_PROFILE": "detection_engineering",
-        "GOOGLE_API_KEY": "your-google-api-key-here",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key"
-      }
-    },
-    "limacharlie-ai": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
-      "env": {
-        "PUBLIC_MODE": "false",
-        "MCP_PROFILE": "ai_powered",
-        "GOOGLE_API_KEY": "your-google-api-key-here",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key"
-      }
-    },
-    "limacharlie-admin": {
-      "command": "python3",
-      "args": ["/path/to/lc-mcp-server/server.py"],
-      "env": {
-        "PUBLIC_MODE": "false",
-        "MCP_PROFILE": "platform_admin",
-        "LC_OID": "your-limacharlie-org-id",
-        "LC_API_KEY": "your-limacharlie-api-key"
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "all",
+        "LC_UID": "your-user-email@example.com",
+        "LC_API_KEY": "your-api-key",
+        "LOG_LEVEL": "info"
       }
     }
   }

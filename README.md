@@ -1,448 +1,746 @@
 # LimaCharlie MCP Server
 
-## Overview
+A high-performance [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server for [LimaCharlie](https://limacharlie.io/), enabling AI assistants like Claude to interact with your security infrastructure through natural language.
 
-The Model Context Protocol (MCP) is a standardized protocol used by AI Agents to access and leverage external tools and resources. Note that MCP itself is still experimental and cutting edge.
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://go.dev/)
+[![MCP](https://img.shields.io/badge/MCP-1.0-purple)](https://modelcontextprotocol.io/)
 
-LimaCharlie offers an MCP server at https://mcp.limacharlie.io which enables AI agents to:
+## What is This?
 
-- **Query and analyze** historical telemetry from any sensor
-- **Actively investigate** endpoints using the LimaCharlie Agent (EDR) in real-time
-- **Take remediation actions** like isolating endpoints, killing processes, and managing tags
-- **Generate content** using AI-powered tools for LCQL queries, D&R rules, playbooks, and detection summaries
-- **Manage platform configuration** including rules, outputs, adapters, secrets, and more
-- **Access threat intelligence** through IOC searches and MITRE ATT&CK mappings
+This server bridges AI assistants and the LimaCharlie security platform through the Model Context Protocol. It allows Claude (and other MCP-compatible AI assistants) to:
 
-This opens up the entire LimaCharlie platform to AI agents, regardless of their implementation or location.
+- **Query telemetry** with natural language (translated to LCQL)
+- **Investigate endpoints** in real-time (processes, network, files)
+- **Respond to threats** (isolate hosts, tag sensors, task endpoints)
+- **Manage detections** (D&R rules, YARA rules, false positives)
+- **Administer platforms** (outputs, integrations, configurations)
+- **Generate security content** with AI (rules, queries, playbooks)
 
-## Transport Modes
+**LimaCharlie** is a Security Infrastructure as a Service (SIaaS) platform providing EDR, XDR, SIEM capabilities through a unified API. This MCP server makes that API accessible to AI assistants.
 
-The server supports two transport modes based on the `PUBLIC_MODE` environment variable:
+## Features
 
-### STDIO Mode (PUBLIC_MODE=false, default)
-Used for local MCP clients like Claude Desktop or Claude Code:
-- Communication through stdin/stdout using JSON-RPC
-- Perfect for local development and single-user scenarios
-- Uses LimaCharlie SDK's default authentication
-- Reads credentials from environment variables or config files
-- Run directly with: `python3 server.py`
+- **121 MCP Tools** across 8 specialized profiles
+- **Multi-Tenant Architecture** with strict credential isolation
+- **Dual Transport Modes**: STDIO (local) and HTTP (cloud with OAuth 2.1)
+- **AI-Powered Generation**: Automatic rule and query creation using Google Gemini
+- **Production-Ready**: Thread-safe SDK caching, graceful shutdown, health checks
+- **Secure by Design**: Context-based auth, SHA-256 cache keys, UID validation
+- **High Performance**: Single ~55MB binary, sub-second cold starts
+- **Flexible Authentication**: API keys, JWT tokens, OAuth 2.1 with PKCE
 
-### HTTP Mode (PUBLIC_MODE=true)
-Used when deploying as a public service (e.g., at mcp.limacharlie.io):
-- Server runs as a stateless HTTP API with JSON responses
-- Authentication via HTTP headers
-- Supports multiple organizations concurrently
-- Run with: `uvicorn server:app`
+## Quick Start
 
-## Profile System
+```bash
+# 1. Build the server
+go build -o lc-mcp-server ./cmd/server
 
-The MCP server supports **profiles** to reduce cognitive load on AI agents by providing focused tool subsets. With over 100 tools available, profiles allow you to expose only relevant capabilities for specific workflows.
+# 2. Set your credentials
+export LC_OID="your-organization-id"
+export LC_API_KEY="your-api-key"
 
-### Available Profiles
+# 3. Run the server
+./lc-mcp-server
+```
 
-#### **all** (Default)
-All 100+ tools available. Best for general-purpose usage.
-- **STDIO**: No `MCP_PROFILE` variable needed (default behavior)
-- **HTTP**: `https://mcp.limacharlie.io/mcp`
+## Running with Claude Code (STDIO Mode)
 
-#### **historical_data**
-Historical telemetry analysis and LCQL queries (18 tools).
-Perfect for threat hunting and historical investigations.
-- LCQL queries, historic events, historic detections
-- Artifact management, IOC searches
-- Event schemas and platform information
-- **STDIO**: `MCP_PROFILE=historical_data`
-- **HTTP**: `https://mcp.limacharlie.io/historical_data`
+Claude Code can connect to this server locally using STDIO transport. This is the recommended method for development and personal use.
 
-#### **live_investigation**
-Real-time endpoint investigation (24 tools).
-For active IR and live forensics.
-- Process inspection (modules, strings, memory)
-- System information (packages, services, users, network)
-- YARA scanning (process, file, directory, memory)
-- Reliable tasking for investigations
-- **STDIO**: `MCP_PROFILE=live_investigation`
-- **HTTP**: `https://mcp.limacharlie.io/live_investigation`
+### Step 1: Build the Server
 
-#### **threat_response**
-Incident response actions (8 tools).
-For taking remediation actions on endpoints.
-- Network isolation (isolate, rejoin, check status)
-- Sensor tagging and deletion
-- Reliable tasking for response actions
-- **STDIO**: `MCP_PROFILE=threat_response`
-- **HTTP**: `https://mcp.limacharlie.io/threat_response`
+```bash
+cd /path/to/lc-mcp-server
+go build -o lc-mcp-server ./cmd/server
+```
 
-#### **fleet_management**
-Sensor and deployment management (13 tools).
-For managing your sensor fleet.
-- Sensor management (list, info, tags, deletion)
-- Installation keys (create, list, delete)
-- Cloud sensors (CSPM integration)
-- Platform information
-- **STDIO**: `MCP_PROFILE=fleet_management`
-- **HTTP**: `https://mcp.limacharlie.io/fleet_management`
+### Step 2: Configure Claude Code
 
-#### **detection_engineering**
-D&R rules and detection development (21 tools).
-For building and managing detections.
-- D&R rules (general and managed)
-- False positive rules
-- YARA rules and validation
-- MITRE ATT&CK coverage reports
-- Event schemas for rule development
-- **STDIO**: `MCP_PROFILE=detection_engineering`
-- **HTTP**: `https://mcp.limacharlie.io/detection_engineering`
+Edit your Claude Code MCP settings file (usually at `~/.config/claude-code/mcp.json`):
 
-#### **ai_powered**
-AI-powered content generation (6 tools).
-For generating LCQL, rules, and playbooks with AI assistance.
-- Generate LCQL queries
-- Generate D&R rules (detection and response)
-- Generate sensor selectors
-- Generate Python playbooks
-- Generate detection summaries
-- **STDIO**: `MCP_PROFILE=ai_powered`
-- **HTTP**: `https://mcp.limacharlie.io/ai_powered`
-
-#### **platform_admin**
-Platform configuration and administration (31 tools).
-For configuring outputs, lookups, secrets, and more.
-- Outputs, lookups, secrets management
-- Playbooks, external adapters, extensions
-- Hive rules, saved queries
-- API keys and organization info
-- **STDIO**: `MCP_PROFILE=platform_admin`
-- **HTTP**: `https://mcp.limacharlie.io/platform_admin`
-
-### Core Tools
-
-All profiles include these 6 core tools:
-- `test_tool` - Verify MCP connectivity
-- `get_sensor_info` - Get detailed sensor information
-- `list_sensors` - List sensors in organization
-- `get_online_sensors` - List currently online sensors
-- `is_online` - Check if sensor is online
-- `search_hosts` - Search sensors by hostname
-
-### Profile Selection
-
-**STDIO Mode (Claude Desktop/Code):**
-Set the `MCP_PROFILE` environment variable in your configuration:
 ```json
 {
   "mcpServers": {
-    "limacharlie-historical": {
-      "command": "python3",
-      "args": ["/path/to/server.py"],
+    "limacharlie": {
+      "command": "/absolute/path/to/lc-mcp-server",
+      "args": [],
       "env": {
-        "MCP_PROFILE": "historical_data",
-        "LC_OID": "your-org-id",
-        "LC_API_KEY": "your-api-key"
+        "LC_OID": "your-organization-id",
+        "LC_API_KEY": "your-api-key",
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "all",
+        "LOG_LEVEL": "info"
       }
     }
   }
 }
 ```
 
-**HTTP Mode:**
-Use profile-specific URLs:
-```bash
-# Historical data profile
-claude mcp add limacharlie-historical https://mcp.limacharlie.io/historical_data \
-  --header "Authorization: Bearer API_KEY:OID"
+### Step 3: Restart Claude Code
 
-# Live investigation profile
-claude mcp add limacharlie-live https://mcp.limacharlie.io/live_investigation \
-  --header "Authorization: Bearer API_KEY:OID"
-```
+Restart Claude Code to load the MCP server. You can verify it's working by asking:
 
-### Benefits
+> "Can you list my online sensors?"
 
-- **Reduced Context**: Fewer tools mean less cognitive load for AI agents
-- **Focused Workflows**: Each profile is optimized for specific use cases
-- **Better Performance**: Smaller tool sets lead to faster tool selection
-- **Backward Compatible**: No profile specified = all tools (existing configs work unchanged)
+Claude will use the `list_sensors` or `get_online_sensors` tool to query your LimaCharlie organization.
 
-## Requirements & Authentication
+### Profile-Specific Configuration
 
-### For HTTP Mode
-
-The server requires authentication headers:
-
-1. **Authorization header** in one of these formats:
-   - `Authorization: Bearer <jwt>` (OID must be in x-lc-oid header)
-   - `Authorization: Bearer <jwt>:<oid>` (combined format)
-   - `Authorization: Bearer <api_key>:<oid>` (API key with OID)
-
-2. **x-lc-oid header** (if not included in Authorization):
-   - `x-lc-oid: <organization_id>`
-
-### For STDIO Mode
-
-Set environment variables:
-- `LC_OID`: Your LimaCharlie Organization ID
-- `LC_API_KEY`: Your LimaCharlie API key
-- `MCP_PROFILE`: Profile to load (default: `all`). Options: `historical_data`, `live_investigation`, `threat_response`, `fleet_management`, `detection_engineering`, `ai_powered`, `platform_admin`
-- `GOOGLE_API_KEY`: For AI-powered generation features (optional)
-
-## Quick Start
-
-### For Claude Desktop/Code (STDIO Mode)
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Set environment variables:
-   ```bash
-   export PUBLIC_MODE=false
-   export MCP_PROFILE=all  # Or choose a specific profile
-   export GOOGLE_API_KEY=your-api-key
-   export LC_OID=your-org-id
-   export LC_API_KEY=your-lc-api-key
-   ```
-
-3. Run the server:
-   ```bash
-   python3 server.py
-   ```
-
-4. Configure Claude Desktop (see `claude-desktop-config.json` for example)
-
-### For HTTP Deployment
-1. Set `PUBLIC_MODE=true`
-2. Run with uvicorn:
-   ```bash
-   uvicorn server:app --host 0.0.0.0 --port 8000
-   ```
-
-### HTTP Service Usage
-```bash
-# Default (all tools)
-claude mcp add --transport http limacharlie https://mcp.limacharlie.io/mcp \
-  --header "Authorization: Bearer API_KEY:OID" \
-  --header "x-lc-oid: OID"
-
-# Using a specific profile (e.g., historical_data)
-claude mcp add --transport http limacharlie-historical https://mcp.limacharlie.io/historical_data \
-  --header "Authorization: Bearer API_KEY:OID"
-```
-
-## Capabilities
-
-The LimaCharlie MCP server exposes over 100 tools organized by category:
-
-### Investigation & Telemetry
-- **Process inspection**: `get_processes`, `get_process_modules`, `get_process_strings`, `yara_scan_process`
-- **System information**: `get_os_version`, `get_users`, `get_services`, `get_drivers`, `get_autoruns`, `get_packages`
-- **Network analysis**: `get_network_connections`, `is_online`, `get_online_sensors`
-- **File operations**: `find_strings`, `yara_scan_file`, `yara_scan_directory`, `yara_scan_memory`
-- **Registry access**: `get_registry_keys`
-- **Historical data**: `get_historic_events`, `get_historic_detections`, `get_time_when_sensor_has_data`
-
-### Threat Response & Remediation
-- **Network isolation**: `isolate_network`, `rejoin_network`, `is_isolated`
-- **Sensor management**: `add_tag`, `remove_tag`, `delete_sensor`
-- **Reliable tasking**: `reliable_tasking`, `list_reliable_tasks`
-
-### AI-Powered Generation (requires GOOGLE_API_KEY)
-- **Query generation**: `generate_lcql_query` - Create LCQL queries from natural language
-- **Rule creation**: `generate_dr_rule_detection`, `generate_dr_rule_respond` - Generate D&R rules
-- **Automation**: `generate_python_playbook` - Create Python playbooks
-- **Analysis**: `generate_detection_summary` - Summarize detection data
-- **Sensor selection**: `generate_sensor_selector` - Generate sensor selectors
-
-### Platform Configuration
-- **Detection & Response**: `get_detection_rules`, `set_dr_general_rule`, `set_dr_managed_rule`, `delete_dr_general_rule`, `delete_dr_managed_rule`, `list_dr_general_rules`, `list_dr_managed_rules`, `get_dr_general_rule`, `get_dr_managed_rule`
-- **False Positive Management**: `get_fp_rules`, `get_fp_rule`, `set_fp_rule`, `delete_fp_rule`
-- **YARA Rules**: `list_yara_rules`, `get_yara_rule`, `set_yara_rule`, `validate_yara_rule`, `delete_yara_rule`
-- **Outputs & Adapters**: `list_outputs`, `add_output`, `delete_output`, `list_external_adapters`, `get_external_adapter`, `set_external_adapter`, `delete_external_adapter`
-- **Extensions**: `list_extension_configs`, `get_extension_config`, `set_extension_config`, `delete_extension_config`
-- **Playbooks**: `list_playbooks`, `get_playbook`, `set_playbook`, `delete_playbook`
-- **Secrets Management**: `list_secrets`, `get_secret`, `set_secret`, `delete_secret`
-- **Saved Queries**: `list_saved_queries`, `get_saved_query`, `set_saved_query`, `delete_saved_query`, `run_saved_query`
-- **Lookups**: `list_lookups`, `get_lookup`, `set_lookup`, `query_lookup`, `delete_lookup`
-- **Rules**: `list_rules`, `get_rule`, `set_rule`, `delete_rule`
-
-### Threat Intelligence
-- **IOC Search**: `search_iocs`, `batch_search_iocs`
-- **Host Search**: `search_hosts`
-- **MITRE ATT&CK**: `get_mitre_report`
-
-### Administrative
-- **API Keys**: `list_api_keys`, `create_api_key`, `delete_api_key`
-- **Installation Keys**: `list_installation_keys`, `create_installation_key`, `delete_installation_key`
-- **Cloud Sensors**: `list_cloud_sensors`, `get_cloud_sensor`, `set_cloud_sensor`, `delete_cloud_sensor`
-- **Organization Info**: `get_org_info`, `get_usage_stats`
-- **Artifacts**: `list_artifacts`, `get_artifact`
-- **Sensor Info**: `get_sensor_info`, `list_sensors`
-
-### Schema & Documentation
-- **Event Schemas**: `get_event_schema`, `get_event_schemas_batch`, `get_event_types_with_schemas`, `get_event_types_with_schemas_for_platform`
-- **Platform Support**: `get_platform_names`, `list_with_platform`
-
-## Advanced Features
-
-### Large Result Handling
-The server automatically handles large responses by uploading them to Google Cloud Storage (if configured):
-- Set `GCS_BUCKET_NAME` for the storage bucket
-- Configure `GCS_TOKEN_THRESHOLD` (default: 1000 tokens)
-- Results are returned as signed URLs valid for 24 hours
-
-### LCQL Query Execution
-The `run_lcql_query` tool supports:
-- Streaming results for real-time monitoring
-- Flexible time windows and limits
-- Output formatting options
-
-## Environment Variables
-
-- `PUBLIC_MODE` - Set to `true` for HTTP mode, `false` for STDIO (default: `false`)
-- `MCP_PROFILE` - Profile to load (default: `all`). Options: `all`, `historical_data`, `live_investigation`, `threat_response`, `fleet_management`, `detection_engineering`, `ai_powered`, `platform_admin`
-- `GOOGLE_API_KEY` - API key for AI-powered features
-- `GCS_BUCKET_NAME` - Google Cloud Storage bucket for large results (optional)
-- `GCS_SIGNER_SERVICE_ACCOUNT` - Service account for GCS URL signing (optional)
-- `GCS_TOKEN_THRESHOLD` - Token count threshold for GCS upload (default: 1000)
-- `GCS_URL_EXPIRY_HOURS` - Hours until GCS URLs expire (default: 24)
-- `LC_OID` - Organization ID (STDIO mode only)
-- `LC_API_KEY` - API key (STDIO mode only)
-
-### Audit Logging
-
-- `AUDIT_LOG_ENABLED` - Enable/disable audit logging (default: `true`)
-- `AUDIT_LOG_LEVEL` - Minimum severity to log: CRITICAL, HIGH, MEDIUM, LOW (default: `MEDIUM`)
-- `AUDIT_LOG_INCLUDE_LOW` - Include LOW severity events (default: `false`)
-
-## Audit Logging
-
-The MCP server includes comprehensive audit logging for security and compliance. All security-relevant operations are automatically logged to stdout as structured JSON events.
-
-### What is Logged
-
-**CRITICAL Severity:**
-- Authentication and authorization events
-- Destructive operations (all delete operations)
-- Credential management (API keys, secrets)
-- Network isolation actions (isolate/rejoin endpoints)
-
-**HIGH Severity:**
-- Configuration changes (D&R rules, YARA rules, false positive rules)
-- Policy modifications (outputs, adapters, extensions)
-- Sensor management (tagging, installation keys)
-- Detection rule updates
-
-**MEDIUM Severity:**
-- Data access operations (LCQL queries, historical data retrieval)
-- IOC searches and threat intelligence queries
-- Detection retrieval
-- List and read operations
-
-**LOW Severity:**
-- Metadata operations
-- Health checks
-- Platform information queries
-
-### What is Never Logged
-
-For security, the following data is **never** logged:
-- Function parameters (may contain API keys, secrets, passwords)
-- Function responses (may contain sensitive data)
-- OAuth tokens or JWT contents
-- API keys or secrets values
-- Query contents or rule bodies
-
-Only metadata is logged:
-- Event type (function name)
-- User ID and organization ID
-- Timestamp and duration
-- Status (success/failure)
-- Source IP and user agent
-- Generic error types (without details)
-
-### Audit Event Format
+You can configure multiple MCP server instances with different profiles:
 
 ```json
 {
-  "timestamp": "2025-10-26T18:00:00.000Z",
-  "event_type": "delete_sensor",
-  "severity": "CRITICAL",
-  "action": "delete",
-  "status": "success",
-  "user_id": "uid-xxx",
-  "organization_id": "oid-yyy",
-  "status_code": 200,
-  "request_id": "uuid",
-  "source_ip": "1.2.3.4",
-  "user_agent": "client/1.0",
-  "duration_ms": 123
+  "mcpServers": {
+    "limacharlie-investigate": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
+      "env": {
+        "LC_OID": "your-org-id",
+        "LC_API_KEY": "your-api-key",
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "live_investigation",
+        "LOG_LEVEL": "warn"
+      }
+    },
+    "limacharlie-detect": {
+      "command": "/path/to/lc-mcp-server",
+      "args": [],
+      "env": {
+        "LC_OID": "your-org-id",
+        "LC_API_KEY": "your-api-key",
+        "MCP_MODE": "stdio",
+        "MCP_PROFILE": "detection_engineering",
+        "LOG_LEVEL": "warn"
+      }
+    }
+  }
 }
 ```
 
-### Configuration Examples
+## Tool Profiles
 
-**Development (verbose logging):**
-```bash
-export AUDIT_LOG_ENABLED=true
-export AUDIT_LOG_LEVEL=LOW
-export AUDIT_LOG_INCLUDE_LOW=true
-```
+The server organizes tools into profiles for different use cases:
 
-**Production (default - balanced):**
-```bash
-export AUDIT_LOG_ENABLED=true
-export AUDIT_LOG_LEVEL=MEDIUM
-```
+| Profile | Tools | Description | Use Cases |
+|---------|-------|-------------|-----------|
+| **core** | 6 | Essential sensor operations | Sensor inventory, status checks, host search |
+| **historical_data** | 12 | Telemetry analysis and queries | LCQL queries, event retrieval, IOC searches, detection history |
+| **historical_data_readonly** | 12 | Read-only telemetry access | Same as above, but safe for restricted users |
+| **live_investigation** | 18 | Real-time endpoint inspection | Process lists, network connections, YARA scanning, artifacts |
+| **threat_response** | 8 | Incident response actions | Network isolation, sensor tagging, reliable tasking |
+| **fleet_management** | 9 | Sensor deployment and lifecycle | Installation keys, cloud sensors, platform enumeration |
+| **detection_engineering** | 19 | Detection rule management | D&R rules, YARA rules, false positives, MITRE ATT&CK |
+| **platform_admin** | 44 | Complete platform control | Outputs, integrations, lookups, secrets, playbooks |
+| **ai_powered** | 6 | AI-assisted content generation | Auto-generate rules, queries, selectors, playbooks |
+| **all** | 121+ | All profiles combined | Full platform access |
 
-**High security (only critical events):**
-```bash
-export AUDIT_LOG_ENABLED=true
-export AUDIT_LOG_LEVEL=CRITICAL
-```
+## Configuration
 
-**Disable audit logging:**
-```bash
-export AUDIT_LOG_ENABLED=false
-```
+### Authentication Modes
 
-### Parsing Audit Logs
+The server supports three authentication modes:
 
-Audit logs are written to stdout with the prefix `AUDIT:`. To extract and parse:
+#### 1. Normal Mode (Single Organization)
 
 ```bash
-# Extract audit logs from server output
-grep "AUDIT:" server.log | sed 's/AUDIT: //' > audit.jsonl
-
-# Parse with jq
-cat audit.jsonl | jq 'select(.severity == "CRITICAL")'
-
-# Count events by type
-cat audit.jsonl | jq -r '.event_type' | sort | uniq -c
-
-# Find failed operations
-cat audit.jsonl | jq 'select(.status == "failure")'
+export LC_OID="your-organization-id"
+export LC_API_KEY="your-api-key"
+export MCP_MODE="stdio"
+export MCP_PROFILE="all"
 ```
 
-### Performance
+#### 2. UID + API Key (Multi-Organization)
 
-Audit logging is designed for minimal overhead:
-- Non-blocking writes to stdout
-- Lazy JSON serialization
-- No parameter/response serialization
-- Average overhead: < 2ms per operation
+```bash
+export LC_UID="user@example.com"
+export LC_API_KEY="your-user-api-key"
+export MCP_MODE="stdio"
+export MCP_PROFILE="all"
+```
 
-## Notes
+When using UID mode, tools that support multi-org operations accept an `oid` parameter to specify which organization to operate on.
 
-- The server is stateless when running in HTTP mode
-- HTTP mode uses JSON responses (not Server-Sent Events)
-- No OAuth flow is used - authentication is via bearer tokens only
-- If you encounter missing capabilities, contact https://community.limacharlie.com for quick additions
+#### 3. UID + OAuth (Multi-Organization with JWT)
 
-## Resource Profile
-This should be mostly network and memory bound. No other external resources.
+```bash
+export LC_UID="user@example.com"
+export LC_JWT="your-jwt-token"
+export MCP_MODE="stdio"
+export MCP_PROFILE="all"
+```
 
-## Testing Procedure
-See `test_deployment.py` for basic deployment testing.
+Or use environment-based configuration:
+
+```bash
+export LC_UID="user@example.com"
+export LC_CURRENT_ENV="default"  # Uses ~/.limacharlie config
+export MCP_MODE="stdio"
+export MCP_PROFILE="all"
+```
+
+### Optional Configuration
+
+```bash
+# Logging
+export LOG_LEVEL="info"  # debug, info, warn, error
+
+# SDK Caching
+export SDK_CACHE_TTL="5m"  # Cache TTL (e.g., "5m", "1h", "30s")
+
+# AI-Powered Tools (requires Google Gemini)
+export GOOGLE_API_KEY="your-google-api-key"
+export LLM_YAML_RETRY_COUNT="10"  # Validation retry count
+```
+
+## Usage Examples
+
+### Example 1: Query Recent Detections
+
+```
+User: "Show me all detections from the last 24 hours"
+
+Claude uses: get_historic_detections
+→ Returns: List of detections with event data, rules, and metadata
+```
+
+### Example 2: Investigate a Suspicious Process
+
+```
+User: "Check what processes are running on sensor abc-123-def"
+
+Claude uses: get_processes
+→ Returns: Process list with PIDs, paths, command lines, parent relationships
+
+User: "Scan process 1234 for malware with YARA"
+
+Claude uses: yara_scan_process
+→ Returns: YARA matches if any rules trigger
+```
+
+### Example 3: Create a Detection Rule
+
+```
+User: "Create a D&R rule to detect PowerShell downloading files from the internet"
+
+Claude uses: generate_dr_rule_detection (AI-powered)
+→ Generates: LCQL-based detection logic
+→ Then uses: set_dr_general_rule
+→ Result: New detection rule deployed
+```
+
+### Example 4: Search for IOCs Across Fleet
+
+```
+User: "Search for IP 192.168.1.100 in telemetry from the last week"
+
+Claude uses: search_iocs
+→ Returns: All events containing that IP with timestamps and sensor IDs
+```
+
+### Example 5: Isolate Compromised Endpoint
+
+```
+User: "Isolate sensor xyz-789 from the network"
+
+Claude uses: isolate_network
+→ Result: Sensor network isolation activated
+
+User: "Tag it as 'compromised'"
+
+Claude uses: add_tag
+→ Result: Tag applied for tracking
+```
+
+## Architecture
+
+### Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         Claude / AI                         │
+└────────────────────────┬────────────────────────────────────┘
+                         │ MCP Protocol (STDIO or HTTP)
+┌────────────────────────▼────────────────────────────────────┐
+│                   LimaCharlie MCP Server                    │
+│                                                             │
+│  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐     │
+│  │   Auth      │  │     Tools    │  │   SDK Cache  │     │
+│  │   Context   │  │   Registry   │  │   (Thread-   │     │
+│  │   Isolation │  │   (121)      │  │    Safe)     │     │
+│  └─────────────┘  └──────────────┘  └──────────────┘     │
+│                                                             │
+└────────────────────────┬────────────────────────────────────┘
+                         │ LimaCharlie REST API
+┌────────────────────────▼────────────────────────────────────┐
+│                  LimaCharlie Platform                       │
+│   Sensors | Telemetry | Rules | Outputs | Integrations     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Security Architecture
+
+**Credential Isolation** (Critical for Multi-Tenancy):
+
+1. **Context-Based Storage**: All credentials stored in `context.Context`, never global
+2. **Cache Key Hashing**: SHA-256 of (mode + oid + apiKey + uid + env)
+3. **Thread-Safe Operations**: Mutex-protected SDK cache with TTL
+4. **No User Input in Keys**: Cache keys never use raw user-provided strings
+5. **Concurrent Testing**: 100+ concurrent requests verified in test suite
+
+**UID Validation**: Automatically rejects suspicious UIDs that resemble tokens:
+- JWT format patterns (three base64 segments with dots)
+- Long hexadecimal strings (32+ characters)
+- Base64-encoded secrets
+
+### Project Structure
+
+```
+lc-mcp-server/
+├── cmd/server/              # Main entry point
+│   └── main.go              # Server initialization and startup
+│
+├── internal/
+│   ├── auth/                # Authentication & credential management
+│   │   ├── context.go       # Auth context storage and retrieval
+│   │   ├── sdk_cache.go     # Thread-safe SDK instance caching
+│   │   ├── validator.go     # UID and credential validation
+│   │   └── auth_test.go     # Isolation and concurrency tests
+│   │
+│   ├── config/              # Configuration management
+│   │   ├── config.go        # Environment variable loading
+│   │   └── config_test.go   # Config validation tests
+│   │
+│   ├── server/              # MCP server implementation
+│   │   ├── server.go        # Core server logic
+│   │   └── server_test.go   # Server initialization tests
+│   │
+│   ├── http/                # HTTP transport (OAuth mode)
+│   │   ├── server.go        # HTTP server and routes
+│   │   └── middleware.go    # Auth and rate limiting middleware
+│   │
+│   ├── oauth/               # OAuth 2.1 implementation
+│   │   ├── firebase/        # Firebase authentication
+│   │   ├── state/           # OAuth state management
+│   │   └── token/           # Token encryption and storage
+│   │
+│   └── tools/               # MCP tool implementations
+│       ├── registry.go      # Tool registration system
+│       ├── core/            # Core profile (6 tools)
+│       ├── historical/      # Historical data profile (12 tools)
+│       ├── investigation/   # Live investigation profile (18 tools)
+│       ├── response/        # Threat response profile (8 tools)
+│       ├── rules/           # Detection engineering tools
+│       ├── ai/              # AI-powered generation (6 tools)
+│       └── admin/           # Platform admin (44 tools)
+│
+├── prompts/                 # AI generation prompt templates
+├── static/                  # Web UI assets (OAuth flow)
+├── templates/               # HTML templates (OAuth flow)
+│
+├── Dockerfile               # Container build
+├── docker-compose.yaml      # Local development setup
+├── .env.example             # Configuration template
+└── README.md                # This file
+```
+
+## Development
+
+### Building
+
+```bash
+# Build binary
+go build -o lc-mcp-server ./cmd/server
+
+# Build with version info
+VERSION=$(git describe --tags --always)
+go build -ldflags "-X main.Version=$VERSION" -o lc-mcp-server ./cmd/server
+
+# Build for multiple platforms
+GOOS=linux GOARCH=amd64 go build -o lc-mcp-server-linux-amd64 ./cmd/server
+GOOS=darwin GOARCH=arm64 go build -o lc-mcp-server-darwin-arm64 ./cmd/server
+GOOS=windows GOARCH=amd64 go build -o lc-mcp-server-windows-amd64.exe ./cmd/server
+```
+
+### Testing
+
+```bash
+# Run all tests
+go test ./internal/... -v
+
+# Run with coverage
+go test ./internal/... -cover
+
+# Run authentication isolation tests (CRITICAL)
+go test ./internal/auth/... -v -run TestCredentialIsolation
+
+# Run specific package tests
+go test ./internal/tools/core/... -v
+
+# Generate coverage report
+go test ./internal/... -coverprofile=coverage.out
+go tool cover -html=coverage.out
+```
+
+**Test Coverage Status**:
+- ✅ Authentication: 100% (17/17 tests passing)
+- ✅ Configuration: 100% (9/9 tests passing)
+- ✅ Server: 100% (passing)
+- 🔄 Tools: Implementation-specific (varies by tool)
+
+### Adding New Tools
+
+1. **Create tool file** in appropriate profile package (e.g., `internal/tools/myprofile/mytool.go`)
+
+2. **Register the tool**:
+
+```go
+package myprofile
+
+import (
+    "context"
+    "github.com/mark3labs/mcp-go/mcp"
+    "github.com/refractionpoint/lc-mcp-go/internal/tools"
+)
+
+func init() {
+    RegisterMyTool()
+}
+
+func RegisterMyTool() {
+    tools.RegisterTool(&tools.ToolRegistration{
+        Name:        "my_tool",
+        Description: "Does something useful",
+        Profile:     "my_profile",
+        RequiresOID: true,  // Set true for multi-org support
+        Schema: mcp.NewTool("my_tool",
+            mcp.WithDescription("Does something useful"),
+            mcp.WithString("param1",
+                mcp.Required(),
+                mcp.Description("First parameter")),
+        ),
+        Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+            // Get organization SDK instance
+            org, err := getOrganization(ctx)
+            if err != nil {
+                return tools.ErrorResult(err.Error()), nil
+            }
+
+            // Implement tool logic
+            result := map[string]interface{}{
+                "status": "success",
+            }
+
+            return tools.SuccessResult(result), nil
+        },
+    })
+}
+```
+
+3. **Add to profile definition** in `internal/tools/registry.go`:
+
+```go
+var ProfileDefinitions = map[string][]string{
+    "my_profile": {
+        "my_tool",
+        // ... other tools
+    },
+}
+```
+
+4. **Import package** in `cmd/server/main.go`:
+
+```go
+import (
+    _ "github.com/refractionpoint/lc-mcp-go/internal/tools/myprofile"
+)
+```
+
+5. **Write tests** in `internal/tools/myprofile/mytool_test.go`
+
+### Code Audit Guidelines
+
+When auditing this codebase, focus on:
+
+1. **Credential Isolation** (`internal/auth/`):
+   - Verify context-based credential storage
+   - Check cache key generation (no user input)
+   - Review concurrent access patterns
+
+2. **Input Validation** (`internal/auth/validator.go`, tool handlers):
+   - UID validation logic
+   - Parameter sanitization
+   - API response parsing
+
+3. **Error Handling**:
+   - No credentials in error messages
+   - No credentials in logs
+   - Proper error propagation
+
+4. **Concurrency Safety**:
+   - SDK cache mutex usage
+   - Context cancellation handling
+   - Goroutine lifecycle management
+
+5. **OAuth Security** (`internal/oauth/`):
+   - State parameter validation
+   - Token encryption (AES-256-GCM)
+   - PKCE implementation
+
+## Deployment
+
+### Docker
+
+```bash
+# Build image
+docker build -t lc-mcp-server:latest .
+
+# Run with environment variables
+docker run -d \
+  -e LC_OID="your-org-id" \
+  -e LC_API_KEY="your-api-key" \
+  -e MCP_MODE="http" \
+  -e MCP_PROFILE="all" \
+  -e PORT="8080" \
+  -p 8080:8080 \
+  lc-mcp-server:latest
+```
+
+### Docker Compose (with Redis for OAuth)
+
+```bash
+# Copy example environment file
+cp .env.example .env
+
+# Edit .env with your credentials
+nano .env
+
+# Start services
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+```
+
+### Binary Deployment
+
+```bash
+# Build optimized binary
+CGO_ENABLED=0 go build -ldflags="-s -w" -o lc-mcp-server ./cmd/server
+
+# Create systemd service
+sudo tee /etc/systemd/system/lc-mcp-server.service > /dev/null <<EOF
+[Unit]
+Description=LimaCharlie MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=lc-mcp
+WorkingDirectory=/opt/lc-mcp-server
+Environment="LC_OID=your-org-id"
+Environment="LC_API_KEY=your-api-key"
+Environment="MCP_MODE=http"
+Environment="MCP_PROFILE=all"
+Environment="PORT=8080"
+ExecStart=/opt/lc-mcp-server/lc-mcp-server
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start service
+sudo systemctl enable lc-mcp-server
+sudo systemctl start lc-mcp-server
+```
+
+### Google Cloud Run
+
+```bash
+# Build and push image
+gcloud builds submit --config cloudbuild_release.yaml
+
+# Deploy to Cloud Run
+gcloud run deploy lc-mcp-server \
+  --image gcr.io/YOUR-PROJECT/lc-mcp-server:latest \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars "MCP_MODE=http,MCP_PROFILE=all" \
+  --set-secrets "LC_OID=lc-oid:latest,LC_API_KEY=lc-api-key:latest"
+```
+
+## Troubleshooting
+
+### Server Won't Start
+
+**Error**: `failed to load configuration`
+
+**Solution**: Check that required environment variables are set:
+```bash
+echo $LC_OID
+echo $LC_API_KEY
+echo $MCP_MODE
+```
+
+### Tools Not Available
+
+**Error**: Tool `xyz` not found
+
+**Solution**: Check that the tool is in your selected profile:
+```bash
+export MCP_PROFILE="all"  # Use 'all' to get all tools
+```
+
+### Authentication Failures
+
+**Error**: `failed to get organization: unauthorized`
+
+**Solution**: Verify your credentials:
+```bash
+# Test API key manually
+curl -H "Authorization: Bearer ${LC_API_KEY}" \
+  "https://api.limacharlie.io/v1/${LC_OID}/sensors"
+```
+
+### Claude Code Not Detecting Server
+
+**Solution**: Check MCP configuration file syntax:
+```bash
+# Validate JSON syntax
+cat ~/.config/claude-code/mcp.json | jq .
+
+# Check server logs
+export LOG_LEVEL="debug"
+/path/to/lc-mcp-server
+```
+
+### SDK Cache Issues
+
+**Error**: Stale organization data
+
+**Solution**: Lower cache TTL or clear cache by restarting:
+```bash
+export SDK_CACHE_TTL="1m"  # Reduce from default 5m
+```
+
+### AI-Powered Tools Not Working
+
+**Error**: `AI tool failed: API key not set`
+
+**Solution**: Set Google API key:
+```bash
+export GOOGLE_API_KEY="your-google-api-key"
+```
+
+Get a key from: https://makersuite.google.com/app/apikey
+
+## Performance
+
+- **Cold Start**: < 1 second
+- **Binary Size**: ~55 MB (statically linked)
+- **Memory Usage**: ~50 MB baseline, +10-20 MB per cached SDK instance
+- **Request Latency**:
+  - Cached: 50-200ms (SDK instance reuse)
+  - Uncached: 200-500ms (new SDK instance)
+- **Concurrent Requests**: Tested up to 100 concurrent requests with credential isolation
+
+## API Examples
+
+### STDIO Mode (Local)
+
+```bash
+# Start server in STDIO mode
+export MCP_MODE="stdio"
+export LC_OID="your-org-id"
+export LC_API_KEY="your-api-key"
+./lc-mcp-server
+```
+
+### HTTP Mode (Cloud)
+
+```bash
+# Start server in HTTP mode
+export MCP_MODE="http"
+export PORT="8080"
+export LC_OID="your-org-id"
+export LC_API_KEY="your-api-key"
+./lc-mcp-server
+```
+
+Access via MCP over HTTP:
+```bash
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${LC_API_KEY}" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/call",
+    "params": {
+      "name": "list_sensors",
+      "arguments": {}
+    }
+  }'
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Write tests for new functionality
+4. Ensure all tests pass (`go test ./internal/...`)
+5. Run `go fmt ./...` and `go vet ./...`
+6. Commit changes (`git commit -m 'Add amazing feature'`)
+7. Push to branch (`git push origin feature/amazing-feature`)
+8. Open a Pull Request
+
+**Critical**: If your changes touch authentication or credential handling, ensure isolation tests pass:
+```bash
+go test ./internal/auth/... -v -run TestCredentialIsolation
+```
 
 ## License
-Apache License 2.0 - See LICENSE file for details.
+
+This project is licensed under the Apache License 2.0 - see below for details.
+
+```
+Copyright 2025 refractionPOINT
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+## Resources
+
+- **LimaCharlie**: https://limacharlie.io/
+- **LimaCharlie API Documentation**: https://doc.limacharlie.io/
+- **Model Context Protocol**: https://modelcontextprotocol.io/
+- **MCP Go Framework**: https://github.com/mark3labs/mcp-go
+- **Go LimaCharlie SDK**: https://github.com/refractionPOINT/go-limacharlie
+
+## Support
+
+- **Issues**: https://github.com/refractionPOINT/lc-mcp-server/issues
+- **LimaCharlie Community**: https://community.limacharlie.io/
+- **Documentation**: https://doc.limacharlie.io/
+
+---
+
+**Built with ❤️ for the security community**

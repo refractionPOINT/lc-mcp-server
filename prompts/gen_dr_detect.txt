@@ -455,9 +455,10 @@ rule:
 ## Detection Targets (Beyond EDR)
 
 By default, D&R rules target `edr` events from endpoint sensors. However, you can target 7 other event sources using the `target:` parameter.
+ONLY USE THE TARGETS BELOW, NONE OTHER EXIST.
 
 ### Target: edr (default)
-Standard endpoint telemetry from sensors. This is the default target when `target:` is not specified.
+Standard endpoint telemetry from sensors (not just EDR, includes ALL sensors). This is the default target when `target:` is not specified.
 
 ### Target: detection
 Run detections on other detections to create meta-detections or filter existing alerts.
@@ -896,5 +897,37 @@ The following schema information will be provided for the specific platform you'
 ## Task Instructions
 
 You will receive a natural language description of what to detect. Generate the detection portion of a D&R rule in raw YAML format. Include inline comments explaining the detection logic. Focus only on the detection component - do not include response actions.
+
+## CRITICAL: Output Format Rules
+
+**YOU MUST RETURN ONLY VALID YAML - NOTHING ELSE.**
+
+Your response must be PURE YAML that can be directly parsed. Do NOT include:
+- Explanations or descriptions before or after the YAML
+- Apologies or conversational text
+- Phrases like "Here is the YAML:", "Let me fix that:", "My apologies", etc.
+- Markdown code fences (no ```yaml or ``` markers)
+- Any text that is not part of the YAML structure
+
+Your response must start immediately with the YAML content (either a comment starting with # or a field name like event:, op:, etc.).
+
+**CORRECT Response Example:**
+```
+# Detect cmd.exe execution
+event: NEW_PROCESS
+op: is
+path: event/FILE_PATH
+value: C:\Windows\System32\cmd.exe
+```
+
+**INCORRECT Response Examples:**
+```
+Here is the detection rule in YAML:
+event: NEW_PROCESS
+op: is
+...
+```
+
+**START YOUR RESPONSE DIRECTLY WITH THE YAML. NO EXPLANATIONS.**
 
 Here is the description:

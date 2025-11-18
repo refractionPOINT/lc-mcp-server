@@ -270,7 +270,7 @@
             </p>
 
             <div class="provider-buttons">
-                <a href="/oauth/select-provider/google?session={{ session_id }}"
+                <a href="/oauth/select-provider/google?session={{.SessionID}}"
                    class="provider-btn"
                    onclick="this.classList.add('loading')"
                    data-provider="google">
@@ -285,7 +285,7 @@
                     <span>Continue with Google</span>
                 </a>
 
-                <a href="/oauth/select-provider/microsoft?session={{ session_id }}"
+                <a href="/oauth/select-provider/microsoft?session={{.SessionID}}"
                    class="provider-btn"
                    onclick="this.classList.add('loading')"
                    data-provider="microsoft">

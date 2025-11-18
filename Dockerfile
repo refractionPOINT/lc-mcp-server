@@ -1,41 +1,28 @@
-# Use the official Python slim image
-FROM python:3.11-slim
+# Use the official Go image
+FROM golang:latest
 
 # Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
+ENV CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64 \
     PORT=8080
 
 # Set the working directory
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Copy go mod files and download dependencies
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Install Python dependencies (includes MCP 1.19.0 from PyPI)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt \
-    && python -c "import mcp; print('MCP package imported successfully')"
+# Copy the application code
+COPY . .
 
-# Copy the application code and prompts
-COPY server.py .
-COPY prompts/ ./prompts/
-
-# Copy OAuth modules (optional, enabled via MCP_OAUTH_ENABLED env var)
-# SECURITY: Include rate_limiter.py and token_encryption.py for OAuth security features
-COPY oauth_*.py firebase_auth_bridge.py rate_limiter.py token_encryption.py ./
-
-# Copy OAuth HTML templates for provider selection
-COPY templates/ ./templates/
-
-# Copy audit logging modules and UID auth class
-COPY audit_logger.py audit_decorator.py uid_auth.py ./
+# Build the application
+RUN go build -o lc-mcp-server ./cmd/server
 
 # Expose the application port
 EXPOSE 8080
 ENV PORT=8080
 
 # Start the server
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--loop", "asyncio", "--log-level", "debug", "--limit-concurrency", "1000", "--limit-max-requests", "10000"]
+CMD ["/app/lc-mcp-server"]

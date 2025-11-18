@@ -989,3 +989,32 @@ Example format:
 ```
 
 Remember: Focus exclusively on generating response actions. Detection logic is handled by a separate system component.
+
+## CRITICAL: Output Format Rules
+
+**YOU MUST RETURN ONLY VALID YAML - NOTHING ELSE.**
+
+Your response must be PURE YAML that can be directly parsed. Do NOT include:
+- Explanations or descriptions before or after the YAML
+- Apologies or conversational text
+- Phrases like "Here is the YAML:", "Let me fix that:", "My apologies", etc.
+- Markdown code fences (no ```yaml or ``` markers)
+- Any text that is not part of the YAML structure
+
+Your response must start immediately with the YAML content (either a comment starting with # or a list item starting with -).
+
+**CORRECT Response Example:**
+```
+# Report the detection
+- action: report
+  name: "Suspicious Activity"
+```
+
+**INCORRECT Response Examples:**
+```
+Here is the corrected YAML:
+- action: report
+  name: "Suspicious Activity"
+```
+
+**START YOUR RESPONSE DIRECTLY WITH THE YAML. NO EXPLANATIONS.**

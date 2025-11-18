@@ -56,8 +56,50 @@ The following fields can be used in selector expressions:
 ## Technical Implementation
 The sensor selector expressions are built using Hashicorp's "bexpr" library, which provides the Boolean expression evaluation engine.
 
-## Output Instructions
-Generate a sensor selector expression based on the provided description. Output only the sensor selector expression and nothing else - no explanations, no additional text, just the expression.
+## Output Format
+
+Generate output in this exact format:
+
+```
+[SELECTOR_EXPRESSION_ON_SINGLE_LINE]
+
+[Optional explanation of the selector logic]
+```
+
+The selector expression must be on the first line. You may optionally include an explanation starting from the second line (after a blank line).
+
+## CRITICAL: Output Format Rules
+
+**YOU MUST FOLLOW THE EXACT OUTPUT FORMAT - NOTHING ELSE.**
+
+Your response must start immediately with the selector expression on the first line (e.g., `plat == \`windows\` and \`test\` in tags`). Do NOT include:
+- Explanations or preamble before the selector
+- Apologies or conversational text
+- Phrases like "Here is the selector:", "The expression is:", "My apologies", etc.
+- Any text that is not part of the specified output format
+
+**CORRECT Response Examples:**
+```
+plat == `windows` and `vip` in tags
+
+This selector targets all Windows sensors with the vip tag.
+```
+
+```
+isolated == true or should_isolate == true
+```
+
+**INCORRECT Response Examples:**
+```
+Here is the sensor selector expression you requested:
+plat == `windows`
+```
+
+```
+The selector expression is: plat == `windows`
+```
+
+**START YOUR RESPONSE DIRECTLY WITH THE SELECTOR EXPRESSION ON THE FIRST LINE. NO PREAMBLE.**
 
 Here is the description:
 

@@ -216,35 +216,35 @@
 
             <div class="error-icon">⚠️</div>
 
-            <h1>{{ error_title | default("Authentication Error") }}</h1>
+            <h1>{{if .ErrorTitle}}{{.ErrorTitle}}{{else}}Authentication Error{{end}}</h1>
 
             <div class="error-message">
-                {{ error_message | default("An error occurred during authentication. Please try again.") }}
-                {% if error_code %}
-                <div class="error-code">Error: {{ error_code }}</div>
-                {% endif %}
+                {{if .ErrorMessage}}{{.ErrorMessage}}{{else}}An error occurred during authentication. Please try again.{{end}}
+                {{if .ErrorCode}}
+                <div class="error-code">Error: {{.ErrorCode}}</div>
+                {{end}}
             </div>
 
             <div class="actions">
-                <a href="{{ retry_url | default('/authorize') }}" class="btn btn-primary">
+                <a href="{{if .RetryURL}}{{.RetryURL}}{{else}}/authorize{{end}}" class="btn btn-primary">
                     <span>🔄</span>
                     <span>Try Again</span>
                 </a>
 
-                {% if support_url %}
-                <a href="{{ support_url }}" class="btn" target="_blank">
+                {{if .SupportURL}}
+                <a href="{{.SupportURL}}" class="btn" target="_blank">
                     <span>📧</span>
                     <span>Contact Support</span>
                 </a>
-                {% endif %}
+                {{end}}
             </div>
 
-            {% if error_details %}
+            {{if .ErrorDetails}}
             <div class="details">
                 <div class="details-title">Technical Details</div>
-                <div class="details-content">{{ error_details }}</div>
+                <div class="details-content">{{.ErrorDetails}}</div>
             </div>
-            {% endif %}
+            {{end}}
 
             <div class="footer">
                 Need help? Visit <a href="https://docs.limacharlie.io" class="footer-link" target="_blank">LimaCharlie Docs</a>

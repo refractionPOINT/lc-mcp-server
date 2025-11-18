@@ -1,0 +1,42 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/server-config-schema.json",
+  "mcpServers": {
+    "limacharlie-core": {
+      "url": "https://your-mcp-server.example.com/core/",
+      "transport": {
+        "type": "http",
+        "headers": {
+          "Authorization": "Bearer YOUR_API_KEY:YOUR_ORG_ID"
+        }
+      }
+    },
+    "limacharlie-historical": {
+      "url": "https://your-mcp-server.example.com/historical_data/",
+      "transport": {
+        "type": "http",
+        "headers": {
+          "Authorization": "Bearer YOUR_API_KEY:YOUR_ORG_ID"
+        }
+      }
+    },
+    "limacharlie-all": {
+      "url": "https://your-mcp-server.example.com/mcp/",
+      "transport": {
+        "type": "http",
+        "headers": {
+          "Authorization": "Bearer YOUR_API_KEY:YOUR_ORG_ID"
+        }
+      }
+    },
+    "limacharlie-uid-mode": {
+      "url": "https://your-mcp-server.example.com/mcp/",
+      "transport": {
+        "type": "http",
+        "headers": {
+          "Authorization": "Bearer YOUR_JWT_TOKEN",
+          "x-lc-oid": "YOUR_ORG_ID"
+        }
+      }
+    }
+  }
+}

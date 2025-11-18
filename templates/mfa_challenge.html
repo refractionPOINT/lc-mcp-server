@@ -355,11 +355,11 @@
 
             <div class="user-badge">
                 <span>👤</span>
-                <span>Signing in as <strong>{{ email }}</strong></span>
+                <span>Signing in as <strong>{{.Email}}</strong></span>
             </div>
 
             <form id="mfa-form" method="POST" action="/oauth/mfa-verify">
-                <input type="hidden" name="session" value="{{ session_id }}">
+                <input type="hidden" name="session" value="{{.SessionID}}">
 
                 <div class="code-input-container">
                     <label for="verification-code" class="code-input-label">Verification Code</label>
@@ -391,12 +391,12 @@
                 </div>
                 <div class="info-badge">
                     <span class="info-badge-label">Attempts Left</span>
-                    <span class="info-badge-value" id="attempts-remaining">{{ max_attempts - attempt_count }}</span>
+                    <span class="info-badge-value" id="attempts-remaining">{{.AttemptsRemaining}}</span>
                 </div>
             </div>
 
             <div class="help-text">
-                The code expires in 5 minutes. You have {{ max_attempts }} attempts.<br>
+                The code expires in 5 minutes. You have {{.MaxAttempts}} attempts.<br>
                 Need help? <a href="https://docs.limacharlie.io" class="footer-link" target="_blank">View documentation</a>
             </div>
 
@@ -406,11 +406,11 @@
         </div>
     </div>
 
-    <script>
+    <script nonce="{{.CSPNonce}}">
         // Configuration
         const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-        const MAX_ATTEMPTS = {{ max_attempts }};
-        let currentAttempt = {{ attempt_count }};
+        const MAX_ATTEMPTS = {{.MaxAttempts}};
+        let currentAttempt = {{.AttemptCount}};
         let isSubmitting = false;
 
         // DOM elements
@@ -522,7 +522,7 @@
             try {
                 // Explicitly create FormData to ensure fields are captured correctly
                 const formData = new FormData();
-                formData.append('session', '{{ session_id }}');
+                formData.append('session', '{{.SessionID}}');
                 formData.append('verification_code', codeInput.value);
 
                 const response = await fetch('/oauth/mfa-verify', {

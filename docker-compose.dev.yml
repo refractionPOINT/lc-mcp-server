@@ -1,0 +1,73 @@
+version: '3.8'
+
+services:
+  # Redis for OAuth state management
+  redis:
+    image: redis:7-alpine
+    container_name: lc-mcp-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-changeme}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # LimaCharlie MCP Server (OAuth mode)
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lc-mcp-server
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # Server mode
+      MCP_MODE: http
+      MCP_PROFILE: ${MCP_PROFILE:-all}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      
+      # HTTP server configuration
+      PORT: 8080
+      MCP_SERVER_URL: ${MCP_SERVER_URL:-http://localhost:8080}
+
+      # Redis configuration
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379/${REDIS_DB:-0}
+
+      # OAuth configuration (Firebase API key is hardcoded)
+      REDIS_ENCRYPTION_KEY: ${REDIS_ENCRYPTION_KEY}
+      
+      # LimaCharlie API credentials (for server-side API calls)
+      LC_OID: ${LC_OID}
+      LC_API_KEY: ${LC_API_KEY}
+      
+      # Optional features
+      AUDIT_LOG_ENABLED: ${AUDIT_LOG_ENABLED:-false}
+      AUDIT_LOG_LEVEL: ${AUDIT_LOG_LEVEL:-MEDIUM}
+      SDK_CACHE_TTL: ${SDK_CACHE_TTL:-5m}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - mcp-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+networks:
+  mcp-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local

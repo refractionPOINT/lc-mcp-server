@@ -952,5 +952,68 @@ respond:
 ```
 Include yaml comments inline to explain the rule.
 
+## CRITICAL: Output Format Rules
+
+**YOU MUST RETURN ONLY VALID PYTHON CODE - NOTHING ELSE.**
+
+Your response must be PURE PYTHON CODE that can be directly executed. Do NOT include:
+- Explanations or descriptions before or after the Python code
+- Apologies or conversational text outside of Python comments
+- Phrases like "Here is the playbook:", "Let me create:", "This script will", etc. outside of code comments
+- Any text that is not valid Python code or Python comments
+
+You may optionally wrap your code in markdown code fences (```python ... ```), but this is not required. The code will be extracted automatically.
+
+Your response must start immediately with Python code (either directly or with ```python fence).
+
+**CORRECT Response Examples:**
+```
+#!/usr/bin/env python3
+"""
+LimaCharlie playbook for detecting credential dumping
+"""
+import limacharlie
+import json
+
+# D&R Rule to trigger this playbook (add via LimaCharlie UI):
+# detection:
+#   event: SENSITIVE_PROCESS_ACCESS
+#   ...
+```
+
+```
+```python
+#!/usr/bin/env python3
+import limacharlie
+
+def main():
+    # Initialize connection
+    lc = limacharlie.Manager()
+    ...
+```
+```
+
+**INCORRECT Response Examples:**
+```
+Here is the Python playbook you requested:
+
+```python
+import limacharlie
+...
+```
+
+This playbook will monitor for suspicious activity.
+```
+
+```
+I'll create a comprehensive playbook for you. This will include detection and response capabilities:
+
+```python
+import limacharlie
+```
+```
+
+**START YOUR RESPONSE DIRECTLY WITH PYTHON CODE (optionally with ```python fence). NO EXPLANATORY TEXT BEFORE OR AFTER THE CODE.**
+
 Here is the description:
 
