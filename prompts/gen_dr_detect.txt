@@ -455,9 +455,10 @@ rule:
 ## Detection Targets (Beyond EDR)
 
 By default, D&R rules target `edr` events from endpoint sensors. However, you can target 7 other event sources using the `target:` parameter.
+ONLY USE THE TARGETS BELOW, NONE OTHER EXIST.
 
 ### Target: edr (default)
-Standard endpoint telemetry from sensors. This is the default target when `target:` is not specified.
+Standard endpoint telemetry from sensors (not just EDR, includes ALL sensors). This is the default target when `target:` is not specified.
 
 ### Target: detection
 Run detections on other detections to create meta-detections or filter existing alerts.
