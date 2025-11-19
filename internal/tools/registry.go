@@ -242,8 +242,8 @@ var ProfileDefinitions = map[string][]string{
 		"generate_detection_summary",
 	},
 	"api_access": {
-		// Generic API access for advanced use cases
-		"lc_api_call",
+		// Meta-tool for calling other tools
+		"lc_call_tool",
 	},
 }
 
@@ -502,4 +502,151 @@ func ErrorResult(message string) *mcp.CallToolResult {
 // ErrorResultf creates an error tool result with formatting
 func ErrorResultf(format string, args ...interface{}) *mcp.CallToolResult {
 	return mcp.NewToolResultError(fmt.Sprintf(format, args...))
+}
+
+// ValidateToolParameters validates parameters against a tool's schema.
+// It checks that all required parameters are present and that parameter types match.
+// Returns nil if validation passes, or an error describing what's wrong.
+func ValidateToolParameters(schema mcp.Tool, params map[string]interface{}) error {
+	inputSchema := schema.InputSchema
+
+	// Check required parameters
+	for _, required := range inputSchema.Required {
+		if _, ok := params[required]; !ok {
+			return fmt.Errorf("missing required parameter: %s", required)
+		}
+	}
+
+	// Validate parameter types
+	for paramName, paramValue := range params {
+		propDef, ok := inputSchema.Properties[paramName]
+		if !ok {
+			// Parameter not in schema - allow extra parameters for flexibility
+			continue
+		}
+
+		// Extract type from property definition
+		propMap, ok := propDef.(map[string]any)
+		if !ok {
+			continue // Can't validate if property definition is not a map
+		}
+
+		expectedType, ok := propMap["type"].(string)
+		if !ok {
+			continue // No type specified, skip validation
+		}
+
+		// Validate type
+		if err := validateParameterType(paramName, paramValue, expectedType); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateParameterType checks if a parameter value matches the expected JSON Schema type
+func validateParameterType(name string, value interface{}, expectedType string) error {
+	if value == nil {
+		return nil // nil is valid for any type (represents absence)
+	}
+
+	switch expectedType {
+	case "string":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("parameter %q must be a string, got %T", name, value)
+		}
+	case "number":
+		switch value.(type) {
+		case float64, float32, int, int64, int32:
+			// Valid number types
+		default:
+			return fmt.Errorf("parameter %q must be a number, got %T", name, value)
+		}
+	case "integer":
+		switch value.(type) {
+		case int, int64, int32, float64: // JSON numbers come as float64
+			// Valid integer types
+		default:
+			return fmt.Errorf("parameter %q must be an integer, got %T", name, value)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("parameter %q must be a boolean, got %T", name, value)
+		}
+	case "object":
+		if _, ok := value.(map[string]interface{}); !ok {
+			return fmt.Errorf("parameter %q must be an object, got %T", name, value)
+		}
+	case "array":
+		if _, ok := value.([]interface{}); !ok {
+			return fmt.Errorf("parameter %q must be an array, got %T", name, value)
+		}
+	}
+
+	return nil
+}
+
+// CallTool is the core function for calling a registered tool by name.
+// It handles tool lookup, parameter validation, OID switching, and GCS wrapping.
+// This function provides a unified code path for internal tool calls.
+//
+// Parameters:
+//   - ctx: Context containing auth information
+//   - toolName: Name of the registered tool to call
+//   - args: Parameters to pass to the tool
+//
+// Returns the tool result or an error. Note that validation errors are returned
+// as error results (IsError=true) rather than Go errors.
+func CallTool(ctx context.Context, toolName string, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	// Look up the tool
+	reg, ok := GetTool(toolName)
+	if !ok {
+		return ErrorResultf("tool %q not found", toolName), nil
+	}
+
+	// Get schema from either interface or legacy fields
+	var schema mcp.Tool
+	var requiresOID bool
+	var handler ToolHandler
+
+	if reg.Tool != nil {
+		schema = reg.Tool.Schema()
+		requiresOID = reg.Tool.RequiresOID()
+		handler = reg.Tool.Handle
+	} else {
+		schema = reg.Schema
+		requiresOID = reg.RequiresOID
+		handler = reg.Handler
+	}
+
+	// Validate parameters against schema
+	if err := ValidateToolParameters(schema, args); err != nil {
+		return ErrorResultf("parameter validation failed: %v", err), nil
+	}
+
+	// Handle OID switching if tool requires it
+	if requiresOID {
+		if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
+			var err error
+			ctx, err = auth.WithOID(ctx, oidParam, nil)
+			if err != nil {
+				return ErrorResultf("failed to switch OID: %v", err), nil
+			}
+		}
+	}
+
+	// Call the handler
+	result, err := handler(ctx, args)
+	if err != nil {
+		return result, err
+	}
+
+	// Wrap large results with GCS
+	wrappedResult := gcs.WrapMCPResult(ctx, result, toolName)
+	if mcpResult, ok := wrappedResult.(*mcp.CallToolResult); ok {
+		return mcpResult, nil
+	}
+
+	return result, nil
 }

@@ -11,26 +11,27 @@ import (
 
 func TestToolRegistration(t *testing.T) {
 	// Test that the tool is registered
-	tool, ok := tools.GetTool("lc_api_call")
+	tool, ok := tools.GetTool("lc_call_tool")
 	if !ok {
-		t.Fatal("lc_api_call tool not registered")
+		t.Fatal("lc_call_tool tool not registered")
 	}
 
-	if tool.Name != "lc_api_call" {
-		t.Errorf("Expected tool name 'lc_api_call', got '%s'", tool.Name)
+	if tool.Name != "lc_call_tool" {
+		t.Errorf("Expected tool name 'lc_call_tool', got '%s'", tool.Name)
 	}
 
 	if tool.Profile != "api_access" {
 		t.Errorf("Expected profile 'api_access', got '%s'", tool.Profile)
 	}
 
-	if !tool.RequiresOID {
-		t.Error("Expected RequiresOID to be true")
+	// lc_call_tool does not require OID itself (it passes through to target tool)
+	if tool.RequiresOID {
+		t.Error("Expected RequiresOID to be false")
 	}
 }
 
 func TestProfileDefinition(t *testing.T) {
-	// Test that the api_access profile exists and contains lc_api_call
+	// Test that the api_access profile exists and contains lc_call_tool
 	profile := tools.GetToolsForProfile("api_access")
 	if len(profile) == 0 {
 		t.Fatal("api_access profile not found or empty")
@@ -38,160 +39,364 @@ func TestProfileDefinition(t *testing.T) {
 
 	found := false
 	for _, toolName := range profile {
-		if toolName == "lc_api_call" {
+		if toolName == "lc_call_tool" {
 			found = true
 			break
 		}
 	}
 
 	if !found {
-		t.Error("lc_api_call not found in api_access profile")
+		t.Error("lc_call_tool not found in api_access profile")
 	}
 }
 
-func TestEndpointValidation(t *testing.T) {
+func TestToolNameValidation(t *testing.T) {
 	tests := []struct {
 		name        string
-		endpoint    interface{}
+		toolName    interface{}
 		expectError string
 	}{
-		{"valid api endpoint", "api", ""},
-		{"valid billing endpoint", "billing", ""},
-		{"valid replay endpoint", "replay", ""}, // Valid endpoint (auth context error is expected, not validation error)
-		{"uppercase API normalized", "API", ""},
-		{"uppercase BILLING normalized", "BILLING", ""},
-		{"uppercase REPLAY normalized", "REPLAY", ""}, // Valid endpoint after normalization
-		{"invalid endpoint", "invalid", "endpoint must be one of: 'api', 'billing', or 'replay'"},
-		{"empty endpoint", "", "endpoint parameter is required and must be a string"},
-		{"missing endpoint", nil, "endpoint parameter is required and must be a string"},
+		{"missing tool_name", nil, "tool_name parameter is required"},
+		{"empty tool_name", "", "tool_name parameter is required"},
+		{"non-string tool_name", 123, "tool_name parameter is required"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			args := map[string]interface{}{
-				"method": "GET",
-				"path":   "/test",
+				"parameters": map[string]interface{}{},
 			}
-			if tt.endpoint != nil {
-				args["endpoint"] = tt.endpoint
+			if tt.toolName != nil {
+				args["tool_name"] = tt.toolName
 			}
 
-			// Call the actual handler
-			result, err := handleLCAPICall(context.Background(), args)
+			result, err := handleLCCallTool(context.Background(), args)
 			if err != nil {
 				t.Fatalf("handler returned unexpected error: %v", err)
 			}
 
-			// Check if we got the expected error in the result
-			if tt.expectError != "" {
-				if !result.IsError {
-					t.Errorf("Expected error for endpoint %v, but got success", tt.endpoint)
-					return
+			if !result.IsError {
+				t.Errorf("Expected error for tool_name %v, but got success", tt.toolName)
+				return
+			}
+
+			errorText := ""
+			if len(result.Content) > 0 {
+				if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+					errorText = textContent.Text
 				}
-				// Verify error message contains expected text
-				errorText := ""
-				if len(result.Content) > 0 {
-					if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
-						errorText = textContent.Text
-					}
-				}
-				if !strings.Contains(errorText, tt.expectError) {
-					t.Errorf("Expected error containing %q, got %q", tt.expectError, errorText)
-				}
-			} else {
-				// For valid endpoints without other issues, we expect auth context error
-				// (since we don't have auth set up), which means endpoint validation passed
-				if result.IsError {
-					errorText := ""
-					if len(result.Content) > 0 {
-						if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
-							errorText = textContent.Text
-						}
-					}
-					// If we get an endpoint validation error, the test fails
-					if strings.Contains(errorText, "endpoint must be") || strings.Contains(errorText, "endpoint parameter is required") {
-						t.Errorf("Endpoint validation failed unexpectedly: %s", errorText)
-					}
-					// Other errors (like auth context) are expected and mean validation passed
-				}
+			}
+			if !strings.Contains(errorText, tt.expectError) {
+				t.Errorf("Expected error containing %q, got %q", tt.expectError, errorText)
 			}
 		})
 	}
 }
 
-func TestMethodValidation(t *testing.T) {
+func TestParametersValidation(t *testing.T) {
 	tests := []struct {
 		name        string
-		method      interface{}
+		parameters  interface{}
 		expectError string
 	}{
-		// Valid methods
-		{"valid GET method", "GET", ""},
-		{"valid POST method", "POST", ""},
-		{"valid PUT method", "PUT", ""},
-		{"valid DELETE method", "DELETE", ""},
-		{"valid PATCH method", "PATCH", ""},
-		// Lowercase should be normalized to uppercase
-		{"lowercase get normalized", "get", ""},
-		{"lowercase post normalized", "post", ""},
-		// Invalid methods
-		{"invalid HEAD method", "HEAD", "method must be one of: GET, POST, PUT, DELETE, PATCH"},
-		{"invalid OPTIONS method", "OPTIONS", "method must be one of: GET, POST, PUT, DELETE, PATCH"},
-		{"invalid TRACE method", "TRACE", "method must be one of: GET, POST, PUT, DELETE, PATCH"},
-		{"invalid CONNECT method", "CONNECT", "method must be one of: GET, POST, PUT, DELETE, PATCH"},
-		{"empty method", "", "method parameter is required and must be a string"},
-		{"missing method", nil, "method parameter is required and must be a string"},
+		{"missing parameters", nil, "parameters must be an object"},
+		{"non-object parameters", "not an object", "parameters must be an object"},
+		{"array parameters", []interface{}{}, "parameters must be an object"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			args := map[string]interface{}{
-				"endpoint": "api",
-				"path":     "/test",
+				"tool_name": "test_tool",
 			}
-			if tt.method != nil {
-				args["method"] = tt.method
+			if tt.parameters != nil {
+				args["parameters"] = tt.parameters
 			}
 
-			// Call the actual handler
-			result, err := handleLCAPICall(context.Background(), args)
+			result, err := handleLCCallTool(context.Background(), args)
 			if err != nil {
 				t.Fatalf("handler returned unexpected error: %v", err)
 			}
 
-			// Check if we got the expected error in the result
-			if tt.expectError != "" {
-				if !result.IsError {
-					t.Errorf("Expected error for method %v, but got success", tt.method)
-					return
+			if !result.IsError {
+				t.Errorf("Expected error for parameters %v, but got success", tt.parameters)
+				return
+			}
+
+			errorText := ""
+			if len(result.Content) > 0 {
+				if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+					errorText = textContent.Text
 				}
-				// Verify error message contains expected text
-				errorText := ""
-				if len(result.Content) > 0 {
-					if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
-						errorText = textContent.Text
-					}
-				}
-				if !strings.Contains(errorText, tt.expectError) {
-					t.Errorf("Expected error containing %q, got %q", tt.expectError, errorText)
-				}
-			} else {
-				// For valid methods, we expect auth context error
-				// (since we don't have auth set up), which means method validation passed
-				if result.IsError {
-					errorText := ""
-					if len(result.Content) > 0 {
-						if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
-							errorText = textContent.Text
-						}
-					}
-					// If we get a method validation error, the test fails
-					if strings.Contains(errorText, "method must be") || strings.Contains(errorText, "method parameter is required") {
-						t.Errorf("Method validation failed unexpectedly: %s", errorText)
-					}
-					// Other errors (like auth context) are expected and mean validation passed
-				}
+			}
+			if !strings.Contains(errorText, tt.expectError) {
+				t.Errorf("Expected error containing %q, got %q", tt.expectError, errorText)
 			}
 		})
 	}
+}
+
+func TestRecursiveCallPrevention(t *testing.T) {
+	args := map[string]interface{}{
+		"tool_name": "lc_call_tool",
+		"parameters": map[string]interface{}{
+			"tool_name":  "some_tool",
+			"parameters": map[string]interface{}{},
+		},
+	}
+
+	result, err := handleLCCallTool(context.Background(), args)
+	if err != nil {
+		t.Fatalf("handler returned unexpected error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Error("Expected error for recursive call, but got success")
+		return
+	}
+
+	errorText := ""
+	if len(result.Content) > 0 {
+		if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+			errorText = textContent.Text
+		}
+	}
+	if !strings.Contains(errorText, "cannot call lc_call_tool recursively") {
+		t.Errorf("Expected recursive call error, got %q", errorText)
+	}
+}
+
+func TestNonExistentTool(t *testing.T) {
+	args := map[string]interface{}{
+		"tool_name":  "nonexistent_tool",
+		"parameters": map[string]interface{}{},
+	}
+
+	result, err := handleLCCallTool(context.Background(), args)
+	if err != nil {
+		t.Fatalf("handler returned unexpected error: %v", err)
+	}
+
+	if !result.IsError {
+		t.Error("Expected error for non-existent tool, but got success")
+		return
+	}
+
+	errorText := ""
+	if len(result.Content) > 0 {
+		if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+			errorText = textContent.Text
+		}
+	}
+	if !strings.Contains(errorText, "not found") {
+		t.Errorf("Expected 'not found' error, got %q", errorText)
+	}
+}
+
+func TestValidToolCallWithValidParameters(t *testing.T) {
+	// Register a simple test tool for testing
+	testToolCalled := false
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "test_call_tool_target",
+		Description: "Test target tool for lc_call_tool tests",
+		Profile:     "core",
+		RequiresOID: false,
+		Schema: mcp.NewTool("test_call_tool_target",
+			mcp.WithDescription("Test target tool"),
+			mcp.WithString("message",
+				mcp.Required(),
+				mcp.Description("Test message")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			testToolCalled = true
+			msg, _ := args["message"].(string)
+			return tools.SuccessResult(map[string]interface{}{
+				"echo": msg,
+			}), nil
+		},
+	})
+
+	args := map[string]interface{}{
+		"tool_name": "test_call_tool_target",
+		"parameters": map[string]interface{}{
+			"message": "hello world",
+		},
+	}
+
+	result, err := handleLCCallTool(context.Background(), args)
+	if err != nil {
+		t.Fatalf("handler returned unexpected error: %v", err)
+	}
+
+	if result.IsError {
+		errorText := ""
+		if len(result.Content) > 0 {
+			if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+				errorText = textContent.Text
+			}
+		}
+		t.Fatalf("Expected success, got error: %s", errorText)
+	}
+
+	if !testToolCalled {
+		t.Error("Target tool was not called")
+	}
+}
+
+func TestParameterValidationAgainstSchema(t *testing.T) {
+	// Register a test tool with required parameters
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "test_validation_target",
+		Description: "Test target for validation",
+		Profile:     "core",
+		RequiresOID: false,
+		Schema: mcp.NewTool("test_validation_target",
+			mcp.WithDescription("Test target tool"),
+			mcp.WithString("required_param",
+				mcp.Required(),
+				mcp.Description("Required parameter")),
+			mcp.WithString("optional_param",
+				mcp.Description("Optional parameter")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			return tools.SuccessResult(map[string]interface{}{"ok": true}), nil
+		},
+	})
+
+	// Test missing required parameter
+	t.Run("missing required parameter", func(t *testing.T) {
+		args := map[string]interface{}{
+			"tool_name": "test_validation_target",
+			"parameters": map[string]interface{}{
+				"optional_param": "value",
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		if !result.IsError {
+			t.Error("Expected validation error, but got success")
+			return
+		}
+
+		errorText := ""
+		if len(result.Content) > 0 {
+			if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+				errorText = textContent.Text
+			}
+		}
+		if !strings.Contains(errorText, "required_param") {
+			t.Errorf("Expected error about required_param, got %q", errorText)
+		}
+	})
+
+	// Test with all required parameters
+	t.Run("with required parameter", func(t *testing.T) {
+		args := map[string]interface{}{
+			"tool_name": "test_validation_target",
+			"parameters": map[string]interface{}{
+				"required_param": "value",
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		if result.IsError {
+			errorText := ""
+			if len(result.Content) > 0 {
+				if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+					errorText = textContent.Text
+				}
+			}
+			t.Errorf("Expected success, got error: %s", errorText)
+		}
+	})
+}
+
+func TestTypeValidation(t *testing.T) {
+	// Register a test tool with typed parameters
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "test_type_validation",
+		Description: "Test target for type validation",
+		Profile:     "core",
+		RequiresOID: false,
+		Schema: mcp.NewTool("test_type_validation",
+			mcp.WithDescription("Test target tool"),
+			mcp.WithString("string_param",
+				mcp.Required(),
+				mcp.Description("String parameter")),
+			mcp.WithNumber("number_param",
+				mcp.Description("Number parameter")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			return tools.SuccessResult(map[string]interface{}{"ok": true}), nil
+		},
+	})
+
+	// Test wrong type for string parameter
+	t.Run("wrong type for string", func(t *testing.T) {
+		args := map[string]interface{}{
+			"tool_name": "test_type_validation",
+			"parameters": map[string]interface{}{
+				"string_param": 123, // Should be string
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		if !result.IsError {
+			t.Error("Expected type validation error, but got success")
+			return
+		}
+
+		errorText := ""
+		if len(result.Content) > 0 {
+			if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+				errorText = textContent.Text
+			}
+		}
+		if !strings.Contains(errorText, "string_param") || !strings.Contains(errorText, "string") {
+			t.Errorf("Expected error about string_param type, got %q", errorText)
+		}
+	})
+
+	// Test wrong type for number parameter
+	t.Run("wrong type for number", func(t *testing.T) {
+		args := map[string]interface{}{
+			"tool_name": "test_type_validation",
+			"parameters": map[string]interface{}{
+				"string_param": "valid",
+				"number_param": "not a number", // Should be number
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		if !result.IsError {
+			t.Error("Expected type validation error, but got success")
+			return
+		}
+
+		errorText := ""
+		if len(result.Content) > 0 {
+			if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+				errorText = textContent.Text
+			}
+		}
+		if !strings.Contains(errorText, "number_param") || !strings.Contains(errorText, "number") {
+			t.Errorf("Expected error about number_param type, got %q", errorText)
+		}
+	})
 }
