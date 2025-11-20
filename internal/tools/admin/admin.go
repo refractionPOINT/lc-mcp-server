@@ -25,6 +25,7 @@ func init() {
 	RegisterGetMITREReport()
 	RegisterGetTimeWhenSensorHasData()
 	RegisterGetSKUDefinitions()
+	RegisterUpgradeSensors()
 }
 
 // RegisterGetOrgInfo registers the get_org_info tool
@@ -589,6 +590,54 @@ func RegisterGetSKUDefinitions() {
 			}
 
 			return tools.SuccessResult(resp), nil
+		},
+	})
+}
+
+// RegisterUpgradeSensors registers the upgrade_sensors tool
+func RegisterUpgradeSensors() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "upgrade_sensors",
+		Description: "Upgrade all sensors in an organization to a specific version or version label",
+		Profile:     "fleet_management",
+		RequiresOID: true,
+		Schema: mcp.NewTool("upgrade_sensors",
+			mcp.WithDescription("Upgrade all sensors in an organization to a specific version or version label (latest, stable, experimental, or semantic version like 4.33.20)"),
+			mcp.WithString("version",
+				mcp.Required(),
+				mcp.Description("Target sensor version: semantic version (e.g., '4.33.20') or version label ('latest', 'stable', 'experimental')")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Get version parameter
+			version, ok := args["version"].(string)
+			if !ok || version == "" {
+				return tools.ErrorResult("version parameter is required"), nil
+			}
+
+			// Get organization
+			org, err := tools.GetOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Prepare request body
+			requestBody := lc.Dict{
+				"version": version,
+			}
+
+			// Make the API call to upgrade sensors
+			// Endpoint: POST /v1/org/{oid}/modules/upgrade
+			resp := lc.Dict{}
+			err = org.GenericPOSTRequest("modules/upgrade", requestBody, &resp)
+			if err != nil {
+				return tools.ErrorResultf("failed to upgrade sensors: %v", err), nil
+			}
+
+			return tools.SuccessResult(map[string]interface{}{
+				"success": true,
+				"version": version,
+				"message": fmt.Sprintf("Sensor upgrade to version %s initiated successfully. Sensors will update within approximately 20 minutes.", version),
+			}), nil
 		},
 	})
 }
