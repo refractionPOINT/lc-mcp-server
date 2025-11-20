@@ -1,5 +1,10 @@
 package rules
 
+// Note: USP mapping validation is disabled because the SDK does not currently
+// implement the ValidateUSPMappingWithContext method and USPMappingValidationRequest type.
+// This file is kept for future implementation when SDK support is added.
+
+/*
 import (
 	"context"
 	"fmt"
@@ -13,7 +18,9 @@ func init() {
 	// Register USP validation tools
 	RegisterValidateUSPMapping()
 }
+*/
 
+/*
 // RegisterValidateUSPMapping registers the validate_usp_mapping tool
 func RegisterValidateUSPMapping() {
 	tools.RegisterTool(&tools.ToolRegistration{
@@ -150,3 +157,4 @@ func RegisterValidateUSPMapping() {
 		},
 	})
 }
+*/

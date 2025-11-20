@@ -23,7 +23,7 @@ func init() {
 	RegisterCreateAPIKey()
 	RegisterDeleteAPIKey()
 	RegisterGetMITREReport()
-	RegisterGetTimeWhenSensorHasData()
+	// Note: get_time_when_sensor_has_data is registered in historical/historical.go
 	RegisterGetSKUDefinitions()
 }
 
@@ -214,13 +214,14 @@ func RegisterCreateOrg() {
 			}
 
 			// Create new organization
-			newOID, err := org.CreateOrganization(name, location, template)
+			// SDK signature is CreateOrganization(location, name, template)
+			newOrgResp, err := org.CreateOrganization(location, name, template)
 			if err != nil {
 				return tools.ErrorResultf("failed to create organization: %v", err), nil
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
-				"oid":      newOID,
+				"oid":      newOrgResp.Data.Oid,
 				"name":     name,
 				"location": location,
 			}), nil
@@ -511,60 +512,8 @@ func RegisterGetMITREReport() {
 	})
 }
 
-// RegisterGetTimeWhenSensorHasData registers the get_time_when_sensor_has_data tool
-func RegisterGetTimeWhenSensorHasData() {
-	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "get_time_when_sensor_has_data",
-		Description: "Get timestamps when a sensor has reported data (max 30 day range)",
-		Profile:     "historical_data",
-		RequiresOID: true,
-		Schema: mcp.NewTool("get_time_when_sensor_has_data",
-			mcp.WithDescription("Get timeline of when a sensor has reported data within a time range"),
-			mcp.WithString("sid",
-				mcp.Required(),
-				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithNumber("start",
-				mcp.Required(),
-				mcp.Description("Start timestamp (Unix seconds)")),
-			mcp.WithNumber("end",
-				mcp.Required(),
-				mcp.Description("End timestamp (Unix seconds)")),
-		),
-		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			sid, err := tools.ExtractAndValidateSID(args)
-			if err != nil {
-				return tools.ErrorResult(err.Error()), nil
-			}
-
-			start, ok := args["start"].(float64)
-			if !ok {
-				return tools.ErrorResult("start parameter is required and must be a number"), nil
-			}
-
-			end, ok := args["end"].(float64)
-			if !ok {
-				return tools.ErrorResult("end parameter is required and must be a number"), nil
-			}
-
-			org, err := tools.GetOrganization(ctx)
-			if err != nil {
-				return tools.ErrorResultf("failed to get organization: %v", err), nil
-			}
-
-			timeline, err := org.GetTimeWhenSensorHasData(sid, int64(start), int64(end))
-			if err != nil {
-				return tools.ErrorResultf("failed to get sensor timeline: %v", err), nil
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"sid":        timeline.SID,
-				"timestamps": timeline.Timestamps,
-				"start":      timeline.Start,
-				"end":        timeline.End,
-			}), nil
-		},
-	})
-}
+// Note: RegisterGetTimeWhenSensorHasData has been moved to historical/historical.go
+// to avoid duplicate registration
 
 // RegisterGetSKUDefinitions registers the get_sku_definitions tool
 func RegisterGetSKUDefinitions() {

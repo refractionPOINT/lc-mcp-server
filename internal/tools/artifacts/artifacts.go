@@ -117,9 +117,9 @@ func RegisterGetArtifact() {
 			if getURLOnly {
 				// For URL-only mode, we need to use a different approach
 				// The SDK returns a reader, but we want just the URL
-				// We'll use the GenericGETRequest to get the artifact metadata which includes the URL
+				// Use the correct API path for artifact metadata/originals
 				metadata := lc.Dict{}
-				path := fmt.Sprintf("insight/%s/artifacts/%s", org.GetOID(), artifactID)
+				path := fmt.Sprintf("insight/%s/artifacts/originals/%s", org.GetOID(), artifactID)
 				if err := org.GenericGETRequest(path, lc.Dict{}, &metadata); err != nil {
 					return tools.ErrorResultf("failed to get artifact URL: %v", err), nil
 				}
