@@ -699,15 +699,38 @@ func RegisterGetTimeWhenSensorHasData() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_time_when_sensor_has_data",
-			mcp.WithDescription("Get the time range when a sensor has telemetry data"),
+			mcp.WithDescription("Get the time range when a sensor has telemetry data. Time range must be less than 30 days."),
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithNumber("start",
+				mcp.Required(),
+				mcp.Description("Start timestamp in Unix epoch seconds")),
+			mcp.WithNumber("end",
+				mcp.Required(),
+				mcp.Description("End timestamp in Unix epoch seconds")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
 			if !ok {
 				return tools.ErrorResult("sid parameter is required"), nil
+			}
+
+			startFloat, ok := args["start"].(float64)
+			if !ok {
+				return tools.ErrorResult("start parameter is required"), nil
+			}
+			start := int64(startFloat)
+
+			endFloat, ok := args["end"].(float64)
+			if !ok {
+				return tools.ErrorResult("end parameter is required"), nil
+			}
+			end := int64(endFloat)
+
+			// Validate time range (must be less than 30 days)
+			if end-start > 30*24*3600 {
+				return tools.ErrorResult("time range must be less than 30 days"), nil
 			}
 
 			// Get organization
@@ -716,11 +739,18 @@ func RegisterGetTimeWhenSensorHasData() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Use GenericGETRequest to get sensor data time range
-			resp := lc.Dict{}
-			path := fmt.Sprintf("insight/%s/timeline/%s", org.GetOID(), sid)
-			if err := org.GenericGETRequest(path, nil, &resp); err != nil {
+			// Use the SDK method which handles the correct API path and parameters
+			timeline, err := org.GetTimeWhenSensorHasData(sid, start, end)
+			if err != nil {
 				return tools.ErrorResultf("failed to get sensor timeline: %v", err), nil
+			}
+
+			// Return the response
+			resp := map[string]interface{}{
+				"sid":        timeline.SID,
+				"start":      timeline.Start,
+				"end":        timeline.End,
+				"timestamps": timeline.Timestamps,
 			}
 
 			return tools.SuccessResult(resp), nil
