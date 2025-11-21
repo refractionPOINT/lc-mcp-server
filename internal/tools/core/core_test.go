@@ -187,6 +187,50 @@ func TestListSensors_ParameterValidation(t *testing.T) {
 		assert.True(t, result.IsError)
 	})
 
+	t.Run("accepts is_online parameter", func(t *testing.T) {
+		ctx := context.Background()
+
+		args := map[string]interface{}{
+			"is_online": true,
+		}
+
+		// Will fail to get organization, but parameter validation should pass
+		result, err := tool.Handler(ctx, args)
+
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("accepts is_online with false value", func(t *testing.T) {
+		ctx := context.Background()
+
+		args := map[string]interface{}{
+			"is_online": false,
+		}
+
+		// Will fail to get organization, but parameter validation should pass
+		result, err := tool.Handler(ctx, args)
+
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
+	t.Run("accepts all parameters combined", func(t *testing.T) {
+		ctx := context.Background()
+
+		args := map[string]interface{}{
+			"with_hostname_prefix": "web-",
+			"with_ip":              "192.168.1.100",
+			"is_online":            true,
+		}
+
+		// Will fail to get organization, but parameter validation should pass
+		result, err := tool.Handler(ctx, args)
+
+		require.NoError(t, err)
+		assert.True(t, result.IsError)
+	})
+
 	t.Run("works without parameters", func(t *testing.T) {
 		ctx := context.Background()
 		args := make(map[string]interface{})
