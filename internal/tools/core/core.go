@@ -125,6 +125,8 @@ func RegisterListSensors() {
 				mcp.Description("Filter sensors with hostname starting with this prefix")),
 			mcp.WithString("with_ip",
 				mcp.Description("Filter sensors with this IP address")),
+			mcp.WithBoolean("is_online",
+				mcp.Description("Filter sensors by online status (true for online, false for offline)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
@@ -143,6 +145,20 @@ func RegisterListSensors() {
 			// Apply additional filters
 			hostnamePrefix, hasHostnameFilter := args["with_hostname_prefix"].(string)
 			ipFilter, hasIPFilter := args["with_ip"].(string)
+			isOnlineFilter, hasOnlineFilter := args["is_online"].(bool)
+
+			// Get online status map if needed
+			var activeSensors map[string]bool
+			if hasOnlineFilter {
+				sids := make([]string, 0, len(sensors))
+				for sid := range sensors {
+					sids = append(sids, sid)
+				}
+				activeSensors, err = org.ActiveSensors(sids)
+				if err != nil {
+					return tools.ErrorResultf("failed to check active sensors: %v", err), nil
+				}
+			}
 
 			var filtered []*lc.Sensor
 			for _, sensor := range sensors {
@@ -156,6 +172,13 @@ func RegisterListSensors() {
 
 				if hasIPFilter && sensor.InternalIP != ipFilter && sensor.ExternalIP != ipFilter {
 					include = false
+				}
+
+				if hasOnlineFilter {
+					isOnline := activeSensors[sensor.SID]
+					if isOnline != isOnlineFilter {
+						include = false
+					}
 				}
 
 				if include {
