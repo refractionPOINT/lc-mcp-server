@@ -56,8 +56,8 @@ func RegisterGenerateLCQLQuery() {
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
-			// Get schema information from the SDK
-			schema := getSchemaInfo(ctx, org, "")
+			// Get smart schema context using multi-stage AI extraction
+			schema := getSmartSchemaContext(ctx, org, query, "")
 			prompt := strings.Replace(promptTemplate, "{lcql_schema}", schema, -1)
 
 			// Loop up to retry count times to generate and validate
@@ -166,8 +166,8 @@ func RegisterGenerateDRRuleDetection() {
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
-			// Get schema information from the SDK
-			schema := getSchemaInfo(ctx, org, "evt")
+			// Get smart schema context using multi-stage AI extraction
+			schema := getSmartSchemaContext(ctx, org, query, "evt")
 			prompt := strings.Replace(promptTemplate, "{lcql_schema}", schema, -1)
 
 			// Loop up to retry count times

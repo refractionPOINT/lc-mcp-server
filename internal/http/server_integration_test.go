@@ -627,16 +627,16 @@ func TestProfileBasedToolFiltering(t *testing.T) {
 		description   string
 	}{
 		{
-			name:          "api_access profile returns only lc_api_call",
+			name:          "api_access profile returns only lc_call_tool",
 			path:          "/mcp/api_access",
-			expectedTools: []string{"lc_api_call"},
-			description:   "api_access profile should return only the lc_api_call tool",
+			expectedTools: []string{"lc_call_tool"},
+			description:   "api_access profile should return only the lc_call_tool tool",
 		},
 		{
-			name:          "versioned api_access profile returns only lc_api_call",
+			name:          "versioned api_access profile returns only lc_call_tool",
 			path:          "/mcp/v1/api_access",
-			expectedTools: []string{"lc_api_call"},
-			description:   "versioned api_access profile should return only the lc_api_call tool",
+			expectedTools: []string{"lc_call_tool"},
+			description:   "versioned api_access profile should return only the lc_call_tool tool",
 		},
 		{
 			name: "core profile returns only core tools",
@@ -772,7 +772,7 @@ func TestDefaultProfileReturnsAllTools(t *testing.T) {
 			}
 
 			// Check that it includes tools from different profiles
-			assert.True(t, toolNames["lc_api_call"], "Should include api_access profile tool")
+			assert.True(t, toolNames["lc_call_tool"], "Should include api_access profile tool")
 			assert.True(t, toolNames["get_sensor_info"], "Should include core profile tool")
 			assert.True(t, toolNames["run_lcql_query"], "Should include historical_data profile tool")
 		})

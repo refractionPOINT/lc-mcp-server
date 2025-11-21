@@ -82,16 +82,15 @@ func RegisterGetDRGeneralRule() {
 				return tools.ErrorResultf("failed to list D&R rules: %v", err), nil
 			}
 
-			// Find the rule by name
-			for _, rule := range rules {
-				if name, ok := rule["name"].(string); ok && name == ruleName {
-					return tools.SuccessResult(map[string]interface{}{
-						"rule": rule,
-					}), nil
-				}
+			// Find the rule by name (SDK returns map[string]Dict where key is rule name)
+			rule, found := rules[ruleName]
+			if !found {
+				return tools.ErrorResultf("rule '%s' not found", ruleName), nil
 			}
 
-			return tools.ErrorResultf("rule '%s' not found", ruleName), nil
+			return tools.SuccessResult(map[string]interface{}{
+				"rule": rule,
+			}), nil
 		},
 	})
 }
@@ -262,16 +261,15 @@ func RegisterGetDRManagedRule() {
 				return tools.ErrorResultf("failed to list managed D&R rules: %v", err), nil
 			}
 
-			// Find the rule by name
-			for _, rule := range rules {
-				if name, ok := rule["name"].(string); ok && name == ruleName {
-					return tools.SuccessResult(map[string]interface{}{
-						"rule": rule,
-					}), nil
-				}
+			// Find the rule by name (SDK returns map[string]Dict where key is rule name)
+			rule, found := rules[ruleName]
+			if !found {
+				return tools.ErrorResultf("managed rule '%s' not found", ruleName), nil
 			}
 
-			return tools.ErrorResultf("managed rule '%s' not found", ruleName), nil
+			return tools.SuccessResult(map[string]interface{}{
+				"rule": rule,
+			}), nil
 		},
 	})
 }

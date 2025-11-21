@@ -97,17 +97,13 @@ func RegisterSetYaraRule() {
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_yara_rule",
-			mcp.WithDescription("Create or update a YARA rule"),
+			mcp.WithDescription("Create or update a YARA rule source"),
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name for the YARA rule")),
 			mcp.WithString("rule_content",
 				mcp.Required(),
 				mcp.Description("YARA rule content (the actual YARA syntax)")),
-			mcp.WithArray("tags",
-				mcp.Description("Optional tags to apply the rule to specific sensors")),
-			mcp.WithArray("platforms",
-				mcp.Description("Optional platforms to restrict the rule to")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -139,20 +135,10 @@ func RegisterSetYaraRule() {
 				return tools.ErrorResultf("failed to add/update YARA rule: %v", err), nil
 			}
 
-			result := map[string]interface{}{
+			return tools.SuccessResult(map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated YARA rule '%s'", ruleName),
-			}
-
-			// Note about tags and platforms if provided
-			if tags, ok := args["tags"].([]interface{}); ok && len(tags) > 0 {
-				result["note_tags"] = "Tags parameter provided but not yet supported by SDK"
-			}
-			if platforms, ok := args["platforms"].([]interface{}); ok && len(platforms) > 0 {
-				result["note_platforms"] = "Platforms parameter provided but not yet supported by SDK"
-			}
-
-			return tools.SuccessResult(result), nil
+			}), nil
 		},
 	})
 }

@@ -136,9 +136,10 @@ func RegisterSetFPRule() {
 				return tools.ErrorResult("rule_content must contain 'detect' or 'detection' field"), nil
 			}
 
-			// FP rules use FPRuleOptions (if available in SDK)
-			// For now, pass empty options
-			options := lc.FPRuleOptions{}
+			// FP rules use FPRuleOptions
+			options := lc.FPRuleOptions{
+				IsReplace: true, // Update if exists
+			}
 
 			// Add FP rule
 			err = org.FPRuleAdd(ruleName, detection, options)
