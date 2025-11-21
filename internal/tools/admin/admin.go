@@ -598,20 +598,41 @@ func RegisterGetSKUDefinitions() {
 func RegisterUpgradeSensors() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "upgrade_sensors",
-		Description: "Upgrade all sensors in an organization to a specific version or version label",
+		Description: "Upgrade all sensors in an organization to a specific version, downgrade to previous version, or set to dormant mode",
 		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("upgrade_sensors",
-			mcp.WithDescription("Upgrade all sensors in an organization to a specific version or version label (latest, stable, experimental, or semantic version like 4.33.20)"),
+			mcp.WithDescription("Update the sensor version for the organization. Supports upgrading to specific versions, downgrading to previous version, or setting sensors to dormant mode."),
 			mcp.WithString("version",
-				mcp.Required(),
-				mcp.Description("Target sensor version: semantic version (e.g., '4.33.20') or version label ('latest', 'stable', 'experimental')")),
+				mcp.Description("Target sensor version: semantic version (e.g., '4.33.20') or version label ('latest', 'stable', 'experimental'). Mutually exclusive with is_fallback and is_sleep.")),
+			mcp.WithBoolean("is_fallback",
+				mcp.Description("If true, downgrade to the previous version of the sensor. Mutually exclusive with version and is_sleep.")),
+			mcp.WithBoolean("is_sleep",
+				mcp.Description("If true, move sensors to dormant mode. Mutually exclusive with version and is_fallback.")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			// Get version parameter
-			version, ok := args["version"].(string)
-			if !ok || version == "" {
-				return tools.ErrorResult("version parameter is required"), nil
+			// Get parameters
+			version, hasVersion := args["version"].(string)
+			isFallback, hasFallback := args["is_fallback"].(bool)
+			isSleep, hasSleep := args["is_sleep"].(bool)
+
+			// Validate that exactly one parameter is provided
+			providedCount := 0
+			if hasVersion && version != "" {
+				providedCount++
+			}
+			if hasFallback && isFallback {
+				providedCount++
+			}
+			if hasSleep && isSleep {
+				providedCount++
+			}
+
+			if providedCount == 0 {
+				return tools.ErrorResult("one of 'version', 'is_fallback', or 'is_sleep' must be provided"), nil
+			}
+			if providedCount > 1 {
+				return tools.ErrorResult("only one of 'version', 'is_fallback', or 'is_sleep' can be provided"), nil
 			}
 
 			// Get organization
@@ -620,23 +641,35 @@ func RegisterUpgradeSensors() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Prepare request body
-			requestBody := lc.Dict{
-				"version": version,
+			// Prepare query parameters based on which option was selected
+			queryParams := lc.Dict{}
+			var message string
+
+			if hasVersion && version != "" {
+				// Upgrade to specific version
+				queryParams["specific_version"] = version
+				message = fmt.Sprintf("Sensor upgrade to version %s initiated successfully. Sensors will update within approximately 20 minutes.", version)
+			} else if hasFallback && isFallback {
+				// Downgrade to previous version
+				queryParams["is_fallback"] = "true"
+				message = "Sensor downgrade to previous version initiated successfully. Sensors will update within approximately 20 minutes."
+			} else if hasSleep && isSleep {
+				// Move to dormant mode
+				queryParams["is_sleep"] = "true"
+				message = "Sensors will be moved to dormant mode within approximately 20 minutes."
 			}
 
 			// Make the API call to upgrade sensors
-			// Endpoint: POST /v1/org/{oid}/modules/upgrade
+			// Endpoint: POST /v1/modules/{oid}
 			resp := lc.Dict{}
-			err = org.GenericPOSTRequest("modules/upgrade", requestBody, &resp)
+			err = org.GenericPOSTRequest(fmt.Sprintf("modules/%s", org.GetOID()), queryParams, &resp)
 			if err != nil {
-				return tools.ErrorResultf("failed to upgrade sensors: %v", err), nil
+				return tools.ErrorResultf("failed to update sensors: %v", err), nil
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
 				"success": true,
-				"version": version,
-				"message": fmt.Sprintf("Sensor upgrade to version %s initiated successfully. Sensors will update within approximately 20 minutes.", version),
+				"message": message,
 			}), nil
 		},
 	})
