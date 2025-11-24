@@ -172,12 +172,11 @@ func TestListSensors_ParameterValidation(t *testing.T) {
 	tool, exists := tools.GetTool("list_sensors")
 	require.True(t, exists)
 
-	t.Run("accepts optional parameters", func(t *testing.T) {
+	t.Run("accepts selector parameter", func(t *testing.T) {
 		ctx := context.Background()
 
 		args := map[string]interface{}{
-			"with_hostname_prefix": "web-",
-			"with_ip":              "192.168.1.100",
+			"selector": "plat == `windows`",
 		}
 
 		// Will fail to get organization, but parameter validation should pass
@@ -187,11 +186,11 @@ func TestListSensors_ParameterValidation(t *testing.T) {
 		assert.True(t, result.IsError)
 	})
 
-	t.Run("accepts is_online parameter", func(t *testing.T) {
+	t.Run("accepts online_only parameter", func(t *testing.T) {
 		ctx := context.Background()
 
 		args := map[string]interface{}{
-			"is_online": true,
+			"online_only": true,
 		}
 
 		// Will fail to get organization, but parameter validation should pass
@@ -201,11 +200,11 @@ func TestListSensors_ParameterValidation(t *testing.T) {
 		assert.True(t, result.IsError)
 	})
 
-	t.Run("accepts is_online with false value", func(t *testing.T) {
+	t.Run("accepts online_only with false value", func(t *testing.T) {
 		ctx := context.Background()
 
 		args := map[string]interface{}{
-			"is_online": false,
+			"online_only": false,
 		}
 
 		// Will fail to get organization, but parameter validation should pass
@@ -215,13 +214,12 @@ func TestListSensors_ParameterValidation(t *testing.T) {
 		assert.True(t, result.IsError)
 	})
 
-	t.Run("accepts all parameters combined", func(t *testing.T) {
+	t.Run("accepts selector and online_only combined", func(t *testing.T) {
 		ctx := context.Background()
 
 		args := map[string]interface{}{
-			"with_hostname_prefix": "web-",
-			"with_ip":              "192.168.1.100",
-			"is_online":            true,
+			"selector":    "plat == `linux`",
+			"online_only": true,
 		}
 
 		// Will fail to get organization, but parameter validation should pass

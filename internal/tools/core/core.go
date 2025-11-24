@@ -121,12 +121,10 @@ func RegisterListSensors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_sensors",
 			mcp.WithDescription("List all sensors in the organization with optional filtering"),
-			mcp.WithString("with_hostname_prefix",
-				mcp.Description("Filter sensors with hostname starting with this prefix")),
-			mcp.WithString("with_ip",
-				mcp.Description("Filter sensors with this IP address")),
-			mcp.WithBoolean("is_online",
-				mcp.Description("Filter sensors by online status (true for online, false for offline)")),
+			mcp.WithString("selector",
+				mcp.Description("Sensor selector expression using bexpr syntax. Examples: 'plat == `windows`', '`test` in tags', 'hostname matches `^web-`', 'int_ip == `10.0.0.1`'. Available fields: sid, oid, plat, arch, hostname, int_ip, ext_ip, alive, tags, etc.")),
+			mcp.WithBoolean("online_only",
+				mcp.Description("When true, return only online sensors. When false or omitted, return all sensors (no online/offline filtering). This is server-side filtering.")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
@@ -136,67 +134,33 @@ func RegisterListSensors() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// List all sensors - SDK handles pagination internally using continuation tokens
-			sensors, err := org.ListSensors(lc.ListSensorsOptions{})
+			// Extract filter parameters
+			selector, _ := args["selector"].(string)
+			onlineOnly, _ := args["online_only"].(bool)
+
+			// Build ListSensorsOptions for server-side filtering
+			options := lc.ListSensorsOptions{
+				Selector:   selector,
+				OnlineOnly: onlineOnly,
+			}
+
+			// List sensors - SDK handles pagination internally using continuation tokens
+			sensors, err := org.ListSensors(options)
 			if err != nil {
 				return tools.ErrorResultf("failed to list sensors: %v", err), nil
 			}
 
-			// Apply additional filters
-			hostnamePrefix, hasHostnameFilter := args["with_hostname_prefix"].(string)
-			ipFilter, hasIPFilter := args["with_ip"].(string)
-			isOnlineFilter, hasOnlineFilter := args["is_online"].(bool)
-
-			// Get online status map if needed
-			var activeSensors map[string]bool
-			if hasOnlineFilter {
-				sids := make([]string, 0, len(sensors))
-				for sid := range sensors {
-					sids = append(sids, sid)
-				}
-				activeSensors, err = org.ActiveSensors(sids)
-				if err != nil {
-					return tools.ErrorResultf("failed to check active sensors: %v", err), nil
-				}
-			}
-
-			var filtered []*lc.Sensor
-			for _, sensor := range sensors {
-				include := true
-
-				if hasHostnameFilter && len(sensor.Hostname) >= len(hostnamePrefix) {
-					if sensor.Hostname[:len(hostnamePrefix)] != hostnamePrefix {
-						include = false
-					}
-				}
-
-				if hasIPFilter && sensor.InternalIP != ipFilter && sensor.ExternalIP != ipFilter {
-					include = false
-				}
-
-				if hasOnlineFilter {
-					isOnline := activeSensors[sensor.SID]
-					if isOnline != isOnlineFilter {
-						include = false
-					}
-				}
-
-				if include {
-					filtered = append(filtered, sensor)
-				}
-			}
-
 			// Format results
-			sensorList := make([]map[string]interface{}, len(filtered))
-			for i, sensor := range filtered {
-				sensorList[i] = map[string]interface{}{
+			sensorList := make([]map[string]interface{}, 0, len(sensors))
+			for _, sensor := range sensors {
+				sensorList = append(sensorList, map[string]interface{}{
 					"sid":         sensor.SID,
 					"hostname":    sensor.Hostname,
 					"platform":    sensor.Platform,
 					"last_seen":   sensor.AliveTS,
 					"internal_ip": sensor.InternalIP,
 					"external_ip": sensor.ExternalIP,
-				}
+				})
 			}
 
 			result := map[string]interface{}{
