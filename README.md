@@ -32,6 +32,8 @@ This server bridges AI assistants and the LimaCharlie security platform through 
 
 ## Quick Start
 
+### Local MCP Server
+
 ```bash
 # 1. Build the server
 go build -o lc-mcp-server ./cmd/server
@@ -43,6 +45,30 @@ export LC_API_KEY="your-api-key"
 # 3. Run the server
 ./lc-mcp-server
 ```
+
+### Remote MCP Server
+
+Claude Code can connect to the LimaCharlie hosted MCP server using http. This is the simplest method to get up and running.
+
+#### Step 1: Add the MCP server
+
+```bash
+claude mcp add --transport http lc-remote "https://mcp.limacharlie.io/mcp"
+```
+
+#### Step 2: Execute Claude Code
+
+```bash
+claude
+```
+
+#### Step 3: Authenticate to LimaCharlie
+
+1. Run `/mcp` from within Claude and select your remote MCP server
+2. Select option `2. Authenticate` from the menu
+3. A browser window will open for authentication. Authenticate using your LimaCharlie credentials
+4. If successful, you will get the following message within Claude Code: `Authentication successful. Connected to lc-remote.`
+
 
 ## Running with Claude Code (STDIO Mode)
 
@@ -57,6 +83,20 @@ go build -o lc-mcp-server ./cmd/server
 
 ### Step 2: Configure Claude Code
 
+#### Option 1: Add MCP server via CLI
+
+To add the local MCP server via the CLI, execute the following command, substituting the `YOUR_OID`, `YOUR_API_KEY`, and `YOUR_EXECUTABLE` placeholders with your values:
+
+```bash
+claude mcp add --transport stdio lc-local --env LC_OID="YOUR_OID" LC_API_KEY="YOUR_API_KEY" MCP_MODE="stdio" MCP_PROFILE="all" -- YOUR_EXECUTABLE
+```
+
+**Example:**
+```bash
+claude mcp add --transport stdio lc-local --env LC_OID="abcd1234-d34d-b33f-1010-12346ab94321" LC_API_KEY="123453a1-c0ff-ee43-fa11-f8142de5a490" MCP_MODE="stdio" MCP_PROFILE="all" -- /home/username/lc-mcp-server/lc-mcp-server
+```
+
+#### Option 2: Add MCP server via config file
 Edit your Claude Code MCP settings file (usually at `~/.config/claude-code/mcp.json`):
 
 ```json
