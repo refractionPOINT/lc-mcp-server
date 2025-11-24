@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.43.0
 	github.com/redis/go-redis/v9 v9.17.0
-	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251121011259-1c8d3db88efd
+	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20251124155439-723fe289fe39
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.256.0
 	google.golang.org/genai v1.36.0
