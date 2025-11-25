@@ -165,7 +165,7 @@ func RegisterSetLookup() {
 				HiveName:     "lookup",
 				PartitionKey: org.GetOID(),
 				Key:          lookupName,
-				Data:         lc.Dict(lookupData),
+				Data:         lc.Dict(map[string]interface{}{"lookup_data": lookupData}),
 				Enabled:      &enabled,
 			})
 			if err != nil {
