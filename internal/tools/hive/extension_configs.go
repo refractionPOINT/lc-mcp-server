@@ -39,7 +39,7 @@ func RegisterListExtensionConfigs() {
 			// List all extension configs
 			configs, err := hive.List(lc.HiveArgs{
 				HiveName:     "extension_config",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list extension configs: %v", err), nil
@@ -95,7 +95,7 @@ func RegisterGetExtensionConfig() {
 			// Get extension config
 			config, err := hive.Get(lc.HiveArgs{
 				HiveName:     "extension_config",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          extensionName,
 			})
 			if err != nil {
@@ -161,7 +161,7 @@ func RegisterSetExtensionConfig() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     "extension_config",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          extensionName,
 				Data:         lc.Dict(configData),
 				Enabled:      &enabled,
@@ -208,7 +208,7 @@ func RegisterDeleteExtensionConfig() {
 			// Delete extension config
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     "extension_config",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          extensionName,
 			})
 			if err != nil {

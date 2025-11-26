@@ -39,7 +39,7 @@ func RegisterListExternalAdapters() {
 			// List all external adapters
 			adapters, err := hive.List(lc.HiveArgs{
 				HiveName:     "external_adapter",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list external adapters: %v", err), nil
@@ -95,7 +95,7 @@ func RegisterGetExternalAdapter() {
 			// Get external adapter
 			adapter, err := hive.Get(lc.HiveArgs{
 				HiveName:     "external_adapter",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          adapterName,
 			})
 			if err != nil {
@@ -161,7 +161,7 @@ func RegisterSetExternalAdapter() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     "external_adapter",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          adapterName,
 				Data:         lc.Dict(adapterConfig),
 				Enabled:      &enabled,
@@ -208,7 +208,7 @@ func RegisterDeleteExternalAdapter() {
 			// Delete external adapter
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     "external_adapter",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          adapterName,
 			})
 			if err != nil {

@@ -39,7 +39,7 @@ func RegisterListPlaybooks() {
 			// List all playbooks from the playbook hive
 			playbooks, err := hive.List(lc.HiveArgs{
 				HiveName:     "playbook",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list playbooks: %v", err), nil
@@ -95,7 +95,7 @@ func RegisterGetPlaybook() {
 			// Get playbook
 			playbook, err := hive.Get(lc.HiveArgs{
 				HiveName:     "playbook",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          playbookName,
 			})
 			if err != nil {
@@ -161,7 +161,7 @@ func RegisterSetPlaybook() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     "playbook",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          playbookName,
 				Data:         lc.Dict(playbookData),
 				Enabled:      &enabled,
@@ -208,7 +208,7 @@ func RegisterDeletePlaybook() {
 			// Delete playbook
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     "playbook",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          playbookName,
 			})
 			if err != nil {

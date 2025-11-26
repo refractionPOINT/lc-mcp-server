@@ -39,7 +39,7 @@ func RegisterListCloudSensors() {
 			// List all cloud sensors
 			cloudSensors, err := hive.List(lc.HiveArgs{
 				HiveName:     "cloud_sensor",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list cloud sensors: %v", err), nil
@@ -95,7 +95,7 @@ func RegisterGetCloudSensor() {
 			// Get cloud sensor
 			cloudSensor, err := hive.Get(lc.HiveArgs{
 				HiveName:     "cloud_sensor",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          sensorName,
 			})
 			if err != nil {
@@ -161,7 +161,7 @@ func RegisterSetCloudSensor() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     "cloud_sensor",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          sensorName,
 				Data:         lc.Dict(sensorConfig),
 				Enabled:      &enabled,
@@ -208,7 +208,7 @@ func RegisterDeleteCloudSensor() {
 			// Delete cloud sensor
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     "cloud_sensor",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          sensorName,
 			})
 			if err != nil {
