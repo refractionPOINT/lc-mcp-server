@@ -19,6 +19,7 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/forensics" // Forensics and YARA tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/historical"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/hive" // Hive storage tools (cloud sensors, playbooks, etc.)
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/investigation"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/replay" // D&R rule testing and replay tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/response"
