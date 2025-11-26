@@ -80,6 +80,10 @@ type OrganizationClient interface {
 	DRRuleAdd(name string, detection interface{}, response interface{}, opts ...lc.NewDRRuleOptions) error
 	DRRuleDelete(name string, filters ...lc.DRRuleFilter) error
 
+	// D&R Rule Replay and Validation
+	ReplayDRRule(req lc.ReplayDRRuleRequest) (*lc.ReplayDRRuleResponse, error)
+	ValidateDRRule(rule lc.Dict) (*lc.ValidationResponse, error)
+
 	// False Positive Rules
 	FPRules() (map[lc.FPRuleName]lc.FPRule, error)
 	FPRuleAdd(name lc.FPRuleName, detection interface{}, opts ...lc.FPRuleOptions) error

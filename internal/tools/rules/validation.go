@@ -42,12 +42,9 @@ func RegisterValidateDRRuleComponents() {
 
 			// Extract rule source
 			ruleName, _ := args["rule_name"].(string)
-			namespace := "general"
-			if ns, ok := args["namespace"].(string); ok && ns != "" {
-				namespace = ns
-			}
+			namespace := GetNamespaceWithDefault(args)
 			detect, hasDetect := args["detect"]
-			respond, hasRespond := args["respond"]
+			respond := args["respond"]
 
 			// Validate that we have either rule_name or detect
 			if ruleName == "" && !hasDetect {
@@ -67,24 +64,10 @@ func RegisterValidateDRRuleComponents() {
 					return tools.ErrorResultf("rule '%s' not found in namespace '%s'", ruleName, namespace), nil
 				}
 
-				// Extract detect and respond from the rule
-				ruleDetect := rule["detect"]
-				ruleRespond := rule["respond"]
-
-				// Build a complete rule for validation
-				fullRule := lc.Dict{
-					"detect": ruleDetect,
-				}
-				if ruleRespond != nil {
-					fullRule["respond"] = ruleRespond
-				} else {
-					// Default respond for validation
-					fullRule["respond"] = []interface{}{
-						map[string]interface{}{
-							"action": "report",
-							"name":   "validation-test",
-						},
-					}
+				// Extract detect and respond from the rule and build for validation
+				fullRule, err := BuildRuleFromComponents(rule["detect"], rule["respond"], "validation-test")
+				if err != nil {
+					return tools.ErrorResultf("invalid rule structure: %v", err), nil
 				}
 
 				// Validate using Replay service
@@ -110,36 +93,10 @@ func RegisterValidateDRRuleComponents() {
 				}), nil
 			}
 
-			// Build rule from detect/respond components
-			rule := lc.Dict{}
-
-			// Handle detect component
-			switch d := detect.(type) {
-			case map[string]interface{}:
-				rule["detect"] = d
-			default:
-				return tools.ErrorResult("detect must be an object/map"), nil
-			}
-
-			// Handle respond component if provided
-			if hasRespond && respond != nil {
-				switch r := respond.(type) {
-				case []interface{}:
-					rule["respond"] = r
-				case map[string]interface{}:
-					// Single respond object, wrap in array
-					rule["respond"] = []interface{}{r}
-				default:
-					return tools.ErrorResult("respond must be an array or object"), nil
-				}
-			} else {
-				// Default respond action for validation
-				rule["respond"] = []interface{}{
-					map[string]interface{}{
-						"action": "report",
-						"name":   "validation-test",
-					},
-				}
+			// Build rule from detect/respond components using shared helper
+			rule, err := BuildRuleFromComponents(detect, respond, "validation-test")
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
 			}
 
 			// Validate using Replay service

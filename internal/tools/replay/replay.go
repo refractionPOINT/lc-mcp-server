@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/rules"
 )
 
 func init() {
@@ -33,15 +34,15 @@ func RegisterTestDRRuleEvents() {
 				mcp.Description("Detection component (YAML/JSON structure). Required if rule_name not provided")),
 			mcp.WithObject("respond",
 				mcp.Description("Response component (array of actions). Optional, defaults to a report action")),
-			mcp.WithObject("events",
+			mcp.WithArray("events",
 				mcp.Required(),
 				mcp.Description("Array of event objects to test against. Each event should have 'routing' and 'event' keys")),
 			mcp.WithBoolean("trace",
 				mcp.Description("Enable trace output for debugging rule evaluation (default: false)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			// Get organization
-			org, err := tools.GetOrganization(ctx)
+			// Get organization (supports mock injection for testing)
+			org, err := tools.GetOrganizationClient(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -109,8 +110,8 @@ func RegisterReplayDRRule() {
 				mcp.Description("Data stream: 'event', 'audit', or 'detect' (default: 'event')")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			// Get organization
-			org, err := tools.GetOrganization(ctx)
+			// Get organization (supports mock injection for testing)
+			org, err := tools.GetOrganizationClient(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
@@ -145,51 +146,26 @@ func buildReplayRequest(args map[string]interface{}, requireEvents bool) (lc.Rep
 
 	// Extract rule source
 	ruleName, _ := args["rule_name"].(string)
-	namespace, _ := args["namespace"].(string)
 	detect, hasDetect := args["detect"]
-	respond, hasRespond := args["respond"]
+	respond, _ := args["respond"]
 
-	// Validate rule source
+	// Validate rule source - must have exactly one of rule_name or detect
 	if ruleName == "" && !hasDetect {
 		return req, fmt.Errorf("either 'rule_name' or 'detect' must be provided")
 	}
+	if ruleName != "" && hasDetect {
+		return req, fmt.Errorf("cannot provide both 'rule_name' and 'detect' - use one or the other")
+	}
 
 	req.RuleName = ruleName
-	req.Namespace = namespace
+	req.Namespace = rules.GetNamespaceWithDefault(args)
 
 	// Build inline rule if provided
 	if hasDetect {
-		rule := lc.Dict{}
-
-		// Handle detect component
-		switch d := detect.(type) {
-		case map[string]interface{}:
-			rule["detect"] = d
-		default:
-			return req, fmt.Errorf("detect must be an object/map")
+		rule, err := rules.BuildRuleFromComponents(detect, respond, "test-detection")
+		if err != nil {
+			return req, err
 		}
-
-		// Handle respond component
-		if hasRespond && respond != nil {
-			switch r := respond.(type) {
-			case []interface{}:
-				rule["respond"] = r
-			case map[string]interface{}:
-				// Single respond object, wrap in array
-				rule["respond"] = []interface{}{r}
-			default:
-				return req, fmt.Errorf("respond must be an array or object")
-			}
-		} else {
-			// Default respond action
-			rule["respond"] = []interface{}{
-				map[string]interface{}{
-					"action": "report",
-					"name":   "test-detection",
-				},
-			}
-		}
-
 		req.Rule = rule
 	}
 
