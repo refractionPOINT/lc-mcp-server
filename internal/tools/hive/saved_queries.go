@@ -41,7 +41,7 @@ func RegisterListSavedQueries() {
 			// List all saved queries from the query hive
 			queries, err := hive.List(lc.HiveArgs{
 				HiveName:     "query",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list saved queries: %v", err), nil
@@ -97,7 +97,7 @@ func RegisterGetSavedQuery() {
 			// Get saved query
 			query, err := hive.Get(lc.HiveArgs{
 				HiveName:     "query",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          queryName,
 			})
 			if err != nil {
@@ -175,7 +175,7 @@ func RegisterSetSavedQuery() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     "query",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          queryName,
 				Data:         lc.Dict(queryData),
 				Enabled:      &enabled,
@@ -222,7 +222,7 @@ func RegisterDeleteSavedQuery() {
 			// Delete saved query
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     "query",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          queryName,
 			})
 			if err != nil {
@@ -274,7 +274,7 @@ func RegisterRunSavedQuery() {
 			// Get saved query
 			savedQuery, err := hive.Get(lc.HiveArgs{
 				HiveName:     "query",
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          queryName,
 			})
 			if err != nil {

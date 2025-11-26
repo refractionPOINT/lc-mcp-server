@@ -47,7 +47,7 @@ func RegisterListRules() {
 			// List all rules from the specified hive
 			rules, err := hive.List(lc.HiveArgs{
 				HiveName:     hiveName,
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to list rules from hive '%s': %v", hiveName, err), nil
@@ -111,7 +111,7 @@ func RegisterGetRule() {
 			// Get rule
 			rule, err := hive.Get(lc.HiveArgs{
 				HiveName:     hiveName,
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          ruleName,
 			})
 			if err != nil {
@@ -185,7 +185,7 @@ func RegisterSetRule() {
 			enabled := true
 			_, err = hive.Add(lc.HiveArgs{
 				HiveName:     hiveName,
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          ruleName,
 				Data:         lc.Dict(ruleContent),
 				Enabled:      &enabled,
@@ -240,7 +240,7 @@ func RegisterDeleteRule() {
 			// Delete rule
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     hiveName,
-				PartitionKey: "global",
+				PartitionKey: org.GetOID(),
 				Key:          ruleName,
 			})
 			if err != nil {
