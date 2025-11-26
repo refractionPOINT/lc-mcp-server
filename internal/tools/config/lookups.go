@@ -138,7 +138,7 @@ func RegisterSetLookup() {
 				mcp.Description("Name for the lookup table")),
 			mcp.WithObject("lookup_data",
 				mcp.Required(),
-				mcp.Description("Lookup table data (key-value pairs or list of items)")),
+				mcp.Description("Lookup table data (dict of strings -> dict, string is the key, dict value is the item metadata)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
