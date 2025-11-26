@@ -30,6 +30,10 @@ type MockOrganization struct {
 	DRRuleAddFunc    func(name string, detection interface{}, response interface{}, opts ...lc.NewDRRuleOptions) error
 	DRRuleDeleteFunc func(name string, filters ...lc.DRRuleFilter) error
 
+	// D&R Rule Replay and Validation
+	ReplayDRRuleFunc   func(req lc.ReplayDRRuleRequest) (*lc.ReplayDRRuleResponse, error)
+	ValidateDRRuleFunc func(rule lc.Dict) (*lc.ValidationResponse, error)
+
 	// False Positive Rules
 	FPRulesFunc      func() (map[lc.FPRuleName]lc.FPRule, error)
 	FPRuleAddFunc    func(name lc.FPRuleName, detection interface{}, opts ...lc.FPRuleOptions) error
@@ -194,6 +198,21 @@ func (m *MockOrganization) DRRuleDelete(name string, filters ...lc.DRRuleFilter)
 		return m.DRRuleDeleteFunc(name, filters...)
 	}
 	return nil
+}
+
+// D&R Rule Replay and Validation
+func (m *MockOrganization) ReplayDRRule(req lc.ReplayDRRuleRequest) (*lc.ReplayDRRuleResponse, error) {
+	if m.ReplayDRRuleFunc != nil {
+		return m.ReplayDRRuleFunc(req)
+	}
+	return nil, nil
+}
+
+func (m *MockOrganization) ValidateDRRule(rule lc.Dict) (*lc.ValidationResponse, error) {
+	if m.ValidateDRRuleFunc != nil {
+		return m.ValidateDRRuleFunc(rule)
+	}
+	return nil, nil
 }
 
 // False Positive Rules
