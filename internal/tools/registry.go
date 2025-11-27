@@ -58,6 +58,8 @@ var ProfileDefinitions = map[string][]string{
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
+		// Timeline expansion
+		"expand_timeline",
 		// Saved queries
 		"list_saved_queries",
 		"get_saved_query",
@@ -81,6 +83,8 @@ var ProfileDefinitions = map[string][]string{
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
+		// Timeline expansion
+		"expand_timeline",
 		// Saved queries (read-only - excludes set/delete)
 		"list_saved_queries",
 		"get_saved_query",
