@@ -18,7 +18,7 @@ func RegisterExpandTimeline() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "expand_timeline",
 		Description: "Expand a timeline by fetching full event and detection data for all references",
-		Profile:     "historical_data",
+		Profile:     "timeline_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("expand_timeline",
 			mcp.WithDescription("Expand a timeline by fetching full event and detection data for all references. Provide either a timeline object or a timeline_name to fetch from Hive."),
