@@ -15,6 +15,7 @@ historical_data:
   - run_lcql_query
   - get_historic_events
   - get_historic_detections
+  - get_detection
   - search_iocs
   - batch_search_iocs
   - get_time_when_sensor_has_data
@@ -39,6 +40,7 @@ historical_data_readonly:
   - run_lcql_query
   - get_historic_events
   - get_historic_detections
+  - get_detection
   - search_iocs
   - batch_search_iocs
   - get_time_when_sensor_has_data
@@ -114,6 +116,7 @@ detection_engineering:
   # Detection rules
   - get_detection_rules
   - get_historic_detections
+  - get_detection
   # D&R General Rules
   - list_dr_general_rules
   - get_dr_general_rule
