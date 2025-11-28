@@ -19,6 +19,7 @@ func init() {
 	RegisterRunLCQLQuery()
 	RegisterRunLCQLQueryFree()
 	RegisterGetHistoricDetections()
+	RegisterGetDetection()
 	RegisterSearchIOCs()
 	RegisterBatchSearchIOCs()
 	RegisterGetTimeWhenSensorHasData()
@@ -404,6 +405,46 @@ func RegisterGetHistoricDetections() {
 			}
 
 			return tools.SuccessResult(result), nil
+		},
+	})
+}
+
+// RegisterGetDetection registers the get_detection tool
+func RegisterGetDetection() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_detection",
+		Description: "Get a specific detection by its detection ID",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("get_detection",
+			mcp.WithDescription("Get a specific detection by its detection ID (detect_id/atom)"),
+			mcp.WithString("detection_id",
+				mcp.Required(),
+				mcp.Description("The detection ID (detect_id/atom) to retrieve")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Extract detection_id parameter
+			detectionID, ok := args["detection_id"].(string)
+			if !ok || detectionID == "" {
+				return tools.ErrorResult("detection_id parameter is required"), nil
+			}
+
+			// Get organization
+			org, err := tools.GetOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Make GET request to /insight/{oid}/detections/{detection_id}
+			path := fmt.Sprintf("insight/%s/detections/%s", org.GetOID(), detectionID)
+			var response lc.Dict
+			if err := org.GenericGETRequest(path, nil, &response); err != nil {
+				return tools.ErrorResultf("failed to get detection: %v", err), nil
+			}
+
+			return tools.SuccessResult(map[string]interface{}{
+				"detection": response,
+			}), nil
 		},
 	})
 }
