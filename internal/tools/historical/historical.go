@@ -23,6 +23,8 @@ func init() {
 	RegisterSearchIOCs()
 	RegisterBatchSearchIOCs()
 	RegisterGetTimeWhenSensorHasData()
+	RegisterGetEventByAtom()
+	RegisterGetAtomChildren()
 }
 
 // timeframePattern matches LCQL timeframe patterns like -30d, -24h, -30m
@@ -795,6 +797,100 @@ func RegisterGetTimeWhenSensorHasData() {
 			}
 
 			return tools.SuccessResult(resp), nil
+		},
+	})
+}
+
+// RegisterGetEventByAtom registers the get_event_by_atom tool
+func RegisterGetEventByAtom() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_event_by_atom",
+		Description: "Get a specific event by its atom identifier",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("get_event_by_atom",
+			mcp.WithDescription("Retrieve a specific event from Insight using its atom identifier. Requires both the sensor ID and atom."),
+			mcp.WithString("sid",
+				mcp.Required(),
+				mcp.Description("Sensor ID (UUID) where the event originated")),
+			mcp.WithString("atom",
+				mcp.Required(),
+				mcp.Description("The atom identifier of the event to retrieve")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Extract and validate SID
+			sid, err := tools.ExtractAndValidateSID(args)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
+			// Extract atom parameter
+			atom, ok := args["atom"].(string)
+			if !ok || atom == "" {
+				return tools.ErrorResult("atom parameter is required"), nil
+			}
+
+			// Get organization
+			org, err := tools.GetOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Make GET request to /insight/{oid}/{sid}/{atom}
+			path := fmt.Sprintf("insight/%s/%s/%s", org.GetOID(), sid, atom)
+			var response lc.Dict
+			if err := org.GenericGETRequest(path, nil, &response); err != nil {
+				return tools.ErrorResultf("failed to get event: %v", err), nil
+			}
+
+			return tools.SuccessResult(response), nil
+		},
+	})
+}
+
+// RegisterGetAtomChildren registers the get_atom_children tool
+func RegisterGetAtomChildren() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_atom_children",
+		Description: "Get all children (descendants) of a specific atom",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("get_atom_children",
+			mcp.WithDescription("Retrieve all child events (descendants) of a specific atom from Insight. This is useful for tracing the process tree and understanding the full execution chain from a parent event."),
+			mcp.WithString("sid",
+				mcp.Required(),
+				mcp.Description("Sensor ID (UUID) where the events originated")),
+			mcp.WithString("atom",
+				mcp.Required(),
+				mcp.Description("The parent atom identifier to get children for")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Extract and validate SID
+			sid, err := tools.ExtractAndValidateSID(args)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
+			// Extract atom parameter
+			atom, ok := args["atom"].(string)
+			if !ok || atom == "" {
+				return tools.ErrorResult("atom parameter is required"), nil
+			}
+
+			// Get organization
+			org, err := tools.GetOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Make GET request to /insight/{oid}/{sid}/{atom}/children
+			path := fmt.Sprintf("insight/%s/%s/%s/children", org.GetOID(), sid, atom)
+			var response lc.Dict
+			if err := org.GenericGETRequest(path, nil, &response); err != nil {
+				return tools.ErrorResultf("failed to get atom children: %v", err), nil
+			}
+
+			return tools.SuccessResult(response), nil
 		},
 	})
 }
