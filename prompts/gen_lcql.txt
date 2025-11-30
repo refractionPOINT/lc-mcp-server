@@ -70,6 +70,31 @@ Specifies output fields and aggregation:
   - `event/NETWORK_CONNECTIONS/IP_ADDRESS is public address`
 - **`is private address`**: Private IP check
 
+### Network Activity Path Syntax
+
+The `NETWORK_CONNECTIONS` event type contains an `event/NETWORK_ACTIVITY` array with network connection entries. When querying multiple fields that must match the **same** connection entry, use the `scope` operator:
+
+**Common fields within NETWORK_ACTIVITY entries:**
+- `event/SOURCE/IP_ADDRESS`: Source IP address
+- `event/DESTINATION/IP_ADDRESS`: Destination IP address
+- `event/DESTINATION/PORT`: Destination port
+- `event/PROTOCOL`: Protocol (TCP/UDP)
+
+**Example - Find connections to public IPs on port 443 (same connection):**
+```
+-1h | * | NETWORK_CONNECTIONS | event/NETWORK_ACTIVITY scope (event/DESTINATION/IP_ADDRESS is public address and event/DESTINATION/PORT is 443)
+```
+
+**Example - Find connections from internal IPs to specific port:**
+```
+-24h | plat == linux | NETWORK_CONNECTIONS | event/NETWORK_ACTIVITY scope (event/SOURCE/IP_ADDRESS cidr "10.0.0.0/8" and event/DESTINATION/PORT is 22)
+```
+
+**Single field query (no scope needed):**
+```
+-1h | * | NETWORK_CONNECTIONS | event/NETWORK_ACTIVITY/?/DESTINATION/IP_ADDRESS is public address
+```
+
 ### Numeric Operators
 - **`is lower than`**: Less than comparison
   - `event/NETWORK_CONNECTIONS/PORT is lower than 1024`
