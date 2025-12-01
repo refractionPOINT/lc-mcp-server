@@ -17,6 +17,7 @@ func init() {
 	RegisterGetOnlineSensors()
 	RegisterIsOnline()
 	RegisterSearchHosts()
+	RegisterListSensorTags()
 }
 
 // RegisterTestTool registers the test_tool
@@ -346,4 +347,37 @@ func matchHostname(hostname, pattern string) bool {
 		return hostname == pattern
 	}
 	return matched
+}
+
+// RegisterListSensorTags registers the list_sensor_tags tool
+func RegisterListSensorTags() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "list_sensor_tags",
+		Description: "List all tags in use by sensors in the organization",
+		Profile:     "core",
+		RequiresOID: true,
+		Schema: mcp.NewTool("list_sensor_tags",
+			mcp.WithDescription("List all tags currently in use by sensors in the organization. Returns a list of unique tag names."),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			// Get organization
+			org, err := tools.GetOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Get all tags
+			tags, err := org.GetAllTags()
+			if err != nil {
+				return tools.ErrorResultf("failed to list tags: %v", err), nil
+			}
+
+			result := map[string]interface{}{
+				"tags":  tags,
+				"count": len(tags),
+			}
+
+			return tools.SuccessResult(result), nil
+		},
+	})
 }

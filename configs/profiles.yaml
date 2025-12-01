@@ -9,6 +9,7 @@ core:
   - get_online_sensors
   - is_online
   - search_hosts
+  - list_sensor_tags
 
 historical_data:
   # Core historical data queries
