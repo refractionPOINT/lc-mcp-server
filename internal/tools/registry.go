@@ -231,6 +231,11 @@ var ProfileDefinitions = map[string][]string{
 		"list_api_keys",
 		"create_api_key",
 		"delete_api_key",
+		// Payloads
+		"list_payloads",
+		"create_payload",
+		"get_payload",
+		"delete_payload",
 	},
 	"ai_powered": {
 		// AI-powered generation tools (to be implemented)
