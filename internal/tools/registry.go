@@ -50,6 +50,7 @@ var ProfileDefinitions = map[string][]string{
 		"get_online_sensors",
 		"is_online",
 		"search_hosts",
+		"list_sensor_tags",
 	},
 	"historical_data": {
 		"run_lcql_query",
@@ -231,6 +232,11 @@ var ProfileDefinitions = map[string][]string{
 		"list_api_keys",
 		"create_api_key",
 		"delete_api_key",
+		// Payloads
+		"list_payloads",
+		"create_payload",
+		"get_payload",
+		"delete_payload",
 	},
 	"ai_powered": {
 		// AI-powered generation tools (to be implemented)
@@ -244,6 +250,14 @@ var ProfileDefinitions = map[string][]string{
 	"api_access": {
 		// Meta-tool for calling other tools
 		"lc_call_tool",
+	},
+	"timeline_management": {
+		// Timeline tools for incident response investigations
+		"expand_timeline",
+		"list_timelines",
+		"get_timeline",
+		"set_timeline",
+		"delete_timeline",
 	},
 }
 
