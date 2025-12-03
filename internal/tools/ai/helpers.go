@@ -303,7 +303,9 @@ func interpretSchema(schema map[string]interface{}) string {
 
 	// Build LLM-optimized output with markdown formatting
 	var output strings.Builder
-	output.WriteString(fmt.Sprintf("### %s\n", eventType))
+	output.WriteString(fmt.Sprintf("### Event: %s\n", eventType))
+	output.WriteString(fmt.Sprintf("Use `event: %s` in D&R rules to match this event type.\n\n", eventType))
+	output.WriteString("**Available fields:**\n")
 	output.WriteString("| Path | Type |\n")
 	output.WriteString("|------|------|\n")
 
@@ -329,6 +331,7 @@ func interpretSchema(schema map[string]interface{}) string {
 		output.WriteString(fmt.Sprintf("| `%s` | %s |\n", fullPath, typeName))
 	}
 
+	output.WriteString("\n---\n")
 	return output.String()
 }
 
