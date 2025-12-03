@@ -1,8 +1,11 @@
 package payloads
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,17 +90,18 @@ func RegisterListPayloads() {
 func RegisterCreatePayload() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "create_payload",
-		Description: "Upload a payload from a file on disk",
+		Description: "Upload a payload from a file on disk or base64-encoded content",
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("create_payload",
-			mcp.WithDescription("Upload a payload (executable or script) from a local file to be deployed and executed on sensors. The file extension in the name determines execution type (.exe, .ps1, .bat, .sh)."),
+			mcp.WithDescription("Upload a payload (executable or script) to be deployed and executed on sensors. The file extension in the name determines execution type (.exe, .ps1, .bat, .sh). Provide either file_path OR file_content (base64-encoded), not both."),
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name for the payload (include file extension for execution type)")),
 			mcp.WithString("file_path",
-				mcp.Required(),
-				mcp.Description("Absolute path to the file on disk to upload")),
+				mcp.Description("Absolute path to the file on disk to upload (mutually exclusive with file_content)")),
+			mcp.WithString("file_content",
+				mcp.Description("Base64-encoded file content to upload (mutually exclusive with file_path)")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
@@ -105,27 +109,51 @@ func RegisterCreatePayload() {
 				return tools.ErrorResult("name parameter is required"), nil
 			}
 
-			filePath, ok := args["file_path"].(string)
-			if !ok || filePath == "" {
-				return tools.ErrorResult("file_path parameter is required"), nil
+			filePath, hasPath := args["file_path"].(string)
+			fileContent, hasContent := args["file_content"].(string)
+
+			// Validate mutual exclusivity: exactly one must be provided
+			pathProvided := hasPath && filePath != ""
+			contentProvided := hasContent && fileContent != ""
+
+			if !pathProvided && !contentProvided {
+				return tools.ErrorResult("exactly one of 'file_path' or 'file_content' must be provided"), nil
+			}
+			if pathProvided && contentProvided {
+				return tools.ErrorResult("exactly one of 'file_path' or 'file_content' must be provided, not both"), nil
 			}
 
-			// Security: Validate file path
-			if err := validateFilePath(filePath); err != nil {
-				return tools.ErrorResultf("invalid file path: %v", err), nil
-			}
+			var reader io.Reader
+			var size int64
 
-			// Open and read file
-			file, err := os.Open(filePath)
-			if err != nil {
-				return tools.ErrorResultf("failed to open file '%s': %v", filePath, err), nil
-			}
-			defer file.Close()
+			if contentProvided {
+				// Decode base64 content
+				decoded, err := base64.StdEncoding.DecodeString(fileContent)
+				if err != nil {
+					return tools.ErrorResultf("invalid base64 content: %v", err), nil
+				}
+				reader = bytes.NewReader(decoded)
+				size = int64(len(decoded))
+			} else {
+				// Security: Validate file path
+				if err := validateFilePath(filePath); err != nil {
+					return tools.ErrorResultf("invalid file path: %v", err), nil
+				}
 
-			// Get file info for size reporting
-			fileInfo, err := file.Stat()
-			if err != nil {
-				return tools.ErrorResultf("failed to stat file '%s': %v", filePath, err), nil
+				// Open and read file
+				file, err := os.Open(filePath)
+				if err != nil {
+					return tools.ErrorResultf("failed to open file '%s': %v", filePath, err), nil
+				}
+				defer file.Close()
+
+				// Get file info for size reporting
+				fileInfo, err := file.Stat()
+				if err != nil {
+					return tools.ErrorResultf("failed to stat file '%s': %v", filePath, err), nil
+				}
+				reader = file
+				size = fileInfo.Size()
 			}
 
 			org, err := getOrganization(ctx)
@@ -133,15 +161,15 @@ func RegisterCreatePayload() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			if err := org.CreatePayloadFromReader(name, file); err != nil {
+			if err := org.CreatePayloadFromReader(name, reader); err != nil {
 				return tools.ErrorResultf("failed to upload payload '%s': %v", name, err), nil
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
 				"success":      true,
-				"message":      fmt.Sprintf("Successfully uploaded payload '%s' (%d bytes)", name, fileInfo.Size()),
+				"message":      fmt.Sprintf("Successfully uploaded payload '%s' (%d bytes)", name, size),
 				"payload_name": name,
-				"size":         fileInfo.Size(),
+				"size":         size,
 			}), nil
 		},
 	})
