@@ -303,11 +303,9 @@ func interpretSchema(schema map[string]interface{}) string {
 
 	// Build LLM-optimized output with markdown formatting
 	var output strings.Builder
-	output.WriteString(fmt.Sprintf("### Event: %s\n", eventType))
-	output.WriteString(fmt.Sprintf("Use `event: %s` in D&R rules to match this event type.\n\n", eventType))
-	output.WriteString("**Available fields:**\n")
-	output.WriteString("| Path | Type |\n")
-	output.WriteString("|------|------|\n")
+	output.WriteString(fmt.Sprintf("### Event: `%s`\n", eventType))
+	output.WriteString("| Field Path | Type |\n")
+	output.WriteString("|------------|------|\n")
 
 	for _, elem := range elements {
 		elemStr, ok := elem.(string)
@@ -331,7 +329,7 @@ func interpretSchema(schema map[string]interface{}) string {
 		output.WriteString(fmt.Sprintf("| `%s` | %s |\n", fullPath, typeName))
 	}
 
-	output.WriteString("\n---\n")
+	output.WriteString("\n")
 	return output.String()
 }
 
@@ -360,7 +358,7 @@ func getSchemaInfo(ctx context.Context, org *lc.Organization, schemaType string)
 	}
 
 	schemaInfo.WriteString("## Available Event Types\n\n")
-	schemaInfo.WriteString(fmt.Sprintf("The following %d event types are available:\n\n", len(eventTypes)))
+	schemaInfo.WriteString("**Note:** Detailed field schemas were not available. Use these event type names and common field patterns.\n\n")
 
 	// List event types in a cleaner format
 	for i, et := range eventTypes {
@@ -370,15 +368,7 @@ func getSchemaInfo(ctx context.Context, org *lc.Organization, schemaType string)
 		schemaInfo.WriteString(fmt.Sprintf("`%s` ", et))
 	}
 
-	schemaInfo.WriteString("\n\n## Path Usage Guidelines\n\n")
-	schemaInfo.WriteString("Use paths with the `event/` prefix for event-specific fields:\n")
-	schemaInfo.WriteString("- `event/FILE_PATH` - File path\n")
-	schemaInfo.WriteString("- `event/COMMAND_LINE` - Command line arguments\n")
-	schemaInfo.WriteString("- `event/PARENT/FILE_PATH` - Parent process path\n")
-	schemaInfo.WriteString("- `event/DOMAIN_NAME` - DNS domain name\n")
-	schemaInfo.WriteString("- `event/NETWORK_ACTIVITY/?/DESTINATION/IP_ADDRESS` - Network destination IP\n\n")
-	schemaInfo.WriteString("Use `routing/` prefix for sensor metadata:\n")
-	schemaInfo.WriteString("- `routing/hostname`, `routing/sid`, `routing/tags`\n")
+	schemaInfo.WriteString("\n")
 
 	return schemaInfo.String()
 }
@@ -587,9 +577,8 @@ func getEnhancedSchemaContext(ctx context.Context, org *lc.Organization, events 
 
 	// Build output in original order for consistency
 	var schemaInfo strings.Builder
-	schemaInfo.WriteString("## Available Event Schemas\n\n")
-	schemaInfo.WriteString(fmt.Sprintf("The following %d event types are relevant to your query. ", len(schemas)))
-	schemaInfo.WriteString("Use the exact paths shown below in your rules and queries.\n\n")
+	schemaInfo.WriteString("## Event Schemas\n\n")
+	schemaInfo.WriteString("**IMPORTANT:** Only use field paths listed below. Do not invent or guess field names.\n\n")
 
 	fetchedCount := 0
 	for _, eventName := range events {
@@ -617,16 +606,6 @@ func getEnhancedSchemaContext(ctx context.Context, org *lc.Organization, events 
 	if fetchedCount == 0 {
 		return ""
 	}
-
-	// Add clear guidance for LLM on how to use these paths
-	schemaInfo.WriteString("## Path Usage Guidelines\n\n")
-	schemaInfo.WriteString("**For D&R detection rules:** Use paths exactly as shown above (e.g., `path: event/FILE_PATH`)\n\n")
-	schemaInfo.WriteString("**For LCQL queries:** Use paths in filter expressions (e.g., `event/FILE_PATH contains 'value'`)\n\n")
-	schemaInfo.WriteString("**Common routing fields** available on all events:\n")
-	schemaInfo.WriteString("- `routing/sid` - Sensor ID\n")
-	schemaInfo.WriteString("- `routing/hostname` - Sensor hostname\n")
-	schemaInfo.WriteString("- `routing/tags` - Sensor tags array\n")
-	schemaInfo.WriteString("- `routing/event_type` - The event type name\n")
 
 	return schemaInfo.String()
 }
