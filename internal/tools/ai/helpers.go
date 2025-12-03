@@ -277,7 +277,8 @@ func schemaTypeCodeToString(code string) string {
 	}
 }
 
-// interpretSchema interprets the schema returned from the API and returns a simplified version
+// interpretSchema interprets the schema returned from the API and returns an LLM-optimized format
+// The output format is designed to be easily parsed by LLMs and shows full event paths
 func interpretSchema(schema map[string]interface{}) string {
 	schemaMap, ok := schema["schema"].(map[string]interface{})
 	if !ok {
@@ -295,12 +296,16 @@ func interpretSchema(schema map[string]interface{}) string {
 		eventType = parts[1]
 	}
 
-	output := fmt.Sprintf("Schema for %s:\nFieldsName\tFieldType\n", eventType)
-
 	elements, ok := schemaMap["elements"].([]interface{})
-	if !ok {
-		return output
+	if !ok || len(elements) == 0 {
+		return fmt.Sprintf("### %s\nNo fields available.\n", eventType)
 	}
+
+	// Build LLM-optimized output with markdown formatting
+	var output strings.Builder
+	output.WriteString(fmt.Sprintf("### %s\n", eventType))
+	output.WriteString("| Path | Type |\n")
+	output.WriteString("|------|------|\n")
 
 	for _, elem := range elements {
 		elemStr, ok := elem.(string)
@@ -318,44 +323,59 @@ func interpretSchema(schema map[string]interface{}) string {
 		fieldName := parts[1]
 		typeName := schemaTypeCodeToString(typeCode)
 
-		output += fmt.Sprintf("%s\t%s\n", fieldName, typeName)
+		// Format path with event/ prefix for LLM clarity
+		// This matches the path format used in D&R rules and LCQL queries
+		fullPath := fmt.Sprintf("event/%s", fieldName)
+		output.WriteString(fmt.Sprintf("| `%s` | %s |\n", fullPath, typeName))
 	}
 
-	return output
+	return output.String()
 }
 
 // getSchemaInfo fetches schema information from the SDK
+// This is a fallback when smart schema extraction doesn't return specific schemas
 func getSchemaInfo(ctx context.Context, org *lc.Organization, schemaType string) string {
 	// Get all available schemas
 	schemas, err := org.GetSchemas()
 	if err != nil {
 		slog.Warn("Failed to fetch schemas", "error", err)
-		return "No schema available - extrapolate with best effort."
+		return "No schema available - use common event field patterns like `event/FILE_PATH`, `event/COMMAND_LINE`, etc."
 	}
 
 	if schemas == nil || len(schemas.EventTypes) == 0 {
-		return "No schema available - extrapolate with best effort."
+		return "No schema available - use common event field patterns like `event/FILE_PATH`, `event/COMMAND_LINE`, etc."
 	}
 
-	// Build schema information
-	// Provide a list of available event types rather than full schemas
-	// to avoid overwhelming the prompt with too much data
+	// Build schema information with LLM-optimized formatting
 	var schemaInfo strings.Builder
 
 	eventTypes := []string{}
 	for _, eventType := range schemas.EventTypes {
-		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 && parts[0] == schemaType || schemaType == "" {
-			eventTypes = append(eventTypes, fmt.Sprintf("%q", parts[1]))
+		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 && (parts[0] == schemaType || schemaType == "") {
+			eventTypes = append(eventTypes, parts[1])
 		}
 	}
 
-	schemaInfo.WriteString(fmt.Sprintf("Available event types (%d total):\n", len(eventTypes)))
+	schemaInfo.WriteString("## Available Event Types\n\n")
+	schemaInfo.WriteString(fmt.Sprintf("The following %d event types are available:\n\n", len(eventTypes)))
 
-	schemaInfo.WriteString(strings.Join(eventTypes, ", "))
+	// List event types in a cleaner format
+	for i, et := range eventTypes {
+		if i > 0 && i%10 == 0 {
+			schemaInfo.WriteString("\n")
+		}
+		schemaInfo.WriteString(fmt.Sprintf("`%s` ", et))
+	}
 
-	schemaInfo.WriteString("\n\nUse these event type names in your LCQL queries. ")
-	schemaInfo.WriteString("Common fields across most events include: routing (with sid, oid, tags, etc.), ")
-	schemaInfo.WriteString("event_type, ts (timestamp), and type-specific fields.")
+	schemaInfo.WriteString("\n\n## Path Usage Guidelines\n\n")
+	schemaInfo.WriteString("Use paths with the `event/` prefix for event-specific fields:\n")
+	schemaInfo.WriteString("- `event/FILE_PATH` - File path\n")
+	schemaInfo.WriteString("- `event/COMMAND_LINE` - Command line arguments\n")
+	schemaInfo.WriteString("- `event/PARENT/FILE_PATH` - Parent process path\n")
+	schemaInfo.WriteString("- `event/DOMAIN_NAME` - DNS domain name\n")
+	schemaInfo.WriteString("- `event/NETWORK_ACTIVITY/?/DESTINATION/IP_ADDRESS` - Network destination IP\n\n")
+	schemaInfo.WriteString("Use `routing/` prefix for sensor metadata:\n")
+	schemaInfo.WriteString("- `routing/hostname`, `routing/sid`, `routing/tags`\n")
 
 	return schemaInfo.String()
 }
@@ -564,7 +584,9 @@ func getEnhancedSchemaContext(ctx context.Context, org *lc.Organization, events 
 
 	// Build output in original order for consistency
 	var schemaInfo strings.Builder
-	schemaInfo.WriteString(fmt.Sprintf("Detailed schemas for %d relevant event types:\n\n", len(schemas)))
+	schemaInfo.WriteString("## Available Event Schemas\n\n")
+	schemaInfo.WriteString(fmt.Sprintf("The following %d event types are relevant to your query. ", len(schemas)))
+	schemaInfo.WriteString("Use the exact paths shown below in your rules and queries.\n\n")
 
 	fetchedCount := 0
 	for _, eventName := range events {
@@ -593,9 +615,15 @@ func getEnhancedSchemaContext(ctx context.Context, org *lc.Organization, events 
 		return ""
 	}
 
-	schemaInfo.WriteString("\nUse these event type names and field paths in your queries. ")
-	schemaInfo.WriteString("Common fields across most events include: routing (with sid, oid, tags, etc.), ")
-	schemaInfo.WriteString("event_type, ts (timestamp).")
+	// Add clear guidance for LLM on how to use these paths
+	schemaInfo.WriteString("## Path Usage Guidelines\n\n")
+	schemaInfo.WriteString("**For D&R detection rules:** Use paths exactly as shown above (e.g., `path: event/FILE_PATH`)\n\n")
+	schemaInfo.WriteString("**For LCQL queries:** Use paths in filter expressions (e.g., `event/FILE_PATH contains 'value'`)\n\n")
+	schemaInfo.WriteString("**Common routing fields** available on all events:\n")
+	schemaInfo.WriteString("- `routing/sid` - Sensor ID\n")
+	schemaInfo.WriteString("- `routing/hostname` - Sensor hostname\n")
+	schemaInfo.WriteString("- `routing/tags` - Sensor tags array\n")
+	schemaInfo.WriteString("- `routing/event_type` - The event type name\n")
 
 	return schemaInfo.String()
 }
