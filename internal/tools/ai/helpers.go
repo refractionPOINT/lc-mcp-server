@@ -385,8 +385,12 @@ func detectPlatform(ctx context.Context, org *lc.Organization, userQuery string)
 		return ""
 	}
 
-	// Replace the platforms placeholder
-	prompt := strings.Replace(promptTemplate, "{platforms}", strings.Join(platforms, ", "), -1)
+	// Replace the platforms placeholder with a markdown list
+	var markdownPlatforms strings.Builder
+	for _, platform := range platforms {
+		markdownPlatforms.WriteString(fmt.Sprintf("- %s\n", platform))
+	}
+	prompt := strings.Replace(promptTemplate, "{platforms}", markdownPlatforms.String(), -1)
 
 	// Call Gemini with LiteModel for fast, cheap inference
 	messages := []map[string]interface{}{

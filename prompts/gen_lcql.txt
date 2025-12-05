@@ -26,6 +26,8 @@ Specifies event types to include:
 - **Single event**: `NEW_PROCESS`, `DNS_REQUEST`, `WEL`, etc.
 
 ### 4. Filter Component
+**REQUIRED - The filter component cannot be empty.** Use `/ exists` to match all events without filtering.
+
 The main query logic using field selectors and operators:
 - **Field selectors**: `event/FILE_PATH`, `event/COMMAND_LINE`, `routing/hostname`
 - **Logical operators**: `and`, `or`, `()` for grouping
