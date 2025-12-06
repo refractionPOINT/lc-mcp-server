@@ -400,3 +400,111 @@ func TestTypeValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestUnknownParameterValidation(t *testing.T) {
+	// Register a test tool with specific parameters
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "test_unknown_params",
+		Description: "Test for unknown params",
+		Profile:     "core",
+		RequiresOID: false,
+		Schema: mcp.NewTool("test_unknown_params",
+			mcp.WithDescription("Test tool"),
+			mcp.WithString("valid_param",
+				mcp.Required(),
+				mcp.Description("Valid parameter")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			return tools.SuccessResult(map[string]interface{}{"ok": true}), nil
+		},
+	})
+
+	t.Run("unknown parameter rejected", func(t *testing.T) {
+		args := map[string]interface{}{
+			"tool_name": "test_unknown_params",
+			"parameters": map[string]interface{}{
+				"valid_param":   "value",
+				"invalid_param": "should fail",
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		if !result.IsError {
+			t.Error("Expected error for unknown parameter, but got success")
+			return
+		}
+
+		errorText := ""
+		if len(result.Content) > 0 {
+			if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+				errorText = textContent.Text
+			}
+		}
+		if !strings.Contains(errorText, "unknown parameter") {
+			t.Errorf("Expected 'unknown parameter' error, got %q", errorText)
+		}
+		if !strings.Contains(errorText, "invalid_param") {
+			t.Errorf("Expected error to contain 'invalid_param', got %q", errorText)
+		}
+	})
+
+	t.Run("valid parameters accepted", func(t *testing.T) {
+		args := map[string]interface{}{
+			"tool_name": "test_unknown_params",
+			"parameters": map[string]interface{}{
+				"valid_param": "value",
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		if result.IsError {
+			errorText := ""
+			if len(result.Content) > 0 {
+				if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+					errorText = textContent.Text
+				}
+			}
+			t.Errorf("Expected success, got error: %s", errorText)
+		}
+	})
+
+	t.Run("multiple unknown parameters listed", func(t *testing.T) {
+		args := map[string]interface{}{
+			"tool_name": "test_unknown_params",
+			"parameters": map[string]interface{}{
+				"valid_param": "value",
+				"bad_param1":  "should fail",
+				"bad_param2":  "also should fail",
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		if !result.IsError {
+			t.Error("Expected error for unknown parameters, but got success")
+			return
+		}
+
+		errorText := ""
+		if len(result.Content) > 0 {
+			if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+				errorText = textContent.Text
+			}
+		}
+		// Both unknown parameters should be mentioned
+		if !strings.Contains(errorText, "bad_param1") || !strings.Contains(errorText, "bad_param2") {
+			t.Errorf("Expected error to contain both 'bad_param1' and 'bad_param2', got %q", errorText)
+		}
+	})
+}

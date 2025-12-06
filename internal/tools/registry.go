@@ -559,6 +559,21 @@ func ValidateToolParameters(schema mcp.Tool, params map[string]interface{}) erro
 	return nil
 }
 
+// GetUnknownParameters returns a list of parameter names that are not defined in the schema.
+// Returns nil if all parameters are valid.
+func GetUnknownParameters(schema mcp.Tool, params map[string]interface{}) []string {
+	var unknown []string
+	inputSchema := schema.InputSchema
+
+	for paramName := range params {
+		if _, ok := inputSchema.Properties[paramName]; !ok {
+			unknown = append(unknown, paramName)
+		}
+	}
+
+	return unknown
+}
+
 // validateParameterType checks if a parameter value matches the expected JSON Schema type
 func validateParameterType(name string, value interface{}, expectedType string) error {
 	if value == nil {
