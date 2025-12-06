@@ -3,6 +3,7 @@ package rules
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -110,6 +111,8 @@ func RegisterSetDRGeneralRule() {
 			mcp.WithObject("rule_content",
 				mcp.Required(),
 				mcp.Description("Rule content (detection and response)")),
+			mcp.WithNumber("ttl",
+				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -135,15 +138,32 @@ func RegisterSetDRGeneralRule() {
 				return tools.ErrorResult("rule_content must contain 'detect' field"), nil
 			}
 
-			// Create rule options
-			options := lc.NewDRRuleOptions{
-				Namespace: "general",
-				IsReplace: true, // Update if exists
-				IsEnabled: true,
+			// Build data structure for hive
+			data := lc.Dict{
+				"detect": detect,
+			}
+			if hasRespond {
+				data["respond"] = respond
 			}
 
-			// Add rule
-			err = org.DRRuleAdd(ruleName, detect, respond, options)
+			// Handle TTL parameter
+			var expiry *int64
+			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
+				exp := time.Now().Unix() + int64(ttl)
+				expiry = &exp
+			}
+
+			// Create hive client and add rule
+			hive := lc.NewHiveClient(org)
+			enabled := true
+			_, err = hive.Add(lc.HiveArgs{
+				HiveName:     "dr-general",
+				PartitionKey: org.GetOID(),
+				Key:          ruleName,
+				Data:         data,
+				Enabled:      &enabled,
+				Expiry:       expiry,
+			})
 			if err != nil {
 				return tools.ErrorResultf("failed to add/update D&R rule: %v", err), nil
 			}
@@ -156,6 +176,11 @@ func RegisterSetDRGeneralRule() {
 			// If respond wasn't provided, note it
 			if !hasRespond {
 				result["note"] = "Rule created without response actions"
+			}
+
+			// Note if TTL was set
+			if expiry != nil {
+				result["expiry"] = *expiry
 			}
 
 			return tools.SuccessResult(result), nil
@@ -289,6 +314,8 @@ func RegisterSetDRManagedRule() {
 			mcp.WithObject("rule_content",
 				mcp.Required(),
 				mcp.Description("Rule content (detection and response)")),
+			mcp.WithNumber("ttl",
+				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -314,15 +341,32 @@ func RegisterSetDRManagedRule() {
 				return tools.ErrorResult("rule_content must contain 'detect' field"), nil
 			}
 
-			// Create rule options with managed namespace
-			options := lc.NewDRRuleOptions{
-				Namespace: "managed",
-				IsReplace: true, // Update if exists
-				IsEnabled: true,
+			// Build data structure for hive
+			data := lc.Dict{
+				"detect": detect,
+			}
+			if hasRespond {
+				data["respond"] = respond
 			}
 
-			// Add rule
-			err = org.DRRuleAdd(ruleName, detect, respond, options)
+			// Handle TTL parameter
+			var expiry *int64
+			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
+				exp := time.Now().Unix() + int64(ttl)
+				expiry = &exp
+			}
+
+			// Create hive client and add rule
+			hive := lc.NewHiveClient(org)
+			enabled := true
+			_, err = hive.Add(lc.HiveArgs{
+				HiveName:     "dr-managed",
+				PartitionKey: org.GetOID(),
+				Key:          ruleName,
+				Data:         data,
+				Enabled:      &enabled,
+				Expiry:       expiry,
+			})
 			if err != nil {
 				return tools.ErrorResultf("failed to add/update managed D&R rule: %v", err), nil
 			}
@@ -334,6 +378,11 @@ func RegisterSetDRManagedRule() {
 
 			if !hasRespond {
 				result["note"] = "Rule created without response actions"
+			}
+
+			// Note if TTL was set
+			if expiry != nil {
+				result["expiry"] = *expiry
 			}
 
 			return tools.SuccessResult(result), nil

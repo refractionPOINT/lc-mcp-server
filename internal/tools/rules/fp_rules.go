@@ -3,6 +3,7 @@ package rules
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -109,6 +110,8 @@ func RegisterSetFPRule() {
 			mcp.WithObject("rule_content",
 				mcp.Required(),
 				mcp.Description("FP rule content (detection filter)")),
+			mcp.WithNumber("ttl",
+				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -136,21 +139,45 @@ func RegisterSetFPRule() {
 				return tools.ErrorResult("rule_content must contain 'detect' or 'detection' field"), nil
 			}
 
-			// FP rules use FPRuleOptions
-			options := lc.FPRuleOptions{
-				IsReplace: true, // Update if exists
+			// FP rules store detection logic directly as data (not wrapped)
+			detectionMap, ok := detection.(map[string]interface{})
+			if !ok {
+				return tools.ErrorResult("detection must be an object"), nil
 			}
 
-			// Add FP rule
-			err = org.FPRuleAdd(ruleName, detection, options)
+			// Handle TTL parameter
+			var expiry *int64
+			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
+				exp := time.Now().Unix() + int64(ttl)
+				expiry = &exp
+			}
+
+			// Create hive client and add rule
+			hive := lc.NewHiveClient(org)
+			enabled := true
+			_, err = hive.Add(lc.HiveArgs{
+				HiveName:     "fp",
+				PartitionKey: org.GetOID(),
+				Key:          ruleName,
+				Data:         lc.Dict(detectionMap),
+				Enabled:      &enabled,
+				Expiry:       expiry,
+			})
 			if err != nil {
 				return tools.ErrorResultf("failed to add/update FP rule: %v", err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated FP rule '%s'", ruleName),
-			}), nil
+			}
+
+			// Note if TTL was set
+			if expiry != nil {
+				result["expiry"] = *expiry
+			}
+
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
