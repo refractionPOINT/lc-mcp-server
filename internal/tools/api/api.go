@@ -61,12 +61,20 @@ func handleLCCallTool(ctx context.Context, args map[string]interface{}) (*mcp.Ca
 		return tools.ErrorResultf("tool %q not found", toolName), nil
 	}
 
-	// Get schema from the tool
+	// Get schema from the tool, enhanced with OID if required
 	var schema mcp.Tool
+	var requiresOID bool
 	if reg.Tool != nil {
 		schema = reg.Tool.Schema()
+		requiresOID = reg.Tool.RequiresOID()
 	} else {
 		schema = reg.Schema
+		requiresOID = reg.RequiresOID
+	}
+
+	// If tool requires OID, use enhanced schema that includes the oid parameter
+	if requiresOID {
+		schema = tools.AddOIDToToolSchema(schema)
 	}
 
 	// Check for unknown parameters (strict validation for lc_call_tool)

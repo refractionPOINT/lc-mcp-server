@@ -507,4 +507,51 @@ func TestUnknownParameterValidation(t *testing.T) {
 			t.Errorf("Expected error to contain both 'bad_param1' and 'bad_param2', got %q", errorText)
 		}
 	})
+
+	t.Run("oid parameter accepted for tools requiring OID", func(t *testing.T) {
+		// Register a test tool that requires OID
+		tools.RegisterTool(&tools.ToolRegistration{
+			Name:        "test_oid_tool",
+			Description: "Test tool requiring OID",
+			Profile:     "core",
+			RequiresOID: true,
+			Schema: mcp.NewTool("test_oid_tool",
+				mcp.WithDescription("Test tool"),
+				mcp.WithString("some_param",
+					mcp.Required(),
+					mcp.Description("Some parameter")),
+			),
+			Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+				return tools.SuccessResult(map[string]interface{}{"ok": true}), nil
+			},
+		})
+
+		args := map[string]interface{}{
+			"tool_name": "test_oid_tool",
+			"parameters": map[string]interface{}{
+				"some_param": "value",
+				"oid":        "test-org-id",
+			},
+		}
+
+		result, err := handleLCCallTool(context.Background(), args)
+		if err != nil {
+			t.Fatalf("handler returned unexpected error: %v", err)
+		}
+
+		// The call may fail due to missing auth context for OID switching,
+		// but the important thing is that 'oid' is NOT flagged as unknown parameter
+		if result.IsError {
+			errorText := ""
+			if len(result.Content) > 0 {
+				if textContent, ok := mcp.AsTextContent(result.Content[0]); ok {
+					errorText = textContent.Text
+				}
+			}
+			// Should NOT be an unknown parameter error
+			if strings.Contains(errorText, "unknown parameter") {
+				t.Errorf("oid should be accepted as valid parameter, got: %s", errorText)
+			}
+		}
+	})
 }
