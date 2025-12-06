@@ -146,10 +146,10 @@ func RegisterSetDRGeneralRule() {
 				data["respond"] = respond
 			}
 
-			// Handle TTL parameter
+			// Handle TTL parameter (Hive API expects milliseconds)
 			var expiry *int64
 			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
-				exp := time.Now().Unix() + int64(ttl)
+				exp := time.Now().UnixMilli() + int64(ttl)*1000
 				expiry = &exp
 			}
 
@@ -349,10 +349,10 @@ func RegisterSetDRManagedRule() {
 				data["respond"] = respond
 			}
 
-			// Handle TTL parameter
+			// Handle TTL parameter (Hive API expects milliseconds)
 			var expiry *int64
 			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
-				exp := time.Now().Unix() + int64(ttl)
+				exp := time.Now().UnixMilli() + int64(ttl)*1000
 				expiry = &exp
 			}
 
