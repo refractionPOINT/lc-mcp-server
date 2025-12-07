@@ -212,6 +212,16 @@ platform_admin:
   - create_payload
   - get_payload
   - delete_payload
+  # Org Notes
+  - list_org_notes
+  - get_org_note
+  - set_org_note
+  - delete_org_note
+  # SOPs (Standard Operating Procedures)
+  - list_sops
+  - get_sop
+  - set_sop
+  - delete_sop
 
 ai_powered:
   # AI-powered generation tools (to be implemented)
