@@ -187,24 +187,42 @@ The `NETWORK_CONNECTIONS` event type contains an `event/NETWORK_ACTIVITY` array 
 
 ## Sensor Selector Expressions
 
-Available fields for sensor selection:
-- **`sid`**: Sensor ID
-- **`oid`**: Organization ID
-- **`iid`**: Installation Key ID
-- **`plat`**: Platform name (windows, linux, macos, github, etc.)
-- **`ext_plat`**: Extended platform name
-- **`arch`**: Architecture name
-- **`enroll`**: Enrollment timestamp
-- **`hostname`**: Hostname
-- **`mac_addr`**: MAC address
-- **`alive`**: Last connection timestamp
-- **`ext_ip`**: External IP
-- **`int_ip`**: Internal IP
-- **`isolated`**: Network isolation status (boolean)
-- **`should_isolate`**: Marked for isolation (boolean)
-- **`kernel`**: Kernel visibility enhanced (boolean)
-- **`did`**: Device ID
-- **`tags`**: List of tags
+Sensor selectors use [bexpr](https://github.com/hashicorp/go-bexpr) syntax to filter sensors. Use `*` to match all sensors.
+
+### Available Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sid` | string | Sensor ID (UUID) |
+| `oid` | string | Organization ID (UUID) |
+| `iid` | string | Installation Key ID (UUID) |
+| `plat` | string | Platform name (see values below) |
+| `ext_plat` | string | Extended platform (for multi-platform adapters like Carbon Black) |
+| `arch` | string | Architecture (see values below) |
+| `hostname` | string | Sensor hostname |
+| `ext_ip` | string | External IP address |
+| `int_ip` | string | Internal IP address |
+| `mac_addr` | string | MAC address |
+| `did` | string | Device ID |
+| `enroll` | int | Enrollment timestamp |
+| `alive` | int | Last seen timestamp |
+| `is_del` | bool | Sensor is deleted |
+| `isolated` | bool | Sensor is network isolated |
+| `should_isolate` | bool | Sensor should be isolated |
+| `kernel` | bool | Kernel mode enabled |
+| `sealed` | bool | Sensor is sealed |
+| `should_seal` | bool | Sensor should be sealed |
+| `tags` | string[] | Sensor tags (use `in` operator) |
+
+### Platform Values (`plat`, `ext_plat`)
+
+**EDR Platforms:** `windows`, `linux`, `macos`, `ios`, `android`, `chrome`, `vpn`
+
+**Adapter/USP Platforms:** `text`, `json`, `gcp`, `aws`, `carbon_black`, `1password`, `office365`, `sophos`, `crowdstrike`, `msdefender`, `sentinel_one`, `okta`, `duo`, `github`, `slack`, `azure_ad`, `azure_monitor`, `entraid`, `zeek`, `cef`, `wel`, `xml`, `guard_duty`, `k8s_pods`, `wiz`, `proofpoint`, `box`, `cylance`, `fortigate`, `netscaler`, `paloalto_fw`, `iis`, `trend_micro`, `trend_worryfree`, `bitwarden`, `mimecast`, `hubspot`, `zendesk`, `pandadoc`, `falconcloud`, `sublime`, `itglue`, `canary_token`, `lc_event`, `email`, `mac_unified_logging`, `azure_event_hub_namespace`, `azure_key_vault`, `azure_kubernetes_service`, `azure_network_security_group`, `azure_sql_audit`
+
+### Architecture Values (`arch`)
+
+`x86`, `x64`, `arm`, `arm64`, `alpine64`, `chromium`, `wireguard`, `arml`, `usp_adapter`
 
 ### Sensor Selector Operators
 - **`==`**: equals
@@ -218,7 +236,9 @@ Available fields for sensor selection:
 - **All sensors with test tag**: `test in tags`
 - **Windows hosts in 10.3.x.x subnet**: `plat == windows and int_ip matches \`^10\.3\..*\``
 - **1Password sensors** (quote with backtick for numbers): `plat == \`1password\``
-- **Linux with isolation or evil tag**: `plat == linux or (isolated == true or evil in tags)`
+- **Linux with isolation or evil tag**: `plat == linux and (isolated == true or evil in tags)`
+- **64-bit Windows only**: `plat == windows and arch == x64`
+- **Carbon Black/Crowdstrike reporting Windows endpoints**: `ext_plat == windows`
 
 ## Event Types Reference
 
