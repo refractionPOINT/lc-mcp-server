@@ -113,6 +113,10 @@ var ProfileDefinitions = map[string][]string{
 		"find_strings",
 		"dir_list",
 		"dir_find_hash",
+		// Velociraptor DFIR
+		"list_velociraptor_artifacts",
+		"show_velociraptor_artifact",
+		"collect_velociraptor_artifact",
 		// Artifacts
 		"list_artifacts",
 		"get_artifact",
