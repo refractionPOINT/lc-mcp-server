@@ -140,6 +140,8 @@ var ProfileDefinitions = map[string][]string{
 		"get_cloud_sensor",
 		"set_cloud_sensor",
 		"delete_cloud_sensor",
+		// Organization URLs
+		"get_org_urls",
 		// Platform info
 		"get_platform_names",
 		"list_with_platform",
