@@ -51,6 +51,7 @@ var ProfileDefinitions = map[string][]string{
 		"is_online",
 		"search_hosts",
 		"list_sensor_tags",
+		"who_am_i",
 	},
 	"historical_data": {
 		"run_lcql_query",
