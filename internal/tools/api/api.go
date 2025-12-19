@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -47,6 +48,13 @@ func handleLCCallTool(ctx context.Context, args map[string]interface{}) (*mcp.Ca
 	// Prevent recursive calls
 	if toolName == "lc_call_tool" {
 		return tools.ErrorResult("cannot call lc_call_tool recursively"), nil
+	}
+
+	// Check meta-tool filter (X-LC-ALLOW-META-TOOLS / X-LC-DENY-META-TOOLS headers)
+	if filter := auth.GetMetaToolFilter(ctx); filter != nil {
+		if !auth.IsToolAllowed(filter, toolName) {
+			return tools.ErrorResultf("tool %q is not allowed by meta-tool filter", toolName), nil
+		}
 	}
 
 	// Extract parameters

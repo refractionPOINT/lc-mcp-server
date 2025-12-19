@@ -15,9 +15,10 @@ import (
 type contextKey string
 
 const (
-	authContextKey contextKey = "lc_auth_context"
-	sdkCacheKey    contextKey = "lc_sdk_cache"
-	requestIDKey   contextKey = "lc_request_id"
+	authContextKey      contextKey = "lc_auth_context"
+	sdkCacheKey         contextKey = "lc_sdk_cache"
+	requestIDKey        contextKey = "lc_request_id"
+	metaToolFilterKey   contextKey = "lc_meta_tool_filter"
 )
 
 // AuthMode represents the authentication mode
@@ -253,4 +254,50 @@ func GetRequestID(ctx context.Context) string {
 		return requestID
 	}
 	return ""
+}
+
+// MetaToolFilter defines allow/deny lists for the lc_call_tool meta-tool
+// When AllowList is non-empty, only those tools can be called (ALLOW takes precedence)
+// When AllowList is empty and DenyList is non-empty, those tools cannot be called
+type MetaToolFilter struct {
+	AllowList []string // If non-empty, only these tools are allowed
+	DenyList  []string // If AllowList is empty, these tools are denied
+}
+
+// WithMetaToolFilter adds a MetaToolFilter to the context
+func WithMetaToolFilter(ctx context.Context, filter *MetaToolFilter) context.Context {
+	return context.WithValue(ctx, metaToolFilterKey, filter)
+}
+
+// GetMetaToolFilter retrieves the MetaToolFilter from the context
+// Returns nil if no filter is set
+func GetMetaToolFilter(ctx context.Context) *MetaToolFilter {
+	filter, _ := ctx.Value(metaToolFilterKey).(*MetaToolFilter)
+	return filter
+}
+
+// IsToolAllowed checks if a tool is allowed by the filter
+// Returns true if no filter is set or if the tool passes the filter
+func IsToolAllowed(filter *MetaToolFilter, toolName string) bool {
+	if filter == nil {
+		return true // No filter, allow all
+	}
+	// ALLOW takes precedence - if AllowList is non-empty, tool must be in it
+	if len(filter.AllowList) > 0 {
+		for _, allowed := range filter.AllowList {
+			if allowed == toolName {
+				return true
+			}
+		}
+		return false
+	}
+	// If no AllowList, check DenyList - tool must NOT be in it
+	if len(filter.DenyList) > 0 {
+		for _, denied := range filter.DenyList {
+			if denied == toolName {
+				return false
+			}
+		}
+	}
+	return true // Both empty or tool not in DenyList
 }

@@ -114,6 +114,8 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	authHeader := r.Header.Get("Authorization")
 	lcUID := r.Header.Get("X-LC-UID")
 	lcAPIKey := r.Header.Get("X-LC-API-KEY")
+	lcAllowMetaTools := r.Header.Get("X-LC-ALLOW-META-TOOLS")
+	lcDenyMetaTools := r.Header.Get("X-LC-DENY-META-TOOLS")
 
 	if authHeader != "" {
 		// Bearer token provided - use OAuth/JWT passthrough
@@ -175,6 +177,16 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	ctx = auth.WithSDKCache(ctx, s.sdkCache)
 	if s.gcsManager != nil {
 		ctx = gcs.WithGCSManager(ctx, s.gcsManager)
+	}
+
+	// Add meta-tool filter to context if headers are provided
+	allowList := parseToolList(lcAllowMetaTools)
+	denyList := parseToolList(lcDenyMetaTools)
+	if allowList != nil || denyList != nil {
+		ctx = auth.WithMetaToolFilter(ctx, &auth.MetaToolFilter{
+			AllowList: allowList,
+			DenyList:  denyList,
+		})
 	}
 
 	// Handle OID switching if tool requires it and OID is provided
@@ -323,4 +335,24 @@ func (s *Server) writeJSONRPCSuccess(w http.ResponseWriter, id interface{}, resu
 func (s *Server) writeJSONRPCError(w http.ResponseWriter, id interface{}, code int, message string, data string) {
 	rw := NewResponseWriter(w, s.logger)
 	rw.WriteJSONRPCError(id, code, message, data)
+}
+
+// parseToolList parses a comma-separated list of tool names from a header value
+// Returns nil if the header is empty or only contains whitespace
+func parseToolList(header string) []string {
+	if header == "" {
+		return nil
+	}
+	parts := strings.Split(header, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
