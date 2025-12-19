@@ -105,12 +105,16 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	// Determine authentication method:
 	// 1. If Bearer token provided → use OAuth/JWT passthrough
-	// 2. If no Bearer token + server has credentials → use server credentials
-	// 3. If no Bearer token + no server credentials → Unauthorized
+	// 2. If X-LC-UID + X-LC-API-KEY headers provided → use header credentials
+	// 3. If server has env var credentials → use server credentials
+	// 4. None of above → Unauthorized
 	var authCtx *auth.AuthContext
 	var isJWTPassthrough bool
 
 	authHeader := r.Header.Get("Authorization")
+	lcUID := r.Header.Get("X-LC-UID")
+	lcAPIKey := r.Header.Get("X-LC-API-KEY")
+
 	if authHeader != "" {
 		// Bearer token provided - use OAuth/JWT passthrough
 		parts := strings.SplitN(authHeader, " ", 2)
@@ -144,14 +148,23 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		// JWT passthrough mode detection: no Firebase token means direct JWT
 		isJWTPassthrough = firebaseIDToken == ""
 		s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
+	} else if lcUID != "" && lcAPIKey != "" {
+		// Header-based credentials (X-LC-UID + X-LC-API-KEY)
+		authCtx = &auth.AuthContext{
+			Mode:   auth.AuthModeUIDKey,
+			UID:    lcUID,
+			APIKey: lcAPIKey,
+		}
+		isJWTPassthrough = false
+		s.logger.Debug("Authenticated via header credentials", "request_id", requestID, "uid", lcUID)
 	} else if s.serverAuthCtx != nil {
 		// No Bearer token - use server-wide credentials
 		authCtx = s.serverAuthCtx
 		isJWTPassthrough = false // Server credentials are not JWT passthrough
 		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", authCtx.UID, "mode", authCtx.Mode.String())
 	} else {
-		// No Bearer token and no server credentials
-		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Missing Authorization header")
+		// No authentication provided
+		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Missing authentication: provide Authorization header or X-LC-UID + X-LC-API-KEY headers")
 		return
 	}
 
