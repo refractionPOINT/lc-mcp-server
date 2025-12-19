@@ -70,6 +70,24 @@ func (a *AuthContext) Clone() *AuthContext {
 	}
 }
 
+// HasCredentials returns true if the AuthContext has valid credentials configured
+// This is used to determine if server-wide credentials are available
+func (a *AuthContext) HasCredentials() bool {
+	if a == nil {
+		return false
+	}
+	switch a.Mode {
+	case AuthModeNormal:
+		return a.OID != "" && a.APIKey != ""
+	case AuthModeUIDKey:
+		return a.UID != "" && a.APIKey != ""
+	case AuthModeUIDOAuth:
+		return a.UID != "" && (a.JWTToken != "" || a.Environment != "")
+	default:
+		return false
+	}
+}
+
 // CacheKey generates a unique cache key based on credentials
 // CRITICAL: This prevents credential cross-contamination in the SDK cache
 func (a *AuthContext) CacheKey() string {

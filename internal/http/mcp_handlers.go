@@ -103,45 +103,57 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		arguments = make(map[string]interface{})
 	}
 
-	// Extract authentication from Bearer token
+	// Determine authentication method:
+	// 1. If Bearer token provided → use OAuth/JWT passthrough
+	// 2. If no Bearer token + server has credentials → use server credentials
+	// 3. If no Bearer token + no server credentials → Unauthorized
+	var authCtx *auth.AuthContext
+	var isJWTPassthrough bool
+
 	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
+	if authHeader != "" {
+		// Bearer token provided - use OAuth/JWT passthrough
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Invalid Authorization header format")
+			return
+		}
+
+		bearerToken := parts[1]
+
+		// Verify and extract UID, LimaCharlie JWT, and Firebase token from MCP access token
+		s.logger.Info("Extracting UID from token", "request_id", requestID)
+		tokenStartTime := time.Now()
+		uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
+		tokenDuration := time.Since(tokenStartTime)
+		if err != nil {
+			s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
+			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
+			return
+		}
+		s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
+
+		// Create auth context from Bearer token
+		authCtx = &auth.AuthContext{
+			Mode:            auth.AuthModeUIDOAuth,
+			UID:             uid,
+			JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
+			FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
+		}
+
+		// JWT passthrough mode detection: no Firebase token means direct JWT
+		isJWTPassthrough = firebaseIDToken == ""
+		s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
+	} else if s.serverAuthCtx != nil {
+		// No Bearer token - use server-wide credentials
+		authCtx = s.serverAuthCtx
+		isJWTPassthrough = false // Server credentials are not JWT passthrough
+		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", authCtx.UID, "mode", authCtx.Mode.String())
+	} else {
+		// No Bearer token and no server credentials
 		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Missing Authorization header")
 		return
 	}
-
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Invalid Authorization header format")
-		return
-	}
-
-	bearerToken := parts[1]
-
-	// Verify and extract UID, LimaCharlie JWT, and Firebase token from MCP access token
-	// The JWT has been exchanged from Firebase ID token to LimaCharlie JWT
-	s.logger.Info("Extracting UID from token", "request_id", requestID)
-	tokenStartTime := time.Now()
-	uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
-	tokenDuration := time.Since(tokenStartTime)
-	if err != nil {
-		s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
-		s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
-		return
-	}
-	s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
-
-	// Create initial auth context with LimaCharlie JWT (exchanged from Firebase token)
-	// Store Firebase ID token for JWT regeneration when switching orgs
-	authCtx := &auth.AuthContext{
-		Mode:            auth.AuthModeUIDOAuth,
-		UID:             uid,
-		JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
-		FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
-	}
-
-	// JWT passthrough mode detection: no Firebase token means direct JWT
-	isJWTPassthrough := firebaseIDToken == ""
 
 	// Create request context with auth
 	ctx := r.Context()
@@ -206,6 +218,16 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 		return
 	}
 
+	// Determine if we need to add OID parameter to tools
+	// OID parameter is needed for multi-org modes (UID modes) but not for single-org mode (Normal)
+	// If server has credentials in Normal mode, OID is fixed and not needed
+	// If server has credentials in UID mode or no server credentials (OAuth), OID is needed
+	needsOIDParam := true
+	if s.serverAuthCtx != nil && s.serverAuthCtx.Mode == auth.AuthModeNormal {
+		// Server has fixed OID credentials, no need for OID parameter
+		needsOIDParam = false
+	}
+
 	toolList := make([]map[string]interface{}, 0, len(toolNames))
 	for _, name := range toolNames {
 		tool, ok := tools.GetTool(name)
@@ -215,9 +237,8 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 
 		schema := tool.Schema
 
-		// HTTP server is always in UID OAuth mode, so dynamically add OID parameter
-		// if the tool requires it
-		if tool.RequiresOID {
+		// Add OID parameter for tools that require it when in multi-org mode
+		if tool.RequiresOID && needsOIDParam {
 			schema = tools.AddOIDToToolSchema(schema)
 		}
 
@@ -255,6 +276,11 @@ func (s *Server) extractUIDFromToken(token string) (string, string, string, erro
 	// Fall back to MCP OAuth access token validation (for external clients)
 	// SECURITY: Validate MCP OAuth access token (NOT Firebase token directly)
 	// The Bearer token here is the MCP-issued access token from /token endpoint
+
+	// Check if OAuth is configured
+	if s.tokenManager == nil {
+		return "", "", "", fmt.Errorf("invalid token: OAuth not configured and token is not a valid LimaCharlie JWT")
+	}
 
 	// Validate the MCP access token using token manager
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
