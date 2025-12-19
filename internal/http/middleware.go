@@ -177,7 +177,7 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", allowedOrigins[0])
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID, X-MCP-Tools")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID, X-MCP-Tools, X-LC-UID, X-LC-API-KEY")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
 		}
@@ -216,6 +216,13 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 // rateLimitMiddleware implements rate limiting for endpoints
 func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip rate limiting if rateLimiter is not configured
+		// (e.g., server-credentials-only mode without Redis)
+		if s.rateLimiter == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Determine endpoint type for rate limiting
 		endpointType := getEndpointType(r.URL.Path)
 
