@@ -258,13 +258,13 @@ var ProfileDefinitions = map[string][]string{
 		// Meta-tool for calling other tools
 		"lc_call_tool",
 	},
-	"timeline_management": {
-		// Timeline tools for incident response investigations
-		"expand_timeline",
-		"list_timelines",
-		"get_timeline",
-		"set_timeline",
-		"delete_timeline",
+	"investigation_management": {
+		// Investigation tools for incident response investigations
+		"expand_investigation",
+		"list_investigations",
+		"get_investigation",
+		"set_investigation",
+		"delete_investigation",
 	},
 }
 
