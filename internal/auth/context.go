@@ -15,10 +15,10 @@ import (
 type contextKey string
 
 const (
-	authContextKey      contextKey = "lc_auth_context"
-	sdkCacheKey         contextKey = "lc_sdk_cache"
-	requestIDKey        contextKey = "lc_request_id"
-	metaToolFilterKey   contextKey = "lc_meta_tool_filter"
+	authContextKey    contextKey = "lc_auth_context"
+	sdkCacheKey       contextKey = "lc_sdk_cache"
+	requestIDKey      contextKey = "lc_request_id"
+	metaToolFilterKey contextKey = "lc_meta_tool_filter"
 )
 
 // AuthMode represents the authentication mode
