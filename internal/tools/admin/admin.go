@@ -3,9 +3,11 @@ package admin
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -17,6 +19,7 @@ func init() {
 	RegisterGetOrgInvoiceURL()
 	RegisterCreateOrg()
 	RegisterListUserOrgs()
+	RegisterGetOrgOIDByName()
 	RegisterGetOrgErrors()
 	RegisterDismissOrgError()
 	RegisterListAPIKeys()
@@ -620,6 +623,133 @@ func RegisterUpgradeSensors() {
 				"success": true,
 				"message": message,
 			}), nil
+		},
+	})
+}
+
+// RegisterGetOrgOIDByName registers the get_org_oid_by_name tool
+// This tool efficiently looks up an organization OID by name using caching
+func RegisterGetOrgOIDByName() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_org_oid_by_name",
+		Description: "Efficiently look up an organization OID by its name",
+		Profile:     "platform_admin",
+		RequiresOID: false, // User-level operation
+		Schema: mcp.NewTool("get_org_oid_by_name",
+			mcp.WithDescription("Efficiently look up an organization OID by its name. Uses caching for fast repeated lookups."),
+			mcp.WithString("name",
+				mcp.Required(),
+				mcp.Description("The organization name to look up")),
+			mcp.WithBoolean("exact_match",
+				mcp.Description("If true (default), match exact name; if false, case-insensitive match")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			name, ok := args["name"].(string)
+			if !ok || name == "" {
+				return tools.ErrorResult("name parameter is required"), nil
+			}
+
+			exactMatch := true
+			if em, ok := args["exact_match"].(bool); ok {
+				exactMatch = em
+			}
+
+			// Get auth context for cache key
+			authCtx, err := auth.FromContext(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get auth context: %v", err), nil
+			}
+			cacheKey := authCtx.CacheKey()
+
+			// Get global cache
+			cache := GetGlobalOrgCache()
+
+			// Check if we have a complete cache entry
+			if cache.IsComplete(cacheKey) {
+				oid, info, found := cache.LookupByName(cacheKey, name, exactMatch)
+				if found {
+					result := map[string]interface{}{
+						"oid":   oid,
+						"found": true,
+					}
+					if info != nil {
+						result["name"] = info.Name
+					}
+					return tools.SuccessResult(result), nil
+				}
+				// Cache is complete but org not found
+				return tools.SuccessResult(map[string]interface{}{
+					"found": false,
+					"error": "organization not found",
+				}), nil
+			}
+
+			// Check cache for a quick hit (even if incomplete)
+			if oid, info, found := cache.LookupByName(cacheKey, name, exactMatch); found {
+				result := map[string]interface{}{
+					"oid":   oid,
+					"found": true,
+				}
+				if info != nil {
+					result["name"] = info.Name
+				}
+				return tools.SuccessResult(result), nil
+			}
+
+			// Cache miss - need to query the API
+			org, err := tools.GetOrganizationClient(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization context: %v", err), nil
+			}
+
+			// Use pagination with early termination
+			pageSize := 100
+			offset := 0
+
+			for {
+				offsetPtr := &offset
+				limitPtr := &pageSize
+
+				orgs, err := org.ListUserOrgs(offsetPtr, limitPtr, nil, nil, nil, true)
+				if err != nil {
+					return tools.ErrorResultf("failed to list user organizations: %v", err), nil
+				}
+
+				// Check if this is the last page
+				isLastPage := len(orgs) < pageSize
+
+				// Add orgs to cache
+				cache.AddOrgs(cacheKey, orgs, isLastPage)
+
+				// Search for matching org
+				for _, o := range orgs {
+					var match bool
+					if exactMatch {
+						match = o.Name == name
+					} else {
+						match = strings.EqualFold(o.Name, name)
+					}
+
+					if match {
+						return tools.SuccessResult(map[string]interface{}{
+							"oid":   o.OID,
+							"name":  o.Name,
+							"found": true,
+						}), nil
+					}
+				}
+
+				// If this was the last page, org not found
+				if isLastPage {
+					return tools.SuccessResult(map[string]interface{}{
+						"found": false,
+						"error": "organization not found",
+					}), nil
+				}
+
+				// Move to next page
+				offset += pageSize
+			}
 		},
 	})
 }

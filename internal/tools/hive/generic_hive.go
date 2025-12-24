@@ -3,6 +3,7 @@ package hive
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -156,6 +157,8 @@ func RegisterSetRule() {
 			mcp.WithObject("rule_content",
 				mcp.Required(),
 				mcp.Description("Rule content (detection and response for D&R rules)")),
+			mcp.WithNumber("ttl",
+				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
@@ -178,6 +181,13 @@ func RegisterSetRule() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
+			// Handle TTL parameter
+			var expiry *int64
+			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
+				exp := time.Now().Unix() + int64(ttl)
+				expiry = &exp
+			}
+
 			// Create hive client
 			hive := lc.NewHiveClient(org)
 
@@ -189,15 +199,23 @@ func RegisterSetRule() {
 				Key:          ruleName,
 				Data:         lc.Dict(ruleContent),
 				Enabled:      &enabled,
+				Expiry:       expiry,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set rule '%s' in hive '%s': %v", ruleName, hiveName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated rule '%s' in hive '%s'", ruleName, hiveName),
-			}), nil
+			}
+
+			// Note if TTL was set
+			if expiry != nil {
+				result["expiry"] = *expiry
+			}
+
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
