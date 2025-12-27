@@ -240,6 +240,48 @@ Sensor selectors use [bexpr](https://github.com/hashicorp/go-bexpr) syntax to fi
 - **64-bit Windows only**: `plat == windows and arch == x64`
 - **Carbon Black/Crowdstrike reporting Windows endpoints**: `ext_plat == windows`
 
+## Routing Fields Reference
+
+All events in LimaCharlie include a `routing` object with metadata that is consistent across all event types. These fields are useful for correlation, filtering, and investigation.
+
+### Core Identification Fields
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/oid` | string (UUID) | Organization ID |
+| `routing/sid` | string (UUID) | Sensor ID - uniquely identifies the endpoint |
+| `routing/event_type` | string | Type of event (e.g., NEW_PROCESS, DNS_REQUEST) |
+| `routing/event_time` | integer | Unix timestamp in milliseconds |
+| `routing/event_id` | string (UUID) | Unique identifier for this specific event |
+| `routing/hostname` | string | Hostname of the sensor |
+| `routing/iid` | string (UUID) | Installation Key ID used to install the sensor |
+| `routing/did` | string (UUID) | Device ID - hardware identifier |
+| `routing/investigation_id` | string | Context identifier for correlating command responses (RECEIPT, _REP events) with original commands |
+
+### Network Information
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/ext_ip` | string | External IP address of the sensor |
+| `routing/int_ip` | string | Internal IP address of the sensor |
+
+### Platform Information
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/plat` | integer | Platform identifier (Windows, Linux, macOS, etc.) |
+| `routing/arch` | integer | Architecture (x86, x64, ARM, etc.) |
+| `routing/moduleid` | integer | Sensor module that generated the event |
+
+### Process Correlation Fields (Atom Hashes)
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/this` | string (hash) | Atom ID of current event/process - used for process tracking across events |
+| `routing/parent` | string (hash) | Atom ID of parent process - used for process tree reconstruction |
+| `routing/target` | string (hash) | Atom ID of target object (for events like SENSITIVE_PROCESS_ACCESS) |
+
+### Other Routing Fields
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/tags` | array[string] | Sensor tags applied at event time |
+
 ## Event Types Reference
 
 ### Core EDR Events
