@@ -62,11 +62,13 @@ func RegisterGenerateLCQLQuery() {
 
 			// Loop up to retry count times to generate and validate
 			maxIterations := GetRetryCount()
+			// Build user message with timestamp context
+			userMessage := fmt.Sprintf("%s\n\n%s", getCurrentTimestampContext(), query)
 			messages := []map[string]interface{}{
 				{
 					"role": "user",
 					"parts": []interface{}{
-						map[string]interface{}{"text": query},
+						map[string]interface{}{"text": userMessage},
 					},
 				},
 			}
@@ -172,11 +174,13 @@ func RegisterGenerateDRRuleDetection() {
 
 			// Loop up to retry count times
 			maxIterations := GetRetryCount()
+			// Build user message with timestamp context
+			userMessage := fmt.Sprintf("%s\n\n%s", getCurrentTimestampContext(), query)
 			messages := []map[string]interface{}{
 				{
 					"role": "user",
 					"parts": []interface{}{
-						map[string]interface{}{"text": query},
+						map[string]interface{}{"text": userMessage},
 					},
 				},
 			}
@@ -301,11 +305,13 @@ func RegisterGenerateDRRuleRespond() {
 
 			// Loop up to retry count times
 			maxIterations := GetRetryCount()
+			// Build user message with timestamp context
+			userMessage := fmt.Sprintf("%s\n\n%s", getCurrentTimestampContext(), query)
 			messages := []map[string]interface{}{
 				{
 					"role": "user",
 					"parts": []interface{}{
-						map[string]interface{}{"text": query},
+						map[string]interface{}{"text": userMessage},
 					},
 				},
 			}

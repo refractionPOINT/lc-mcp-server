@@ -609,6 +609,16 @@ func convertElementsToInterface(elements []lc.SchemaElement) []interface{} {
 	return result
 }
 
+// getCurrentTimestampContext returns formatted timestamp context to inject into AI prompts
+// Includes Unix timestamp in seconds, milliseconds, and ISO 8601 format
+func getCurrentTimestampContext() string {
+	now := time.Now().UTC()
+	return fmt.Sprintf("Current timestamp: %d seconds, %d milliseconds, %s ISO",
+		now.Unix(),
+		now.UnixMilli(),
+		now.Format(time.RFC3339))
+}
+
 // getSmartSchemaContext performs multi-stage context extraction for AI generation
 // This is the main function that orchestrates platform detection, event selection, and schema fetching
 func getSmartSchemaContext(ctx context.Context, org *lc.Organization, userQuery string, schemaType string) string {
