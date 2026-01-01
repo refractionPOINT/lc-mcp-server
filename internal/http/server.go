@@ -44,77 +44,98 @@ type Server struct {
 	gcsManager       *gcs.Manager
 	profile          string
 	rateLimiter      *ratelimit.Limiter
+	serverAuthCtx    *auth.AuthContext // Server-wide credentials (nil = OAuth only)
 }
 
 // New creates a new HTTP server instance using standard library
 func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsManager *gcs.Manager, profile string) (*Server, error) {
-	// Initialize Redis client
-	redisClient, err := redis.New(&redis.Config{
-		URL: cfg.OAuth.RedisURL,
-	}, logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Redis client: %w", err)
-	}
-
-	// Test Redis connection
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := redisClient.Ping(ctx); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
-	}
-
-	// Initialize token encryption
-	encryption, err := crypto.NewTokenEncryption(logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize encryption: %w", err)
-	}
-
-	// Initialize OAuth state manager
-	stateManager := state.NewManager(redisClient, encryption, logger)
-
-	// Initialize Firebase client
-	firebaseClient, err := firebase.NewClient(logger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Firebase client: %w", err)
-	}
-
-	// Initialize token manager
-	tokenManager := token.NewManager(stateManager, firebaseClient, logger)
-
-	// Initialize metadata provider
-	metadataProvider := metadata.NewProvider(logger)
-
-	// Initialize rate limiter
-	rateLimiter := ratelimit.NewLimiter(redisClient, logger)
-
-	// Initialize OAuth handlers with redirect URI whitelist
-	oauthHandlers, err := endpoints.NewHandlers(
-		stateManager,
-		tokenManager,
-		firebaseClient,
-		metadataProvider,
-		logger,
-		cfg.OAuth.AllowedRedirectURIs,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OAuth handlers: %w", err)
-	}
-
 	mux := http.NewServeMux()
 
 	s := &Server{
-		config:           cfg,
-		logger:           logger,
-		mux:              mux,
-		redisClient:      redisClient,
-		stateManager:     stateManager,
-		tokenManager:     tokenManager,
-		metadataProvider: metadataProvider,
-		oauthHandlers:    oauthHandlers,
-		sdkCache:         sdkCache,
-		gcsManager:       gcsManager,
-		profile:          profile,
-		rateLimiter:      rateLimiter,
+		config:     cfg,
+		logger:     logger,
+		mux:        mux,
+		sdkCache:   sdkCache,
+		gcsManager: gcsManager,
+		profile:    profile,
+	}
+
+	// Store server-wide credentials if configured
+	if cfg.Auth != nil && cfg.Auth.HasCredentials() {
+		s.serverAuthCtx = cfg.Auth
+		logger.Info("HTTP server has server-wide credentials configured",
+			"auth_mode", cfg.Auth.Mode.String(),
+			"uid", cfg.Auth.UID,
+			"oid", cfg.Auth.OID)
+	}
+
+	// Initialize OAuth components if encryption key is available
+	// This allows both auth methods (server credentials AND OAuth) to coexist
+	if cfg.OAuth.EncryptionKey != "" {
+		// Initialize Redis client
+		redisClient, err := redis.New(&redis.Config{
+			URL: cfg.OAuth.RedisURL,
+		}, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Redis client: %w", err)
+		}
+		s.redisClient = redisClient
+
+		// Test Redis connection
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := redisClient.Ping(ctx); err != nil {
+			return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+		}
+
+		// Initialize token encryption
+		encryption, err := crypto.NewTokenEncryption(logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize encryption: %w", err)
+		}
+
+		// Initialize OAuth state manager
+		stateManager := state.NewManager(redisClient, encryption, logger)
+		s.stateManager = stateManager
+
+		// Initialize Firebase client
+		firebaseClient, err := firebase.NewClient(logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Firebase client: %w", err)
+		}
+
+		// Initialize token manager
+		tokenManager := token.NewManager(stateManager, firebaseClient, logger)
+		s.tokenManager = tokenManager
+
+		// Initialize metadata provider
+		metadataProvider := metadata.NewProvider(logger)
+		s.metadataProvider = metadataProvider
+
+		// Initialize rate limiter
+		rateLimiter := ratelimit.NewLimiter(redisClient, logger)
+		s.rateLimiter = rateLimiter
+
+		// Initialize OAuth handlers with redirect URI whitelist
+		oauthHandlers, err := endpoints.NewHandlers(
+			stateManager,
+			tokenManager,
+			firebaseClient,
+			metadataProvider,
+			logger,
+			cfg.OAuth.AllowedRedirectURIs,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create OAuth handlers: %w", err)
+		}
+		s.oauthHandlers = oauthHandlers
+
+		logger.Info("OAuth authentication initialized")
+	} else if s.serverAuthCtx == nil {
+		// No OAuth and no server credentials - this shouldn't happen due to config validation
+		return nil, fmt.Errorf("no authentication method configured: need either server credentials or OAuth")
+	} else {
+		logger.Info("OAuth authentication disabled (no REDIS_ENCRYPTION_KEY), using server credentials only")
 	}
 
 	// Setup routes

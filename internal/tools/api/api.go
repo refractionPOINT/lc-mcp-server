@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -49,14 +50,48 @@ func handleLCCallTool(ctx context.Context, args map[string]interface{}) (*mcp.Ca
 		return tools.ErrorResult("cannot call lc_call_tool recursively"), nil
 	}
 
+	// Check meta-tool filter (X-LC-ALLOW-META-TOOLS / X-LC-DENY-META-TOOLS headers)
+	if filter := auth.GetMetaToolFilter(ctx); filter != nil {
+		if !auth.IsToolAllowed(filter, toolName) {
+			return tools.ErrorResultf("tool %q is not allowed by meta-tool filter", toolName), nil
+		}
+	}
+
 	// Extract parameters
 	params, ok := args["parameters"].(map[string]interface{})
 	if !ok {
 		return tools.ErrorResult("parameters must be an object"), nil
 	}
 
+	// Look up target tool to validate parameters against its schema
+	reg, ok := tools.GetTool(toolName)
+	if !ok {
+		return tools.ErrorResultf("tool %q not found", toolName), nil
+	}
+
+	// Get schema from the tool, enhanced with OID if required
+	var schema mcp.Tool
+	var requiresOID bool
+	if reg.Tool != nil {
+		schema = reg.Tool.Schema()
+		requiresOID = reg.Tool.RequiresOID()
+	} else {
+		schema = reg.Schema
+		requiresOID = reg.RequiresOID
+	}
+
+	// If tool requires OID, use enhanced schema that includes the oid parameter
+	if requiresOID {
+		schema = tools.AddOIDToToolSchema(schema)
+	}
+
+	// Check for unknown parameters (strict validation for lc_call_tool)
+	if unknown := tools.GetUnknownParameters(schema, params); len(unknown) > 0 {
+		return tools.ErrorResultf("unknown parameter(s) for tool %q: %v", toolName, unknown), nil
+	}
+
 	// Use the shared CallTool function which handles:
-	// - Tool lookup
+	// - Tool lookup (already done above, but CallTool rechecks)
 	// - Parameter validation against schema
 	// - OID switching for tools that require it
 	// - GCS wrapping for large results

@@ -50,6 +50,8 @@ var ProfileDefinitions = map[string][]string{
 		"get_online_sensors",
 		"is_online",
 		"search_hosts",
+		"list_sensor_tags",
+		"who_am_i",
 	},
 	"historical_data": {
 		"run_lcql_query",
@@ -113,6 +115,10 @@ var ProfileDefinitions = map[string][]string{
 		"find_strings",
 		"dir_list",
 		"dir_find_hash",
+		// Velociraptor DFIR
+		"list_velociraptor_artifacts",
+		"show_velociraptor_artifact",
+		"collect_velociraptor_artifact",
 		// Artifacts
 		"list_artifacts",
 		"get_artifact",
@@ -135,6 +141,8 @@ var ProfileDefinitions = map[string][]string{
 		"get_cloud_sensor",
 		"set_cloud_sensor",
 		"delete_cloud_sensor",
+		// Organization URLs
+		"get_org_urls",
 		// Platform info
 		"get_platform_names",
 		"list_with_platform",
@@ -231,6 +239,11 @@ var ProfileDefinitions = map[string][]string{
 		"list_api_keys",
 		"create_api_key",
 		"delete_api_key",
+		// Payloads
+		"list_payloads",
+		"create_payload",
+		"get_payload",
+		"delete_payload",
 	},
 	"ai_powered": {
 		// AI-powered generation tools (to be implemented)
@@ -244,6 +257,14 @@ var ProfileDefinitions = map[string][]string{
 	"api_access": {
 		// Meta-tool for calling other tools
 		"lc_call_tool",
+	},
+	"investigation_management": {
+		// Investigation tools for incident response investigations
+		"expand_investigation",
+		"list_investigations",
+		"get_investigation",
+		"set_investigation",
+		"delete_investigation",
 	},
 }
 
@@ -543,6 +564,21 @@ func ValidateToolParameters(schema mcp.Tool, params map[string]interface{}) erro
 	}
 
 	return nil
+}
+
+// GetUnknownParameters returns a list of parameter names that are not defined in the schema.
+// Returns nil if all parameters are valid.
+func GetUnknownParameters(schema mcp.Tool, params map[string]interface{}) []string {
+	var unknown []string
+	inputSchema := schema.InputSchema
+
+	for paramName := range params {
+		if _, ok := inputSchema.Properties[paramName]; !ok {
+			unknown = append(unknown, paramName)
+		}
+	}
+
+	return unknown
 }
 
 // validateParameterType checks if a parameter value matches the expected JSON Schema type

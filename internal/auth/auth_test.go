@@ -943,3 +943,47 @@ func TestSDKCache_RespectJWTExpiration(t *testing.T) {
 		assert.True(t, time.Now().After(expiry), "JWT should be expired")
 	})
 }
+
+func TestExchangeAPIKeyForJWT(t *testing.T) {
+	t.Run("rejects empty UID", func(t *testing.T) {
+		_, err := ExchangeAPIKeyForJWT("", "api-key", "-", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "UID cannot be empty")
+	})
+
+	t.Run("rejects empty API key", func(t *testing.T) {
+		_, err := ExchangeAPIKeyForJWT("user@example.com", "", "-", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "API key cannot be empty")
+	})
+
+	t.Run("uses default logger when nil", func(t *testing.T) {
+		// This will fail due to invalid credentials, but shouldn't panic
+		// We're just testing that nil logger is handled
+		_, err := ExchangeAPIKeyForJWT("user@example.com", "invalid-key", "-", nil)
+		// The request will fail but we've verified nil logger handling
+		require.Error(t, err) // Expected to fail with invalid credentials
+	})
+}
+
+func TestSafePrefix(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		length   int
+		expected string
+	}{
+		// For short strings (len <= length), show only half to avoid exposing secrets
+		{"short string", "abc", 10, "a..."},
+		{"exact length", "abcdefghij", 10, "abcde..."},
+		// For longer strings (len > length), show the prefix up to length
+		{"longer string", "abcdefghijklmnop", 10, "abcdefghij..."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := safePrefix(tt.input, tt.length)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}

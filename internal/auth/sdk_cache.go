@@ -162,6 +162,22 @@ func (c *SDKCache) GetOrCreate(ctx context.Context, auth *AuthContext) (*lc.Orga
 	// Create new client
 	opts := auth.GetClientOptions()
 
+	// CRITICAL: For AuthModeUIDKey with no OID (user-level operations),
+	// pre-generate a JWT with oid="-" to avoid the SDK generating an
+	// "all orgs" JWT which can be too large for users with many orgs.
+	// The oid="-" tells jwt.limacharlie.io to generate a user-level JWT
+	// that identifies the caller but has no org-specific permissions.
+	if auth.Mode == AuthModeUIDKey && auth.OID == "" && opts.JWT == "" {
+		jwt, err := ExchangeAPIKeyForJWT(auth.UID, auth.APIKey, "-", c.logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate user-level JWT for AuthModeUIDKey: %w", err)
+		}
+		opts.JWT = jwt
+		c.logger.Debug("Pre-generated user-level JWT for AuthModeUIDKey",
+			"uid", auth.UID,
+			"jwt_prefix", safePrefix(jwt, 20))
+	}
+
 	// Create client with appropriate loaders
 	var client *lc.Client
 	var err error

@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -88,35 +89,31 @@ func RegisterAddOutput() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Build output config
-			outputConfig := lc.OutputConfig{
-				Name:   name,
-				Module: lc.OutputModuleType(module),
-				Type:   lc.OutputDataType(outputType),
+			// Build a combined config map with all parameters
+			// This ensures all module-specific fields are passed through
+			combinedConfig := map[string]interface{}{
+				"name":   name,
+				"module": module,
+				"type":   outputType,
 			}
 
-			// Apply additional config if provided
+			// Merge all config fields into the combined config
 			if config, ok := args["config"].(map[string]interface{}); ok {
-				// Map config fields to OutputConfig struct
-				// This is a simplified approach - in production you'd want proper field mapping
-				if destHost, ok := config["dest_host"].(string); ok {
-					outputConfig.DestinationHost = destHost
+				for k, v := range config {
+					combinedConfig[k] = v
 				}
-				if bucket, ok := config["bucket"].(string); ok {
-					outputConfig.Bucket = bucket
-				}
-				if username, ok := config["username"].(string); ok {
-					outputConfig.UserName = username
-				}
-				if password, ok := config["password"].(string); ok {
-					outputConfig.Password = password
-				}
-				if tag, ok := config["tag"].(string); ok {
-					outputConfig.Tag = tag
-				}
-				if sid, ok := config["sid"].(string); ok {
-					outputConfig.SensorID = sid
-				}
+			}
+
+			// Convert to OutputConfig via JSON marshaling
+			// This automatically maps all fields with matching JSON tags
+			jsonBytes, err := json.Marshal(combinedConfig)
+			if err != nil {
+				return tools.ErrorResultf("failed to marshal config: %v", err), nil
+			}
+
+			var outputConfig lc.OutputConfig
+			if err := json.Unmarshal(jsonBytes, &outputConfig); err != nil {
+				return tools.ErrorResultf("failed to unmarshal config: %v", err), nil
 			}
 
 			// Add output

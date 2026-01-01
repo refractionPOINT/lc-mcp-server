@@ -15,6 +15,7 @@ func init() {
 	// These tools manage extension subscriptions
 	RegisterSubscribeToExtension()
 	RegisterUnsubscribeFromExtension()
+	RegisterListExtensionSubscriptions()
 }
 
 // RegisterSubscribeToExtension registers the subscribe_to_extension tool
@@ -88,6 +89,34 @@ func RegisterUnsubscribeFromExtension() {
 			return tools.SuccessResult(map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully unsubscribed from extension '%s'", extensionName),
+			}), nil
+		},
+	})
+}
+
+// RegisterListExtensionSubscriptions registers the list_extension_subscriptions tool
+func RegisterListExtensionSubscriptions() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "list_extension_subscriptions",
+		Description: "List all extension subscriptions for the organization",
+		Profile:     "platform_admin",
+		RequiresOID: true,
+		Schema: mcp.NewTool("list_extension_subscriptions",
+			mcp.WithDescription("List all extension subscriptions for the organization"),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			org, err := getOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			extensions, err := org.Extensions()
+			if err != nil {
+				return tools.ErrorResultf("failed to list extension subscriptions: %v", err), nil
+			}
+
+			return tools.SuccessResult(map[string]interface{}{
+				"subscriptions": extensions,
 			}), nil
 		},
 	})

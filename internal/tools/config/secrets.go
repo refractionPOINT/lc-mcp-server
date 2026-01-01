@@ -154,7 +154,7 @@ func RegisterSetSecret() {
 				PartitionKey: org.GetOID(),
 				Key:          secretName,
 				Data: lc.Dict{
-					"value": secretValue,
+					"secret": secretValue,
 				},
 				Enabled: &enabled,
 			})

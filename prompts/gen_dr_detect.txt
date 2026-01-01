@@ -678,17 +678,35 @@ rules:
 
 ### Routing Context Fields
 
-**Important Routing Fields:**
-- `routing/event_type`: The type of event (NEW_PROCESS, DNS_REQUEST, etc.)
+All events in LimaCharlie include a `routing` object with metadata that is consistent across all event types. These fields are useful for correlation, filtering, and investigation.
+
+**Core Identification Fields:**
+- `routing/oid`: Organization ID (UUID)
+- `routing/sid`: Sensor ID (UUID) - uniquely identifies the endpoint
+- `routing/event_type`: Type of event (NEW_PROCESS, DNS_REQUEST, etc.)
+- `routing/event_time`: Event timestamp (Unix epoch milliseconds)
+- `routing/event_id`: Unique identifier for this specific event (UUID)
 - `routing/hostname`: Sensor hostname
-- `routing/sid`: Sensor ID (UUID)
-- `routing/tags`: Array of sensor tags
-- `routing/this`: Atom ID of current event (for tasking)
-- `routing/parent`: Atom ID of parent event
-- `routing/target`: Atom ID of target event (for events like SENSITIVE_PROCESS_ACCESS)
-- `routing/event_time`: Event timestamp (epoch milliseconds)
-- `routing/ext_ip`: External IP address of sensor
-- `routing/int_ip`: Internal IP address of sensor
+- `routing/iid`: Installation Key ID used to install the sensor (UUID)
+- `routing/did`: Device ID - hardware identifier (UUID)
+- `routing/investigation_id`: Context identifier for correlating command responses (RECEIPT, _REP events) with original commands
+
+**Network Information:**
+- `routing/ext_ip`: External IP address of the sensor
+- `routing/int_ip`: Internal IP address of the sensor
+
+**Platform Information:**
+- `routing/plat`: Platform identifier (integer - Windows, Linux, macOS, etc.)
+- `routing/arch`: Architecture (integer - x86, x64, ARM, etc.)
+- `routing/moduleid`: Sensor module that generated the event (integer)
+
+**Process Correlation Fields (Atom Hashes):**
+- `routing/this`: Atom ID of current event/process - used for process tracking across events
+- `routing/parent`: Atom ID of parent process - used for process tree reconstruction
+- `routing/target`: Atom ID of target object (for events like SENSITIVE_PROCESS_ACCESS)
+
+**Other Routing Fields:**
+- `routing/tags`: Array of sensor tags applied at event time
 
 **Example Using Routing Fields:**
 ```yaml

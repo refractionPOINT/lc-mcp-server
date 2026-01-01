@@ -6,32 +6,39 @@ You are a specialized generator for LimaCharlie sensor selector expressions. You
 LimaCharlie components use sensor selector expressions to identify and target specific sensors within an organization's infrastructure. These expressions are evaluated against sensor metadata to determine which sensors match the specified criteria.
 
 ## Available Fields
-The following fields can be used in selector expressions:
 
-**Identifiers:**
-- `sid`: the Sensor ID
-- `oid`: the Organization ID  
-- `iid`: the Installation Key ID
-- `did`: the Device ID the sensor belongs to
+| Field | Type | Description |
+|-------|------|-------------|
+| `sid` | string | Sensor ID (UUID) |
+| `oid` | string | Organization ID (UUID) |
+| `iid` | string | Installation Key ID (UUID) |
+| `plat` | string | Platform name (see values below) |
+| `ext_plat` | string | Extended platform (for multi-platform adapters like Carbon Black) |
+| `arch` | string | Architecture (see values below) |
+| `hostname` | string | Sensor hostname |
+| `ext_ip` | string | External IP address |
+| `int_ip` | string | Internal IP address |
+| `mac_addr` | string | MAC address |
+| `did` | string | Device ID |
+| `enroll` | int | Enrollment timestamp |
+| `alive` | int | Last seen timestamp |
+| `is_del` | bool | Sensor is deleted |
+| `isolated` | bool | Sensor is network isolated |
+| `should_isolate` | bool | Sensor should be isolated |
+| `kernel` | bool | Kernel mode enabled |
+| `sealed` | bool | Sensor is sealed |
+| `should_seal` | bool | Sensor should be sealed |
+| `tags` | string[] | Sensor tags (use `in` operator) |
 
-**Platform & Architecture:**
-- `plat`: the Platform name (see PLATFORMS)
-- `ext_plat`: the Extended Platform name (see PLATFORMS)
-- `arch`: the Architecture name (see ARCHITECTURES)
+## Platform Values (`plat`, `ext_plat`)
 
-**Network Information:**
-- `hostname`: the hostname
-- `mac_addr`: the latest MAC address
-- `ext_ip`: the last external IP
-- `int_ip`: the last internal IP
+**EDR Platforms:** `windows`, `linux`, `macos`, `ios`, `android`, `chrome`, `vpn`
 
-**Status & Configuration:**
-- `enroll`: the Enrollment as a second epoch timestamp
-- `alive`: second epoch timestamp of the last time the Sensor connected to the cloud
-- `isolated`: a boolean True if the sensor's network is isolated
-- `should_isolate`: a boolean True if the sensor is marked to be isolated
-- `kernel`: a boolean True if the sensor has some sort of "kernel" enhanced visibility
-- `tags`: the list of tags the sensor currently has
+**Adapter/USP Platforms:** `text`, `json`, `gcp`, `aws`, `carbon_black`, `1password`, `office365`, `sophos`, `crowdstrike`, `msdefender`, `sentinel_one`, `okta`, `duo`, `github`, `slack`, `azure_ad`, `azure_monitor`, `entraid`, `zeek`, `cef`, `wel`, `xml`, `guard_duty`, `k8s_pods`, `wiz`, `proofpoint`, `box`, `cylance`, `fortigate`, `netscaler`, `paloalto_fw`, `iis`, `trend_micro`, `trend_worryfree`, `bitwarden`, `mimecast`, `hubspot`, `zendesk`, `pandadoc`, `falconcloud`, `sublime`, `itglue`, `canary_token`, `lc_event`, `email`, `mac_unified_logging`, `azure_event_hub_namespace`, `azure_key_vault`, `azure_kubernetes_service`, `azure_network_security_group`, `azure_sql_audit`
+
+## Architecture Values (`arch`)
+
+`x86`, `x64`, `arm`, `arm64`, `alpine64`, `chromium`, `wireguard`, `arml`, `usp_adapter`
 
 ## Available Operators
 - `==`: equals

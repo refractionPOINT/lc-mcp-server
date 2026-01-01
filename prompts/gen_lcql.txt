@@ -26,6 +26,8 @@ Specifies event types to include:
 - **Single event**: `NEW_PROCESS`, `DNS_REQUEST`, `WEL`, etc.
 
 ### 4. Filter Component
+**REQUIRED - The filter component cannot be empty.** Use `/ exists` to match all events without filtering.
+
 The main query logic using field selectors and operators:
 - **Field selectors**: `event/FILE_PATH`, `event/COMMAND_LINE`, `routing/hostname`
 - **Logical operators**: `and`, `or`, `()` for grouping
@@ -69,6 +71,31 @@ Specifies output fields and aggregation:
 - **`is public address`**: Public IP check
   - `event/NETWORK_CONNECTIONS/IP_ADDRESS is public address`
 - **`is private address`**: Private IP check
+
+### Network Activity Path Syntax
+
+The `NETWORK_CONNECTIONS` event type contains an `event/NETWORK_ACTIVITY` array with network connection entries. When querying multiple fields that must match the **same** connection entry, use the `scope` operator:
+
+**Common fields within NETWORK_ACTIVITY entries:**
+- `event/SOURCE/IP_ADDRESS`: Source IP address
+- `event/DESTINATION/IP_ADDRESS`: Destination IP address
+- `event/DESTINATION/PORT`: Destination port
+- `event/PROTOCOL`: Protocol (TCP/UDP)
+
+**Example - Find connections to public IPs on port 443 (same connection):**
+```
+-1h | * | NETWORK_CONNECTIONS | event/NETWORK_ACTIVITY scope (event/DESTINATION/IP_ADDRESS is public address and event/DESTINATION/PORT is 443)
+```
+
+**Example - Find connections from internal IPs to specific port:**
+```
+-24h | plat == linux | NETWORK_CONNECTIONS | event/NETWORK_ACTIVITY scope (event/SOURCE/IP_ADDRESS cidr "10.0.0.0/8" and event/DESTINATION/PORT is 22)
+```
+
+**Single field query (no scope needed):**
+```
+-1h | * | NETWORK_CONNECTIONS | event/NETWORK_ACTIVITY/?/DESTINATION/IP_ADDRESS is public address
+```
 
 ### Numeric Operators
 - **`is lower than`**: Less than comparison
@@ -160,24 +187,42 @@ Specifies output fields and aggregation:
 
 ## Sensor Selector Expressions
 
-Available fields for sensor selection:
-- **`sid`**: Sensor ID
-- **`oid`**: Organization ID
-- **`iid`**: Installation Key ID
-- **`plat`**: Platform name (windows, linux, macos, github, etc.)
-- **`ext_plat`**: Extended platform name
-- **`arch`**: Architecture name
-- **`enroll`**: Enrollment timestamp
-- **`hostname`**: Hostname
-- **`mac_addr`**: MAC address
-- **`alive`**: Last connection timestamp
-- **`ext_ip`**: External IP
-- **`int_ip`**: Internal IP
-- **`isolated`**: Network isolation status (boolean)
-- **`should_isolate`**: Marked for isolation (boolean)
-- **`kernel`**: Kernel visibility enhanced (boolean)
-- **`did`**: Device ID
-- **`tags`**: List of tags
+Sensor selectors use [bexpr](https://github.com/hashicorp/go-bexpr) syntax to filter sensors. Use `*` to match all sensors.
+
+### Available Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sid` | string | Sensor ID (UUID) |
+| `oid` | string | Organization ID (UUID) |
+| `iid` | string | Installation Key ID (UUID) |
+| `plat` | string | Platform name (see values below) |
+| `ext_plat` | string | Extended platform (for multi-platform adapters like Carbon Black) |
+| `arch` | string | Architecture (see values below) |
+| `hostname` | string | Sensor hostname |
+| `ext_ip` | string | External IP address |
+| `int_ip` | string | Internal IP address |
+| `mac_addr` | string | MAC address |
+| `did` | string | Device ID |
+| `enroll` | int | Enrollment timestamp |
+| `alive` | int | Last seen timestamp |
+| `is_del` | bool | Sensor is deleted |
+| `isolated` | bool | Sensor is network isolated |
+| `should_isolate` | bool | Sensor should be isolated |
+| `kernel` | bool | Kernel mode enabled |
+| `sealed` | bool | Sensor is sealed |
+| `should_seal` | bool | Sensor should be sealed |
+| `tags` | string[] | Sensor tags (use `in` operator) |
+
+### Platform Values (`plat`, `ext_plat`)
+
+**EDR Platforms:** `windows`, `linux`, `macos`, `ios`, `android`, `chrome`, `vpn`
+
+**Adapter/USP Platforms:** `text`, `json`, `gcp`, `aws`, `carbon_black`, `1password`, `office365`, `sophos`, `crowdstrike`, `msdefender`, `sentinel_one`, `okta`, `duo`, `github`, `slack`, `azure_ad`, `azure_monitor`, `entraid`, `zeek`, `cef`, `wel`, `xml`, `guard_duty`, `k8s_pods`, `wiz`, `proofpoint`, `box`, `cylance`, `fortigate`, `netscaler`, `paloalto_fw`, `iis`, `trend_micro`, `trend_worryfree`, `bitwarden`, `mimecast`, `hubspot`, `zendesk`, `pandadoc`, `falconcloud`, `sublime`, `itglue`, `canary_token`, `lc_event`, `email`, `mac_unified_logging`, `azure_event_hub_namespace`, `azure_key_vault`, `azure_kubernetes_service`, `azure_network_security_group`, `azure_sql_audit`
+
+### Architecture Values (`arch`)
+
+`x86`, `x64`, `arm`, `arm64`, `alpine64`, `chromium`, `wireguard`, `arml`, `usp_adapter`
 
 ### Sensor Selector Operators
 - **`==`**: equals
@@ -191,7 +236,51 @@ Available fields for sensor selection:
 - **All sensors with test tag**: `test in tags`
 - **Windows hosts in 10.3.x.x subnet**: `plat == windows and int_ip matches \`^10\.3\..*\``
 - **1Password sensors** (quote with backtick for numbers): `plat == \`1password\``
-- **Linux with isolation or evil tag**: `plat == linux or (isolated == true or evil in tags)`
+- **Linux with isolation or evil tag**: `plat == linux and (isolated == true or evil in tags)`
+- **64-bit Windows only**: `plat == windows and arch == x64`
+- **Carbon Black/Crowdstrike reporting Windows endpoints**: `ext_plat == windows`
+
+## Routing Fields Reference
+
+All events in LimaCharlie include a `routing` object with metadata that is consistent across all event types. These fields are useful for correlation, filtering, and investigation.
+
+### Core Identification Fields
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/oid` | string (UUID) | Organization ID |
+| `routing/sid` | string (UUID) | Sensor ID - uniquely identifies the endpoint |
+| `routing/event_type` | string | Type of event (e.g., NEW_PROCESS, DNS_REQUEST) |
+| `routing/event_time` | integer | Unix timestamp in milliseconds |
+| `routing/event_id` | string (UUID) | Unique identifier for this specific event |
+| `routing/hostname` | string | Hostname of the sensor |
+| `routing/iid` | string (UUID) | Installation Key ID used to install the sensor |
+| `routing/did` | string (UUID) | Device ID - hardware identifier |
+| `routing/investigation_id` | string | Context identifier for correlating command responses (RECEIPT, _REP events) with original commands |
+
+### Network Information
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/ext_ip` | string | External IP address of the sensor |
+| `routing/int_ip` | string | Internal IP address of the sensor |
+
+### Platform Information
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/plat` | integer | Platform identifier (Windows, Linux, macOS, etc.) |
+| `routing/arch` | integer | Architecture (x86, x64, ARM, etc.) |
+| `routing/moduleid` | integer | Sensor module that generated the event |
+
+### Process Correlation Fields (Atom Hashes)
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/this` | string (hash) | Atom ID of current event/process - used for process tracking across events |
+| `routing/parent` | string (hash) | Atom ID of parent process - used for process tree reconstruction |
+| `routing/target` | string (hash) | Atom ID of target object (for events like SENSITIVE_PROCESS_ACCESS) |
+
+### Other Routing Fields
+| Field | Type | Description |
+|-------|------|-------------|
+| `routing/tags` | array[string] | Sensor tags applied at event time |
 
 ## Event Types Reference
 
