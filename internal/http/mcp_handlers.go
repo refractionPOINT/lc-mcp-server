@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
+	"github.com/refractionpoint/lc-mcp-go/internal/resources"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -58,6 +60,10 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		s.handleToolCall(w, r, req.ID, req.Params)
 	case "tools/list":
 		s.handleToolsList(w, r, req.ID)
+	case "resources/list":
+		s.handleResourcesList(w, req.ID)
+	case "resources/read":
+		s.handleResourcesRead(w, req.ID, req.Params)
 	default:
 		s.writeJSONRPCError(w, req.ID, -32601, "Method not found", fmt.Sprintf("Unknown method: %s", req.Method))
 	}
@@ -75,7 +81,8 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, id int
 	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
-			"tools": map[string]interface{}{}, // We support tools
+			"tools":     map[string]interface{}{}, // We support tools
+			"resources": map[string]interface{}{}, // We support resources
 		},
 		"serverInfo": map[string]interface{}{
 			"name":    "LimaCharlie MCP Server",
@@ -355,4 +362,60 @@ func parseToolList(header string) []string {
 		return nil
 	}
 	return result
+}
+
+func (s *Server) handleResourcesList(w http.ResponseWriter, id interface{}) {
+	// Return list of available resources
+	resource := resources.NewWrapstackContextResource()
+	resourceList := []map[string]interface{}{
+		{
+			"uri":         resource.URI,
+			"name":        resource.Name,
+			"description": resource.Description,
+			"mimeType":    resource.MIMEType,
+		},
+	}
+
+	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
+		"resources": resourceList,
+	})
+}
+
+func (s *Server) handleResourcesRead(w http.ResponseWriter, id interface{}, params map[string]interface{}) {
+	// Extract URI from params
+	uri, ok := params["uri"].(string)
+	if !ok {
+		s.writeJSONRPCError(w, id, -32602, "Invalid params", "Missing or invalid 'uri' parameter")
+		return
+	}
+
+	// Check if this is the wrapstack context resource
+	if uri != resources.WrapstackContextURI {
+		s.writeJSONRPCError(w, id, -32602, "Resource not found", fmt.Sprintf("Unknown resource URI: %s", uri))
+		return
+	}
+
+	// Call the handler
+	ctx := context.Background()
+	contents, err := resources.WrapstackContextHandler(ctx, mcp.ReadResourceRequest{})
+	if err != nil {
+		s.writeJSONRPCError(w, id, -32000, "Resource read error", err.Error())
+		return
+	}
+
+	// Convert contents to response format
+	responseContents := make([]map[string]interface{}, 0, len(contents))
+	for _, content := range contents {
+		if textContent, ok := content.(mcp.TextResourceContents); ok {
+			responseContents = append(responseContents, map[string]interface{}{
+				"uri":      textContent.URI,
+				"mimeType": textContent.MIMEType,
+				"text":     textContent.Text,
+			})
+		}
+	}
+
+	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
+		"contents": responseContents,
+	})
 }

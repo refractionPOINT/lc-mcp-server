@@ -9,6 +9,7 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
+	"github.com/refractionpoint/lc-mcp-go/internal/resources"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -85,6 +86,10 @@ func (s *STDIOServer) registerTools() error {
 
 	toolNames := tools.GetToolsForProfile(s.config.Server.Profile)
 	s.logger.Info("Registered tools", "count", len(toolNames))
+
+	// Register resources
+	resources.AddResourcesToServer(s.mcpServer)
+	s.logger.Info("Registered resources")
 
 	return nil
 }
