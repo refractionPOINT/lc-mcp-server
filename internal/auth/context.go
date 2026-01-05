@@ -182,8 +182,11 @@ func WithOID(ctx context.Context, oid string, logger *slog.Logger) (context.Cont
 		return ctx, err
 	}
 
-	// Can only switch OID in UID mode
+	// In normal mode, only allow the same OID (not really a switch)
 	if auth.Mode == AuthModeNormal {
+		if oid == auth.OID {
+			return ctx, nil // Same OID, no switch needed
+		}
 		return ctx, errors.New("cannot switch OID in normal mode")
 	}
 

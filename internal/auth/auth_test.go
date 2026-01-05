@@ -283,7 +283,7 @@ func TestWithOID(t *testing.T) {
 		assert.Equal(t, "org1", origAuth.OID)
 	})
 
-	t.Run("cannot switch OID in normal mode", func(t *testing.T) {
+	t.Run("cannot switch to different OID in normal mode", func(t *testing.T) {
 		auth := &AuthContext{
 			Mode:   AuthModeNormal,
 			OID:    "org1",
@@ -295,6 +295,21 @@ func TestWithOID(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot switch OID in normal mode")
+	})
+
+	t.Run("same OID in normal mode succeeds", func(t *testing.T) {
+		auth := &AuthContext{
+			Mode:   AuthModeNormal,
+			OID:    "org1",
+			APIKey: "key1",
+		}
+
+		ctx := WithAuthContext(context.Background(), auth)
+		newCtx, err := WithOID(ctx, "org1", nil)
+
+		require.NoError(t, err)
+		// Should return original context (same OID, no change)
+		assert.Equal(t, ctx, newCtx)
 	})
 
 	t.Run("rejects invalid OID", func(t *testing.T) {
