@@ -153,13 +153,19 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
 	} else if lcUID != "" && lcAPIKey != "" {
 		// Header-based user credentials (X-LC-UID + X-LC-API-KEY)
+		// If X-LC-OID is also provided, pin to that org
 		authCtx = &auth.AuthContext{
 			Mode:   auth.AuthModeUIDKey,
 			UID:    lcUID,
 			APIKey: lcAPIKey,
+			OID:    lcOID, // Empty if not provided, which is fine
 		}
 		isJWTPassthrough = false
-		s.logger.Debug("Authenticated via user header credentials", "request_id", requestID, "uid", lcUID)
+		if lcOID != "" {
+			s.logger.Debug("Authenticated via user header credentials with OID", "request_id", requestID, "uid", lcUID, "oid", lcOID)
+		} else {
+			s.logger.Debug("Authenticated via user header credentials", "request_id", requestID, "uid", lcUID)
+		}
 	} else if lcOID != "" && lcAPIKey != "" {
 		// Header-based org credentials (X-LC-OID + X-LC-API-KEY)
 		authCtx = &auth.AuthContext{
