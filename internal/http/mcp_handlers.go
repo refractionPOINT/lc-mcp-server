@@ -113,6 +113,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	authHeader := r.Header.Get("Authorization")
 	lcUID := r.Header.Get("X-LC-UID")
+	lcOID := r.Header.Get("X-LC-OID")
 	lcAPIKey := r.Header.Get("X-LC-API-KEY")
 	lcAllowMetaTools := r.Header.Get("X-LC-ALLOW-META-TOOLS")
 	lcDenyMetaTools := r.Header.Get("X-LC-DENY-META-TOOLS")
@@ -151,14 +152,29 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		isJWTPassthrough = firebaseIDToken == ""
 		s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
 	} else if lcUID != "" && lcAPIKey != "" {
-		// Header-based credentials (X-LC-UID + X-LC-API-KEY)
+		// Header-based user credentials (X-LC-UID + X-LC-API-KEY)
+		// If X-LC-OID is also provided, pin to that org
 		authCtx = &auth.AuthContext{
 			Mode:   auth.AuthModeUIDKey,
 			UID:    lcUID,
 			APIKey: lcAPIKey,
+			OID:    lcOID, // Empty if not provided, which is fine
 		}
 		isJWTPassthrough = false
-		s.logger.Debug("Authenticated via header credentials", "request_id", requestID, "uid", lcUID)
+		if lcOID != "" {
+			s.logger.Debug("Authenticated via user header credentials with OID", "request_id", requestID, "uid", lcUID, "oid", lcOID)
+		} else {
+			s.logger.Debug("Authenticated via user header credentials", "request_id", requestID, "uid", lcUID)
+		}
+	} else if lcOID != "" && lcAPIKey != "" {
+		// Header-based org credentials (X-LC-OID + X-LC-API-KEY)
+		authCtx = &auth.AuthContext{
+			Mode:   auth.AuthModeNormal,
+			OID:    lcOID,
+			APIKey: lcAPIKey,
+		}
+		isJWTPassthrough = false
+		s.logger.Debug("Authenticated via org header credentials", "request_id", requestID, "oid", lcOID)
 	} else if s.serverAuthCtx != nil {
 		// No Bearer token - use server-wide credentials
 		authCtx = s.serverAuthCtx
@@ -166,7 +182,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", authCtx.UID, "mode", authCtx.Mode.String())
 	} else {
 		// No authentication provided
-		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Missing authentication: provide Authorization header or X-LC-UID + X-LC-API-KEY headers")
+		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Missing authentication: provide Authorization header, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers")
 		return
 	}
 
