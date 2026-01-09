@@ -11,6 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
+	"github.com/refractionpoint/lc-mcp-go/internal/metrics"
 )
 
 // ToolHandler is the function signature for MCP tool handlers
@@ -479,6 +480,13 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 
 		if err != nil {
 			return result, err
+		}
+
+		// Record operation metrics (for STDIO mode)
+		if metricsManager := metrics.GetManager(ctx); metricsManager != nil {
+			if authCtx, authErr := auth.FromContext(ctx); authErr == nil {
+				metricsManager.RecordOperation(authCtx)
+			}
 		}
 
 		// Try to wrap large results with GCS

@@ -13,6 +13,7 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
 	"github.com/refractionpoint/lc-mcp-go/internal/crypto"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
+	"github.com/refractionpoint/lc-mcp-go/internal/metrics"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/endpoints"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
@@ -42,22 +43,24 @@ type Server struct {
 	oauthHandlers    *endpoints.Handlers
 	sdkCache         *auth.SDKCache
 	gcsManager       *gcs.Manager
+	metricsManager   *metrics.Manager
 	profile          string
 	rateLimiter      *ratelimit.Limiter
 	serverAuthCtx    *auth.AuthContext // Server-wide credentials (nil = OAuth only)
 }
 
 // New creates a new HTTP server instance using standard library
-func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsManager *gcs.Manager, profile string) (*Server, error) {
+func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsManager *gcs.Manager, metricsManager *metrics.Manager, profile string) (*Server, error) {
 	mux := http.NewServeMux()
 
 	s := &Server{
-		config:     cfg,
-		logger:     logger,
-		mux:        mux,
-		sdkCache:   sdkCache,
-		gcsManager: gcsManager,
-		profile:    profile,
+		config:         cfg,
+		logger:         logger,
+		mux:            mux,
+		sdkCache:       sdkCache,
+		gcsManager:     gcsManager,
+		metricsManager: metricsManager,
+		profile:        profile,
 	}
 
 	// Store server-wide credentials if configured
