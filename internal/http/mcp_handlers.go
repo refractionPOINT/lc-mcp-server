@@ -240,6 +240,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	}
 	s.logger.Info("Tool execution completed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds())
 
+	// Record operation metrics
+	if s.metricsManager != nil {
+		s.metricsManager.RecordOperation(authCtx)
+	}
+
 	// Wrap large results with GCS if available
 	wrappedResult := gcs.WrapMCPResult(ctx, result, toolName)
 
