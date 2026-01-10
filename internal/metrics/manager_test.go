@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/compute/metadata"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -256,8 +257,10 @@ func TestDetectProjectID(t *testing.T) {
 	os.Unsetenv("GCLOUD_PROJECT")
 	os.Unsetenv("GCP_PROJECT")
 
-	// Test empty
-	assert.Empty(t, detectProjectID())
+	// Test empty - only when not running on GCE (metadata server provides project ID on GCE)
+	if !metadata.OnGCE() {
+		assert.Empty(t, detectProjectID())
+	}
 
 	// Test GOOGLE_CLOUD_PROJECT
 	os.Setenv("GOOGLE_CLOUD_PROJECT", "test-project-1")
