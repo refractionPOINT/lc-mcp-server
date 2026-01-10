@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"cloud.google.com/go/compute/metadata"
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
 	"google.golang.org/genproto/googleapis/api/metric"
@@ -298,10 +299,9 @@ func (m *Manager) createCumulativeTimeSeries(metricName string, value int64, sta
 	}
 }
 
-// detectProjectID attempts to detect the GCP project ID from environment
+// detectProjectID attempts to detect the GCP project ID from environment or metadata server
 func detectProjectID() string {
-	// Try common environment variables
-	// GOOGLE_CLOUD_PROJECT is set by Cloud Run and other GCP services
+	// Try common environment variables first
 	if id := os.Getenv("GOOGLE_CLOUD_PROJECT"); id != "" {
 		return id
 	}
@@ -311,6 +311,14 @@ func detectProjectID() string {
 	if id := os.Getenv("GCP_PROJECT"); id != "" {
 		return id
 	}
+
+	// Try GCP metadata server (works in Cloud Run, GCE, GKE, etc.)
+	if metadata.OnGCE() {
+		if id, err := metadata.ProjectIDWithContext(context.Background()); err == nil {
+			return id
+		}
+	}
+
 	return ""
 }
 
