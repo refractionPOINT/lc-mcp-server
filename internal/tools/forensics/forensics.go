@@ -32,10 +32,11 @@ func init() {
 
 // sendSensorCommand sends a command to a sensor and returns the response
 func sendSensorCommand(ctx context.Context, sid string, command string, params map[string]interface{}) (interface{}, error) {
-	sensor, err := getSensor(ctx, sid)
+	sensor, cleanup, err := getSensor(ctx, sid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sensor: %w", err)
 	}
+	defer cleanup() // Ensure Spout is shut down when request completes
 
 	// Build command string with parameters
 	// Format: "command --param1 value1 --param2 value2"
@@ -73,10 +74,11 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 
 // sendSensorCommandWithPositional sends a command with positional arguments to a sensor
 func sendSensorCommandWithPositional(ctx context.Context, sid string, command string, positionalArgs []string, flagParams map[string]interface{}) (interface{}, error) {
-	sensor, err := getSensor(ctx, sid)
+	sensor, cleanup, err := getSensor(ctx, sid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sensor: %w", err)
 	}
+	defer cleanup() // Ensure Spout is shut down when request completes
 
 	// Build command string with positional arguments first, then flags
 	// Format: "command <arg1> <arg2> --flag1 value1 --flag2 value2"

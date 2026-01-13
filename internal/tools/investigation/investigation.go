@@ -42,6 +42,7 @@ func RegisterGetProcesses() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+			defer org.Close() // Ensure Spout is shut down when request completes
 
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
@@ -90,6 +91,7 @@ func RegisterGetNetworkConnections() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+			defer org.Close() // Ensure Spout is shut down when request completes
 
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
@@ -139,6 +141,7 @@ func RegisterGetOSVersion() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+			defer org.Close() // Ensure Spout is shut down when request completes
 
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
