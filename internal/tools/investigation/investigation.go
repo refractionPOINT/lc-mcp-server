@@ -55,7 +55,7 @@ func RegisterGetProcesses() {
 
 			// Use SimpleRequest to get synchronous response
 			result, err := sensor.SimpleRequest("os_processes", lc.SimpleRequestOptions{
-				Timeout: 30 * time.Second,
+				Timeout: 10 * time.Minute,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to get processes: %v", err), nil
@@ -105,7 +105,7 @@ func RegisterGetNetworkConnections() {
 			// Use SimpleRequest to get synchronous response
 			// Python uses "netstat" command instead of "os_network_connections"
 			result, err := sensor.SimpleRequest("netstat", lc.SimpleRequestOptions{
-				Timeout: 30 * time.Second,
+				Timeout: 10 * time.Minute,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to get network connections: %v", err), nil
@@ -154,7 +154,7 @@ func RegisterGetOSVersion() {
 
 			// Use SimpleRequest to get synchronous response
 			result, err := sensor.SimpleRequest("os_version", lc.SimpleRequestOptions{
-				Timeout: 30 * time.Second,
+				Timeout: 10 * time.Minute,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to get OS version: %v", err), nil
