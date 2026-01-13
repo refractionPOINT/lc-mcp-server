@@ -26,13 +26,10 @@ func createTestManager(t *testing.T) *Manager {
 			Enabled:        true,
 			ReportInterval: time.Second,
 		},
-		logger:        testLogger(),
-		isEnabled:     true, // Enable tracking without GCP client
-		uniqueUsers:   make(map[string]struct{}),
-		oauthUsers:    make(map[string]struct{}),
-		nonOAuthUsers: make(map[string]struct{}),
-		startTime:     time.Now(),
-		stopCh:        make(chan struct{}),
+		logger:    testLogger(),
+		isEnabled: true, // Enable tracking without GCP client
+		startTime: time.Now(),
+		stopCh:    make(chan struct{}),
 		// client is nil - we won't report to GCP in tests
 	}
 }
@@ -65,7 +62,6 @@ func TestNewManager_Disabled(t *testing.T) {
 
 	// Nothing should be tracked when disabled
 	assert.Equal(t, int64(0), mgr.operationCount)
-	assert.Empty(t, mgr.uniqueUsers)
 
 	// Close should be no-op
 	err = mgr.Close()
@@ -75,10 +71,8 @@ func TestNewManager_Disabled(t *testing.T) {
 func TestManager_RecordOperation_NoOp(t *testing.T) {
 	// When isEnabled is false, RecordOperation should be a no-op
 	mgr := &Manager{
-		isEnabled:     false,
-		uniqueUsers:   make(map[string]struct{}),
-		oauthUsers:    make(map[string]struct{}),
-		nonOAuthUsers: make(map[string]struct{}),
+		isEnabled: false,
+		logger:    testLogger(),
 	}
 
 	authCtx := &auth.AuthContext{
@@ -88,7 +82,6 @@ func TestManager_RecordOperation_NoOp(t *testing.T) {
 	mgr.RecordOperation(authCtx)
 
 	assert.Equal(t, int64(0), mgr.operationCount)
-	assert.Empty(t, mgr.uniqueUsers)
 }
 
 func TestManager_RecordOperation_NilAuthContext(t *testing.T) {
@@ -108,11 +101,8 @@ func TestManager_RecordOperation_OAuth(t *testing.T) {
 	}
 	mgr.RecordOperation(authCtx)
 
+	// Only operation count is tracked in memory; user tracking is via logs
 	assert.Equal(t, int64(1), mgr.operationCount)
-	assert.Len(t, mgr.uniqueUsers, 1)
-	assert.Len(t, mgr.oauthUsers, 1)
-	assert.Empty(t, mgr.nonOAuthUsers)
-	assert.Contains(t, mgr.oauthUsers, "oauth-user-1")
 }
 
 func TestManager_RecordOperation_UIDKey(t *testing.T) {
@@ -126,10 +116,6 @@ func TestManager_RecordOperation_UIDKey(t *testing.T) {
 	mgr.RecordOperation(authCtx)
 
 	assert.Equal(t, int64(1), mgr.operationCount)
-	assert.Len(t, mgr.uniqueUsers, 1)
-	assert.Empty(t, mgr.oauthUsers)
-	assert.Len(t, mgr.nonOAuthUsers, 1)
-	assert.Contains(t, mgr.nonOAuthUsers, "uid:key-user-1")
 }
 
 func TestManager_RecordOperation_Normal(t *testing.T) {
@@ -143,13 +129,9 @@ func TestManager_RecordOperation_Normal(t *testing.T) {
 	mgr.RecordOperation(authCtx)
 
 	assert.Equal(t, int64(1), mgr.operationCount)
-	assert.Len(t, mgr.uniqueUsers, 1)
-	assert.Empty(t, mgr.oauthUsers)
-	assert.Len(t, mgr.nonOAuthUsers, 1)
-	assert.Contains(t, mgr.nonOAuthUsers, "oid:test-org-1")
 }
 
-func TestManager_DuplicateUsers(t *testing.T) {
+func TestManager_MultipleOperations(t *testing.T) {
 	mgr := createTestManager(t)
 
 	authCtx := &auth.AuthContext{
@@ -163,13 +145,11 @@ func TestManager_DuplicateUsers(t *testing.T) {
 	mgr.RecordOperation(authCtx)
 
 	// Operation count should be 3
+	// (unique user tracking is now done via log-based metrics)
 	assert.Equal(t, int64(3), mgr.operationCount)
-	// But unique users should be 1 (deduped)
-	assert.Len(t, mgr.uniqueUsers, 1)
-	assert.Len(t, mgr.oauthUsers, 1)
 }
 
-func TestManager_MultipleUsers(t *testing.T) {
+func TestManager_MultipleUsersOperations(t *testing.T) {
 	mgr := createTestManager(t)
 
 	// Add different users
@@ -178,10 +158,8 @@ func TestManager_MultipleUsers(t *testing.T) {
 	mgr.RecordOperation(&auth.AuthContext{Mode: auth.AuthModeUIDKey, UID: "key-1", APIKey: "k"})
 	mgr.RecordOperation(&auth.AuthContext{Mode: auth.AuthModeNormal, OID: "org-1", APIKey: "k"})
 
+	// All operations should be counted
 	assert.Equal(t, int64(4), mgr.operationCount)
-	assert.Len(t, mgr.uniqueUsers, 4)
-	assert.Len(t, mgr.oauthUsers, 2)
-	assert.Len(t, mgr.nonOAuthUsers, 2)
 }
 
 func TestGetUserIdentifier(t *testing.T) {

@@ -35,11 +35,8 @@ type Manager struct {
 	// This allows tracking metrics in memory even if GCP client fails to initialize
 	isEnabled bool
 
-	// In-memory tracking
+	// In-memory tracking (only operations - unique users tracked via log-based metrics)
 	mu             sync.RWMutex
-	uniqueUsers    map[string]struct{}
-	oauthUsers     map[string]struct{}
-	nonOAuthUsers  map[string]struct{}
 	operationCount int64
 	startTime      time.Time
 
@@ -52,13 +49,10 @@ type Manager struct {
 // If metrics are disabled or initialization fails, returns a no-op manager
 func NewManager(ctx context.Context, config *Config, logger *slog.Logger) (*Manager, error) {
 	m := &Manager{
-		config:        config,
-		logger:        logger,
-		uniqueUsers:   make(map[string]struct{}),
-		oauthUsers:    make(map[string]struct{}),
-		nonOAuthUsers: make(map[string]struct{}),
-		startTime:     time.Now(),
-		stopCh:        make(chan struct{}),
+		config:    config,
+		logger:    logger,
+		startTime: time.Now(),
+		stopCh:    make(chan struct{}),
 	}
 
 	// If disabled, return no-op manager
@@ -108,36 +102,26 @@ func NewManager(ctx context.Context, config *Config, logger *slog.Logger) (*Mana
 }
 
 // RecordOperation records a tool operation with its auth context
+// User tracking is done via structured logs for log-based metrics in Cloud Logging
 func (m *Manager) RecordOperation(authCtx *auth.AuthContext) {
 	if !m.isEnabled || authCtx == nil {
 		return // No-op if disabled or no auth context
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Increment operation count
 	m.operationCount++
+	m.mu.Unlock()
 
-	// Get user identifier based on auth mode
+	// Emit structured log for log-based metrics
+	// Cloud Logging can create metrics that count distinct user_id values
 	userID := m.getUserIdentifier(authCtx)
-	m.uniqueUsers[userID] = struct{}{}
+	authMode := authCtx.Mode.String()
 
-	// Track by auth type
-	switch authCtx.Mode {
-	case auth.AuthModeUIDOAuth:
-		if authCtx.UID != "" {
-			m.oauthUsers[authCtx.UID] = struct{}{}
-		}
-	case auth.AuthModeUIDKey:
-		if authCtx.UID != "" {
-			m.nonOAuthUsers["uid:"+authCtx.UID] = struct{}{}
-		}
-	case auth.AuthModeNormal:
-		if authCtx.OID != "" {
-			m.nonOAuthUsers["oid:"+authCtx.OID] = struct{}{}
-		}
-	}
+	m.logger.Info("mcp_operation",
+		"user_id", userID,
+		"auth_mode", authMode,
+		"instance_id", m.instanceID,
+	)
 }
 
 // getUserIdentifier returns a unique identifier for the user based on auth mode
@@ -186,6 +170,7 @@ func (m *Manager) reportLoop() {
 }
 
 // report sends current metrics to GCP Monitoring
+// Note: User counts are tracked via log-based metrics, not here
 func (m *Manager) report() {
 	if m.client == nil {
 		return
@@ -197,20 +182,15 @@ func (m *Manager) report() {
 
 	// Get current metric values
 	m.mu.RLock()
-	uniqueUsersCount := int64(len(m.uniqueUsers))
-	oauthUsersCount := int64(len(m.oauthUsers))
-	nonOAuthUsersCount := int64(len(m.nonOAuthUsers))
 	operationCount := m.operationCount
 	m.mu.RUnlock()
 
 	now := time.Now()
 	startTime := m.startTime
 
-	// Create time series for each metric
+	// Create time series for operations (cumulative counter)
+	// User metrics are tracked via log-based metrics in Cloud Logging
 	timeSeries := []*monitoringpb.TimeSeries{
-		m.createGaugeTimeSeries("unique_users", uniqueUsersCount, now),
-		m.createGaugeTimeSeries("oauth_users", oauthUsersCount, now),
-		m.createGaugeTimeSeries("non_oauth_users", nonOAuthUsersCount, now),
 		m.createCumulativeTimeSeries("operations", operationCount, startTime, now),
 	}
 
@@ -222,48 +202,12 @@ func (m *Manager) report() {
 	if err != nil {
 		m.logger.Warn("Failed to report metrics to GCP Monitoring",
 			"error", err,
-			"unique_users", uniqueUsersCount,
 			"operations", operationCount)
 		return
 	}
 
 	m.logger.Debug("Reported metrics to GCP Monitoring",
-		"unique_users", uniqueUsersCount,
-		"oauth_users", oauthUsersCount,
-		"non_oauth_users", nonOAuthUsersCount,
 		"operations", operationCount)
-}
-
-// createGaugeTimeSeries creates a gauge time series for a metric
-func (m *Manager) createGaugeTimeSeries(metricName string, value int64, endTime time.Time) *monitoringpb.TimeSeries {
-	return &monitoringpb.TimeSeries{
-		Metric: &metric.Metric{
-			Type: fmt.Sprintf("%s/%s", metricTypePrefix, metricName),
-			Labels: map[string]string{
-				"instance_id": m.instanceID,
-			},
-		},
-		Resource: &monitoredres.MonitoredResource{
-			Type: "global",
-			Labels: map[string]string{
-				"project_id": extractProjectID(m.projectPath),
-			},
-		},
-		MetricKind: metric.MetricDescriptor_GAUGE,
-		ValueType:  metric.MetricDescriptor_INT64,
-		Points: []*monitoringpb.Point{
-			{
-				Interval: &monitoringpb.TimeInterval{
-					EndTime: timestamppb.New(endTime),
-				},
-				Value: &monitoringpb.TypedValue{
-					Value: &monitoringpb.TypedValue_Int64Value{
-						Int64Value: value,
-					},
-				},
-			},
-		},
-	}
 }
 
 // createCumulativeTimeSeries creates a cumulative time series for a counter metric
