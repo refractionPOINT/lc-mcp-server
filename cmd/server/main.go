@@ -37,10 +37,21 @@ func main() {
 	}
 
 	// Setup logger with configured level
+	// Use JSON handler in Cloud Run for structured logging (log-based metrics)
 	level := config.ParseLogLevel(cfg.Server.LogLevel)
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: level,
-	}))
+	var handler slog.Handler
+	if os.Getenv("K_SERVICE") != "" {
+		// Cloud Run: use JSON for structured logging
+		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+			Level: level,
+		})
+	} else {
+		// Local development: use text for readability
+		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: level,
+		})
+	}
+	logger := slog.New(handler)
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {

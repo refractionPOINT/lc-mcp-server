@@ -42,6 +42,7 @@ func RegisterGetProcesses() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+			defer org.Close() // Ensure Spout is shut down when request completes
 
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
@@ -54,7 +55,7 @@ func RegisterGetProcesses() {
 
 			// Use SimpleRequest to get synchronous response
 			result, err := sensor.SimpleRequest("os_processes", lc.SimpleRequestOptions{
-				Timeout: 30 * time.Second,
+				Timeout: 10 * time.Minute,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to get processes: %v", err), nil
@@ -90,6 +91,7 @@ func RegisterGetNetworkConnections() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+			defer org.Close() // Ensure Spout is shut down when request completes
 
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
@@ -103,7 +105,7 @@ func RegisterGetNetworkConnections() {
 			// Use SimpleRequest to get synchronous response
 			// Python uses "netstat" command instead of "os_network_connections"
 			result, err := sensor.SimpleRequest("netstat", lc.SimpleRequestOptions{
-				Timeout: 30 * time.Second,
+				Timeout: 10 * time.Minute,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to get network connections: %v", err), nil
@@ -139,6 +141,7 @@ func RegisterGetOSVersion() {
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
+			defer org.Close() // Ensure Spout is shut down when request completes
 
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
@@ -151,7 +154,7 @@ func RegisterGetOSVersion() {
 
 			// Use SimpleRequest to get synchronous response
 			result, err := sensor.SimpleRequest("os_version", lc.SimpleRequestOptions{
-				Timeout: 30 * time.Second,
+				Timeout: 10 * time.Minute,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to get OS version: %v", err), nil

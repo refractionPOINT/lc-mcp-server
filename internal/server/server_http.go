@@ -9,15 +9,17 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
 	httpserver "github.com/refractionpoint/lc-mcp-go/internal/http"
+	"github.com/refractionpoint/lc-mcp-go/internal/metrics"
 )
 
 // HTTPServerWrapper handles HTTP mode MCP server with OAuth
 type HTTPServerWrapper struct {
-	httpServer *httpserver.Server
-	config     *config.Config
-	sdkCache   *auth.SDKCache
-	gcsManager *gcs.Manager
-	logger     *slog.Logger
+	httpServer     *httpserver.Server
+	config         *config.Config
+	sdkCache       *auth.SDKCache
+	gcsManager     *gcs.Manager
+	metricsManager *metrics.Manager
+	logger         *slog.Logger
 }
 
 // NewHTTPServer creates a new HTTP mode server with OAuth support
@@ -40,18 +42,27 @@ func NewHTTPServer(cfg *config.Config, logger *slog.Logger) (*HTTPServerWrapper,
 		logger.Info("GCS disabled, large results will be returned inline")
 	}
 
+	// Initialize metrics manager for GCP Monitoring
+	metricsConfig := metrics.LoadConfig()
+	metricsManager, err := metrics.NewManager(ctx, metricsConfig, logger)
+	if err != nil {
+		logger.Warn("Failed to initialize metrics manager", "error", err)
+		metricsManager = nil
+	}
+
 	// Create HTTP server for OAuth mode
-	httpSrv, err := httpserver.New(cfg, logger, sdkCache, gcsManager, cfg.Server.Profile)
+	httpSrv, err := httpserver.New(cfg, logger, sdkCache, gcsManager, metricsManager, cfg.Server.Profile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP server: %w", err)
 	}
 
 	s := &HTTPServerWrapper{
-		httpServer: httpSrv,
-		config:     cfg,
-		sdkCache:   sdkCache,
-		gcsManager: gcsManager,
-		logger:     logger,
+		httpServer:     httpSrv,
+		config:         cfg,
+		sdkCache:       sdkCache,
+		gcsManager:     gcsManager,
+		metricsManager: metricsManager,
+		logger:         logger,
 	}
 
 	logger.Info("HTTP server initialized",
@@ -81,6 +92,13 @@ func (s *HTTPServerWrapper) Close() error {
 	if s.gcsManager != nil {
 		if err := s.gcsManager.Close(); err != nil {
 			s.logger.Warn("Failed to close GCS manager", "error", err)
+		}
+	}
+
+	// Close metrics manager
+	if s.metricsManager != nil {
+		if err := s.metricsManager.Close(); err != nil {
+			s.logger.Warn("Failed to close metrics manager", "error", err)
 		}
 	}
 

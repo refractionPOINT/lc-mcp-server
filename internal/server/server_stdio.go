@@ -9,16 +9,18 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/config"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
+	"github.com/refractionpoint/lc-mcp-go/internal/metrics"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
 // STDIOServer handles STDIO mode MCP server
 type STDIOServer struct {
-	mcpServer  *server.MCPServer
-	config     *config.Config
-	sdkCache   *auth.SDKCache
-	gcsManager *gcs.Manager
-	logger     *slog.Logger
+	mcpServer      *server.MCPServer
+	config         *config.Config
+	sdkCache       *auth.SDKCache
+	gcsManager     *gcs.Manager
+	metricsManager *metrics.Manager
+	logger         *slog.Logger
 }
 
 // NewSTDIOServer creates a new STDIO mode server
@@ -41,6 +43,14 @@ func NewSTDIOServer(cfg *config.Config, logger *slog.Logger) (*STDIOServer, erro
 		logger.Info("GCS disabled, large results will be returned inline")
 	}
 
+	// Initialize metrics manager for GCP Monitoring
+	metricsConfig := metrics.LoadConfig()
+	metricsManager, err := metrics.NewManager(ctx, metricsConfig, logger)
+	if err != nil {
+		logger.Warn("Failed to initialize metrics manager", "error", err)
+		metricsManager = nil
+	}
+
 	// For STDIO mode, profile must come from config (no URLs)
 	// Default to "all" if not explicitly set
 	if cfg.Server.Profile == "" {
@@ -57,11 +67,12 @@ func NewSTDIOServer(cfg *config.Config, logger *slog.Logger) (*STDIOServer, erro
 	)
 
 	s := &STDIOServer{
-		mcpServer:  mcpServer,
-		config:     cfg,
-		sdkCache:   sdkCache,
-		gcsManager: gcsManager,
-		logger:     logger,
+		mcpServer:      mcpServer,
+		config:         cfg,
+		sdkCache:       sdkCache,
+		gcsManager:     gcsManager,
+		metricsManager: metricsManager,
+		logger:         logger,
 	}
 
 	// Register tools for the selected profile
@@ -91,19 +102,31 @@ func (s *STDIOServer) registerTools() error {
 
 // Serve starts the STDIO server
 func (s *STDIOServer) Serve(ctx context.Context) error {
-	// Create context with auth for all requests (for STDIO mode)
-	ctx = auth.WithAuthContext(ctx, s.config.Auth)
+	s.logger.Info("Starting STDIO server")
 
-	// Store SDK cache in context for tool handlers (using typed key)
-	ctx = auth.WithSDKCache(ctx, s.sdkCache)
+	// Use WithStdioContextFunc to inject our context values into every request
+	// This is the correct way to pass auth, SDK cache, GCS, and metrics to tool handlers
+	contextFunc := func(reqCtx context.Context) context.Context {
+		// Add auth context for all requests
+		reqCtx = auth.WithAuthContext(reqCtx, s.config.Auth)
 
-	// Store GCS manager in context for tool handlers
-	if s.gcsManager != nil {
-		ctx = gcs.WithGCSManager(ctx, s.gcsManager)
+		// Add SDK cache
+		reqCtx = auth.WithSDKCache(reqCtx, s.sdkCache)
+
+		// Add GCS manager if available
+		if s.gcsManager != nil {
+			reqCtx = gcs.WithGCSManager(reqCtx, s.gcsManager)
+		}
+
+		// Add metrics manager if available
+		if s.metricsManager != nil {
+			reqCtx = metrics.WithManager(reqCtx, s.metricsManager)
+		}
+
+		return reqCtx
 	}
 
-	s.logger.Info("Starting STDIO server")
-	return server.ServeStdio(s.mcpServer)
+	return server.ServeStdio(s.mcpServer, server.WithStdioContextFunc(contextFunc))
 }
 
 // Close gracefully shuts down the STDIO server and releases resources
@@ -119,6 +142,13 @@ func (s *STDIOServer) Close() error {
 	if s.gcsManager != nil {
 		if err := s.gcsManager.Close(); err != nil {
 			s.logger.Warn("Failed to close GCS manager", "error", err)
+		}
+	}
+
+	// Close metrics manager
+	if s.metricsManager != nil {
+		if err := s.metricsManager.Close(); err != nil {
+			s.logger.Warn("Failed to close metrics manager", "error", err)
 		}
 	}
 

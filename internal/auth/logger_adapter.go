@@ -36,9 +36,9 @@ func (l *LCLoggerSlog) Warn(msg string) {
 	l.logger.Warn("[SDK] " + msg)
 }
 
-// Info logs at info level
+// Info logs at debug level to reduce noise from SDK connection lifecycle events
 func (l *LCLoggerSlog) Info(msg string) {
-	l.logger.Info("[SDK] " + msg)
+	l.logger.Debug("[SDK] " + msg)
 }
 
 // Debug logs at debug level
