@@ -175,8 +175,8 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		}
 		isJWTPassthrough = false
 		s.logger.Debug("Authenticated via org header credentials", "request_id", requestID, "oid", lcOID)
-	} else if s.serverAuthCtx != nil {
-		// No Bearer token - use server-wide credentials
+	} else if s.serverAuthCtx != nil && s.serverAuthCtx.HasCredentials() {
+		// No Bearer token - use server-wide credentials (only if they have actual credentials)
 		authCtx = s.serverAuthCtx
 		isJWTPassthrough = false // Server credentials are not JWT passthrough
 		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", authCtx.UID, "mode", authCtx.Mode.String())
