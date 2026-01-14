@@ -127,6 +127,11 @@ func RegisterRunLCQLQuery() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
+			// Validate the LCQL query before executing
+			if valid, errMsg := tools.ValidateLCQLQuery(org, query); !valid {
+				return tools.ErrorResultf("invalid LCQL query: %s", errMsg), nil
+			}
+
 			// Create query request with cursor-based pagination
 			queryReq := lc.QueryRequest{
 				Query:  query,
@@ -242,6 +247,11 @@ func RegisterRunLCQLQueryFree() {
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Validate the LCQL query before executing
+			if valid, errMsg := tools.ValidateLCQLQuery(org, preparedQuery); !valid {
+				return tools.ErrorResultf("invalid LCQL query: %s", errMsg), nil
 			}
 
 			// Create query request with cursor-based pagination
