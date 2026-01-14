@@ -56,6 +56,9 @@ var ProfileDefinitions = map[string][]string{
 	},
 	"historical_data": {
 		"run_lcql_query",
+		"validate_lcql_query",
+		"estimate_lcql_query",
+		"analyze_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
 		"search_iocs",
@@ -79,6 +82,9 @@ var ProfileDefinitions = map[string][]string{
 	"historical_data_readonly": {
 		// Same as historical_data but conceptually read-only
 		"run_lcql_query",
+		"validate_lcql_query",
+		"estimate_lcql_query",
+		"analyze_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
 		"search_iocs",

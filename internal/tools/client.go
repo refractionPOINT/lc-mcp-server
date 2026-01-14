@@ -104,6 +104,7 @@ type OrganizationClient interface {
 	HistoricalDetections(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
 	InsightObjects(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
 	InsightObjectsBatch(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
+	ValidateLCQLQuery(query string) (*lc.ValidationResponse, error)
 
 	// Artifacts
 	ExportArtifact(artifactID string, deadline time.Time) (io.ReadCloser, error)

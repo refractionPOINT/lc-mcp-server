@@ -54,6 +54,7 @@ type MockOrganization struct {
 	HistoricalDetectionsFunc func(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
 	InsightObjectsFunc       func(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
 	InsightObjectsBatchFunc  func(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
+	ValidateLCQLQueryFunc    func(query string) (*lc.ValidationResponse, error)
 
 	// Artifacts
 	ExportArtifactFunc func(artifactID string, deadline time.Time) (io.ReadCloser, error)
@@ -321,6 +322,13 @@ func (m *MockOrganization) InsightObjectsBatch(insightReq lc.InsightObjectsBatch
 		return m.InsightObjectsBatchFunc(insightReq)
 	}
 	return lc.InsightObjectBatchResponse{}, nil
+}
+
+func (m *MockOrganization) ValidateLCQLQuery(query string) (*lc.ValidationResponse, error) {
+	if m.ValidateLCQLQueryFunc != nil {
+		return m.ValidateLCQLQueryFunc(query)
+	}
+	return &lc.ValidationResponse{}, nil
 }
 
 // Artifacts

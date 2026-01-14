@@ -18,6 +18,9 @@ func init() {
 	// Register historical data tools
 	RegisterRunLCQLQuery()
 	RegisterRunLCQLQueryFree()
+	RegisterValidateLCQLQuery()
+	RegisterEstimateLCQLQuery()
+	RegisterAnalyzeLCQLQuery()
 	RegisterGetHistoricDetections()
 	RegisterGetDetection()
 	RegisterSearchIOCs()
@@ -125,6 +128,11 @@ func RegisterRunLCQLQuery() {
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Validate the LCQL query before executing
+			if valid, errMsg := tools.ValidateLCQLQuery(org, query); !valid {
+				return tools.ErrorResultf("invalid LCQL query: %s", errMsg), nil
 			}
 
 			// Create query request with cursor-based pagination
@@ -244,6 +252,11 @@ func RegisterRunLCQLQueryFree() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
+			// Validate the LCQL query before executing
+			if valid, errMsg := tools.ValidateLCQLQuery(org, preparedQuery); !valid {
+				return tools.ErrorResultf("invalid LCQL query: %s", errMsg), nil
+			}
+
 			// Create query request with cursor-based pagination
 			queryReq := lc.QueryRequest{
 				Query:  preparedQuery,
@@ -301,6 +314,144 @@ func RegisterRunLCQLQueryFree() {
 			response := map[string]interface{}{
 				"results":  results,
 				"has_more": hasMore,
+			}
+
+			return tools.SuccessResult(response), nil
+		},
+	})
+}
+
+// RegisterValidateLCQLQuery registers the validate_lcql_query tool.
+// This tool validates LCQL query syntax without executing the query.
+func RegisterValidateLCQLQuery() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "validate_lcql_query",
+		Description: "Validate an LCQL query syntax without executing it",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("validate_lcql_query",
+			mcp.WithDescription("Validate an LCQL (LimaCharlie Query Language) query syntax without executing it. Returns whether the query is valid and any syntax errors. Use analyze_lcql_query if you also need resource estimates."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("The LCQL query to validate")),
+		),
+		Handler: func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+			// Extract query
+			query, ok := args["query"].(string)
+			if !ok || query == "" {
+				return tools.ErrorResult("query parameter is required"), nil
+			}
+
+			// Get organization client (supports both real and mock implementations)
+			org, err := tools.GetOrganizationClient(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Validate the LCQL query
+			valid, errMsg := tools.ValidateLCQLQuery(org, query)
+
+			response := map[string]any{
+				"valid": valid,
+				"query": query,
+			}
+
+			if !valid {
+				response["error"] = errMsg
+			}
+
+			return tools.SuccessResult(response), nil
+		},
+	})
+}
+
+// RegisterEstimateLCQLQuery registers the estimate_lcql_query tool.
+// This tool returns resource estimates for an LCQL query without executing it.
+func RegisterEstimateLCQLQuery() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "estimate_lcql_query",
+		Description: "Get resource estimates for an LCQL query without executing it",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("estimate_lcql_query",
+			mcp.WithDescription("Get resource estimates for an LCQL (LimaCharlie Query Language) query without executing it. Returns estimated number of events, evaluations, and processing time. Use this to understand query cost before running."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("The LCQL query to estimate")),
+		),
+		Handler: func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+			// Extract query
+			query, ok := args["query"].(string)
+			if !ok || query == "" {
+				return tools.ErrorResult("query parameter is required"), nil
+			}
+
+			// Get organization client (supports both real and mock implementations)
+			org, err := tools.GetOrganizationClient(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Get full validation result including estimates
+			result := tools.ValidateLCQLQueryFull(org, query)
+
+			// Return error if query is invalid
+			if !result.Valid {
+				return tools.ErrorResultf("invalid query: %s", result.Error), nil
+			}
+
+			response := map[string]any{
+				"query":      query,
+				"num_evals":  result.NumEvals,
+				"num_events": result.NumEvents,
+				"eval_time":  result.EvalTime,
+			}
+
+			return tools.SuccessResult(response), nil
+		},
+	})
+}
+
+// RegisterAnalyzeLCQLQuery registers the analyze_lcql_query tool.
+// This tool validates and estimates an LCQL query without executing it.
+func RegisterAnalyzeLCQLQuery() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "analyze_lcql_query",
+		Description: "Validate and estimate an LCQL query without executing it",
+		Profile:     "historical_data",
+		RequiresOID: true,
+		Schema: mcp.NewTool("analyze_lcql_query",
+			mcp.WithDescription("Analyze an LCQL (LimaCharlie Query Language) query without executing it. Returns both validation status and resource estimates (number of events, evaluations, processing time). Use this for complete query analysis before running."),
+			mcp.WithString("query",
+				mcp.Required(),
+				mcp.Description("The LCQL query to analyze")),
+		),
+		Handler: func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+			// Extract query
+			query, ok := args["query"].(string)
+			if !ok || query == "" {
+				return tools.ErrorResult("query parameter is required"), nil
+			}
+
+			// Get organization client (supports both real and mock implementations)
+			org, err := tools.GetOrganizationClient(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			// Get full validation result including estimates
+			result := tools.ValidateLCQLQueryFull(org, query)
+
+			response := map[string]any{
+				"query":      query,
+				"valid":      result.Valid,
+				"num_evals":  result.NumEvals,
+				"num_events": result.NumEvents,
+				"eval_time":  result.EvalTime,
+			}
+
+			if !result.Valid {
+				response["error"] = result.Error
 			}
 
 			return tools.SuccessResult(response), nil
