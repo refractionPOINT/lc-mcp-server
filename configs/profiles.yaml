@@ -15,6 +15,7 @@ core:
 historical_data:
   # Core historical data queries
   - run_lcql_query
+  - run_lcql_query_free
   - get_historic_events
   - get_historic_detections
   - get_detection
@@ -40,6 +41,7 @@ historical_data_readonly:
   # Same as historical_data but conceptually read-only
   # Core historical data queries
   - run_lcql_query
+  - run_lcql_query_free
   - get_historic_events
   - get_historic_detections
   - get_detection
