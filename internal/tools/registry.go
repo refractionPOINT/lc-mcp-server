@@ -286,6 +286,19 @@ func GetTool(name string) (*ToolRegistration, bool) {
 	return tool, ok
 }
 
+// GetAllRegisteredToolNames returns a list of all tool names currently registered.
+// This is useful for testing and validation purposes.
+//
+// Returns:
+//   - []string: List of all registered tool names
+func GetAllRegisteredToolNames() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	return names
+}
+
 // GetToolsForProfile returns all tool names for a given profile
 func GetToolsForProfile(profile string) []string {
 	if profile == "all" {
