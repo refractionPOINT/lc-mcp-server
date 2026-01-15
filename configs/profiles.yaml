@@ -10,10 +10,14 @@ core:
   - is_online
   - search_hosts
   - list_sensor_tags
+  - who_am_i
 
 historical_data:
   # Core historical data queries
   - run_lcql_query
+  - validate_lcql_query
+  - estimate_lcql_query
+  - analyze_lcql_query
   - get_historic_events
   - get_historic_detections
   - get_detection
@@ -39,6 +43,9 @@ historical_data_readonly:
   # Same as historical_data but conceptually read-only
   # Core historical data queries
   - run_lcql_query
+  - validate_lcql_query
+  - estimate_lcql_query
+  - analyze_lcql_query
   - get_historic_events
   - get_historic_detections
   - get_detection
@@ -81,6 +88,10 @@ live_investigation:
   - find_strings
   - dir_list
   - dir_find_hash
+  # Velociraptor DFIR
+  - list_velociraptor_artifacts
+  - show_velociraptor_artifact
+  - collect_velociraptor_artifact
   # Artifacts
   - list_artifacts
   - get_artifact
@@ -109,6 +120,8 @@ fleet_management:
   - get_cloud_sensor
   - set_cloud_sensor
   - delete_cloud_sensor
+  # Organization URLs
+  - get_org_urls
   # Platform info
   - get_platform_names
   - list_with_platform

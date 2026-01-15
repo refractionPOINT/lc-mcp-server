@@ -1,6 +1,8 @@
 package tools_test
 
 import (
+	"path/filepath"
+	"runtime"
 	"sort"
 	"testing"
 
@@ -151,3 +153,92 @@ func TestRegisteredToolsHaveValidMetadata(t *testing.T) {
 		})
 	}
 }
+
+// getProjectRoot returns the project root directory by traversing up from the test file.
+//
+// Returns:
+//   - string: absolute path to the project root directory
+func getProjectRoot() string {
+	_, filename, _, _ := runtime.Caller(0)
+	// registry_test.go is in internal/tools/, so go up 3 levels to reach project root
+	return filepath.Join(filepath.Dir(filename), "..", "..")
+}
+
+// TestProfileDefinitionsMatchYAML verifies that the hardcoded ProfileDefinitions
+// in registry.go matches the contents of configs/profiles.yaml. This ensures
+// the fallback definitions stay in sync with the YAML configuration file.
+func TestProfileDefinitionsMatchYAML(t *testing.T) {
+	projectRoot := getProjectRoot()
+	yamlPath := filepath.Join(projectRoot, "configs", "profiles.yaml")
+
+	yamlProfiles, err := tools.LoadProfiles(yamlPath)
+	if err != nil {
+		t.Fatalf("failed to load profiles.yaml: %v", err)
+	}
+
+	// Get the hardcoded definitions (before init() potentially overwrites them)
+	// Since init() may have already loaded from YAML, we need to compare what's
+	// currently in ProfileDefinitions with what's in the YAML file
+	codeProfiles := tools.ProfileDefinitions
+
+	t.Run("same profile names", func(t *testing.T) {
+		// Check for profiles in YAML but not in code
+		for profile := range yamlProfiles {
+			if _, exists := codeProfiles[profile]; !exists {
+				t.Errorf("profile %q exists in profiles.yaml but not in hardcoded ProfileDefinitions", profile)
+			}
+		}
+
+		// Check for profiles in code but not in YAML
+		for profile := range codeProfiles {
+			if _, exists := yamlProfiles[profile]; !exists {
+				t.Errorf("profile %q exists in hardcoded ProfileDefinitions but not in profiles.yaml", profile)
+			}
+		}
+	})
+
+	t.Run("same tools in each profile", func(t *testing.T) {
+		for profile, yamlTools := range yamlProfiles {
+			codeTools, exists := codeProfiles[profile]
+			if !exists {
+				continue // Already reported in previous subtest
+			}
+
+			// Build sets for comparison
+			yamlSet := make(map[string]bool)
+			for _, tool := range yamlTools {
+				yamlSet[tool] = true
+			}
+
+			codeSet := make(map[string]bool)
+			for _, tool := range codeTools {
+				codeSet[tool] = true
+			}
+
+			// Check for tools in YAML but not in code
+			var missingInCode []string
+			for tool := range yamlSet {
+				if !codeSet[tool] {
+					missingInCode = append(missingInCode, tool)
+				}
+			}
+			if len(missingInCode) > 0 {
+				sort.Strings(missingInCode)
+				t.Errorf("profile %q: tools in profiles.yaml but not in hardcoded ProfileDefinitions: %v", profile, missingInCode)
+			}
+
+			// Check for tools in code but not in YAML
+			var missingInYAML []string
+			for tool := range codeSet {
+				if !yamlSet[tool] {
+					missingInYAML = append(missingInYAML, tool)
+				}
+			}
+			if len(missingInYAML) > 0 {
+				sort.Strings(missingInYAML)
+				t.Errorf("profile %q: tools in hardcoded ProfileDefinitions but not in profiles.yaml: %v", profile, missingInYAML)
+			}
+		}
+	})
+}
+

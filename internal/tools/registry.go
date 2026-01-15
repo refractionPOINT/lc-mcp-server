@@ -61,6 +61,7 @@ var ProfileDefinitions = map[string][]string{
 		"analyze_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
+		"get_detection",
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
@@ -87,6 +88,7 @@ var ProfileDefinitions = map[string][]string{
 		"analyze_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
+		"get_detection",
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
@@ -157,6 +159,7 @@ var ProfileDefinitions = map[string][]string{
 	"detection_engineering": {
 		"get_detection_rules",
 		"get_historic_detections",
+		"get_detection",
 		// D&R General Rules
 		"list_dr_general_rules",
 		"get_dr_general_rule",
@@ -251,6 +254,16 @@ var ProfileDefinitions = map[string][]string{
 		"create_payload",
 		"get_payload",
 		"delete_payload",
+		// Org Notes
+		"list_org_notes",
+		"get_org_note",
+		"set_org_note",
+		"delete_org_note",
+		// SOPs (Standard Operating Procedures)
+		"list_sops",
+		"get_sop",
+		"set_sop",
+		"delete_sop",
 	},
 	"ai_powered": {
 		// AI-powered generation tools (to be implemented)
