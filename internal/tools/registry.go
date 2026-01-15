@@ -58,6 +58,7 @@ var ProfileDefinitions = map[string][]string{
 		"run_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
+		"get_detection",
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
@@ -81,6 +82,7 @@ var ProfileDefinitions = map[string][]string{
 		"run_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
+		"get_detection",
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
@@ -151,6 +153,7 @@ var ProfileDefinitions = map[string][]string{
 	"detection_engineering": {
 		"get_detection_rules",
 		"get_historic_detections",
+		"get_detection",
 		// D&R General Rules
 		"list_dr_general_rules",
 		"get_dr_general_rule",
@@ -245,6 +248,16 @@ var ProfileDefinitions = map[string][]string{
 		"create_payload",
 		"get_payload",
 		"delete_payload",
+		// Org Notes
+		"list_org_notes",
+		"get_org_note",
+		"set_org_note",
+		"delete_org_note",
+		// SOPs (Standard Operating Procedures)
+		"list_sops",
+		"get_sop",
+		"set_sop",
+		"delete_sop",
 	},
 	"ai_powered": {
 		// AI-powered generation tools (to be implemented)
@@ -278,6 +291,19 @@ func RegisterTool(reg *ToolRegistration) {
 func GetTool(name string) (*ToolRegistration, bool) {
 	tool, ok := registry[name]
 	return tool, ok
+}
+
+// GetAllRegisteredToolNames returns a list of all tool names currently registered.
+// This is useful for testing and validation purposes.
+//
+// Returns:
+//   - []string: List of all registered tool names
+func GetAllRegisteredToolNames() []string {
+	names := make([]string, 0, len(registry))
+	for name := range registry {
+		names = append(names, name)
+	}
+	return names
 }
 
 // GetToolsForProfile returns all tool names for a given profile
