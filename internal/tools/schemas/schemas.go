@@ -228,7 +228,7 @@ func RegisterGetPlatformNames() {
 		Name:        "get_platform_names",
 		Description: "Get the platform names ontology from LimaCharlie",
 		Profile:     "event_schemas",
-		RequiresOID: true,
+		RequiresOID: false, // /ontology endpoint does not require OID or authentication
 		Schema: mcp.NewTool("get_platform_names",
 			mcp.WithDescription("Get the platform names ontology from LimaCharlie (does not mean the tenant has sensors for these platforms)"),
 		),
