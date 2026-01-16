@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -31,10 +30,11 @@ func init() {
 	RegisterGetAtomChildren()
 }
 
-// relativeTimeframePattern matches LCQL relative timeframe patterns like -24h, -30m
-// Note: LCQL uses Go's duration parser which only supports h (hours) and m (minutes),
-// not d (days). Use hours for day-equivalent timeframes (e.g., -720h for 30 days).
-var relativeTimeframePattern = regexp.MustCompile(`^-(\d+)([mh])\s*\|`)
+// relativeTimeframePattern matches LCQL relative timeframe patterns like -24h, -30m, -1h30m
+// Uses Go's time.ParseDuration format which supports: ns, us (µs), ms, s, m, h.
+// Note: days (d) are not supported - use hours instead (e.g., -720h for 30 days).
+// Supports mixed units like "-1h30m" or "-90s".
+var relativeTimeframePattern = regexp.MustCompile(`^-([^\s|]+)\s*\|`)
 
 // absoluteDateRangePattern matches LCQL absolute date range patterns like "2025-01-01 to 2025-01-15"
 // The dates must be in YYYY-MM-DD format.
@@ -50,7 +50,7 @@ const (
 )
 
 // parseTimeframe extracts and validates a timeframe from an LCQL query.
-// LCQL supports both relative timeframes (-24h, -720h) and absolute date ranges
+// LCQL supports both relative timeframes (-24h, -720h, -1h30m) and absolute date ranges
 // (2025-01-01 to 2025-01-15).
 //
 // Parameters:
@@ -63,25 +63,22 @@ const (
 func parseTimeframe(query string) (timeframeType, float64, error) {
 	query = strings.TrimSpace(query)
 
-	// Check for relative timeframe first (-24h, -720h, etc.)
+	// Check for relative timeframe first (-24h, -720h, -1h30m, etc.)
 	relMatches := relativeTimeframePattern.FindStringSubmatch(query)
 	if len(relMatches) > 0 {
-		value, err := strconv.ParseFloat(relMatches[1], 64)
+		durationStr := relMatches[1]
+
+		// Use Go's time.ParseDuration to parse the duration string.
+		// Supports: ns, us (µs), ms, s, m, h and combinations like "1h30m".
+		duration, err := time.ParseDuration(durationStr)
 		if err != nil {
-			return timeframeNone, 0, fmt.Errorf("invalid relative timeframe value: %v", err)
+			// Not a valid Go duration - treat as no timeframe (could be something
+			// like "-30d" which is not supported by Go's duration parser)
+			return timeframeNone, 0, nil
 		}
 
-		unit := relMatches[2]
-		var days float64
-
-		switch unit {
-		case "m": // minutes
-			days = value / (60 * 24)
-		case "h": // hours
-			days = value / 24
-		default:
-			return timeframeNone, 0, fmt.Errorf("unsupported timeframe unit: %s (LCQL only supports 'h' for hours and 'm' for minutes)", unit)
-		}
+		// Convert duration to days for limit checking
+		days := duration.Hours() / 24
 
 		return timeframeRelative, days, nil
 	}

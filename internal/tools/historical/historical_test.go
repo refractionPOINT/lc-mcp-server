@@ -95,6 +95,64 @@ func TestParseTimeframe(t *testing.T) {
 		}
 	})
 
+	t.Run("90 seconds", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("-90s | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
+		}
+		expectedDays := 90.0 / (60 * 60 * 24) // 90 seconds in days
+		if !floatEquals(gotDays, expectedDays, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want %v", gotDays, expectedDays)
+		}
+	})
+
+	t.Run("mixed duration 1h30m", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("-1h30m | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
+		}
+		expectedDays := 1.5 / 24 // 1.5 hours in days
+		if !floatEquals(gotDays, expectedDays, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want %v", gotDays, expectedDays)
+		}
+	})
+
+	t.Run("mixed duration 2h30m15s", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("-2h30m15s | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
+		}
+		// 2h30m15s = 2.5 hours + 15 seconds = 2.504166... hours
+		expectedHours := 2.0 + 30.0/60.0 + 15.0/3600.0
+		expectedDays := expectedHours / 24
+		if !floatEquals(gotDays, expectedDays, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want %v", gotDays, expectedDays)
+		}
+	})
+
+	t.Run("milliseconds 500ms", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("-500ms | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
+		}
+		expectedDays := 0.5 / (1000 * 60 * 60 * 24) // 500ms in days
+		if !floatEquals(gotDays, expectedDays, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want %v", gotDays, expectedDays)
+		}
+	})
+
 	t.Run("1440 hours (60 days)", func(t *testing.T) {
 		gotType, gotDays, err := parseTimeframe("-1440h | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
@@ -257,6 +315,47 @@ func TestValidateAndPrepareQuery(t *testing.T) {
 		want := "-720h | -30d | plat == windows | * | event/* contains 'psexec'"
 		if got != want {
 			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("90 seconds - allowed", func(t *testing.T) {
+		query := "-90s | plat == windows | * | event/* contains 'psexec'"
+		got, err := validateAndPrepareQuery(query)
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("mixed duration 1h30m - allowed", func(t *testing.T) {
+		query := "-1h30m | plat == windows | * | event/* contains 'psexec'"
+		got, err := validateAndPrepareQuery(query)
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("mixed duration 2h30m15s - allowed", func(t *testing.T) {
+		query := "-2h30m15s | plat == windows | * | event/* contains 'psexec'"
+		got, err := validateAndPrepareQuery(query)
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("mixed duration exceeding 30 days - rejected", func(t *testing.T) {
+		// 31 days = 744 hours = 744h or equivalent mixed format
+		_, err := validateAndPrepareQuery("-744h30m | plat == windows | * | event/* contains 'psexec'")
+		if err == nil {
+			t.Error("validateAndPrepareQuery() expected error for >30 days timeframe")
 		}
 	})
 }
