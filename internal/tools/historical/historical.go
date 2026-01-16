@@ -30,11 +30,21 @@ func init() {
 	RegisterGetAtomChildren()
 }
 
-// timeframePattern matches LCQL timeframe patterns like -30d, -24h, -30m
-var timeframePattern = regexp.MustCompile(`^-(\d+)([mhd])\s*\|?`)
+// timeframePattern matches LCQL timeframe patterns like -24h, -30m
+// Note: LCQL uses Go's duration parser which only supports h (hours) and m (minutes),
+// not d (days). Use hours for day-equivalent timeframes (e.g., -720h for 30 days).
+var timeframePattern = regexp.MustCompile(`^-(\d+)([mh])\s*\|?`)
 
-// parseTimeframe extracts and validates a timeframe from an LCQL query
-// Returns: hasTimeframe, daysEquivalent, error
+// parseTimeframe extracts and validates a timeframe from an LCQL query.
+// LCQL only supports hours (h) and minutes (m) - not days.
+//
+// Parameters:
+//   - query: The LCQL query string to parse
+//
+// Returns:
+//   - hasTimeframe: true if a valid timeframe was found
+//   - daysEquivalent: the timeframe converted to days for limit checking
+//   - error: error if parsing fails
 func parseTimeframe(query string) (bool, float64, error) {
 	query = strings.TrimSpace(query)
 	matches := timeframePattern.FindStringSubmatch(query)
@@ -55,16 +65,22 @@ func parseTimeframe(query string) (bool, float64, error) {
 		days = value / (60 * 24)
 	case "h": // hours
 		days = value / 24
-	case "d": // days
-		days = value
 	default:
-		return false, 0, fmt.Errorf("unsupported timeframe unit: %s", unit)
+		return false, 0, fmt.Errorf("unsupported timeframe unit: %s (LCQL only supports 'h' for hours and 'm' for minutes)", unit)
 	}
 
 	return true, days, nil
 }
 
-// validateAndPrepareQuery validates the timeframe is within 30 days and prepares the query
+// validateAndPrepareQuery validates the timeframe is within 30 days and prepares the query.
+// LCQL only supports hours (h) and minutes (m), so 30 days = 720 hours.
+//
+// Parameters:
+//   - query: The LCQL query string to validate and prepare
+//
+// Returns:
+//   - string: The prepared query with timeframe
+//   - error: Error if validation fails
 func validateAndPrepareQuery(query string) (string, error) {
 	hasTimeframe, days, err := parseTimeframe(query)
 	if err != nil {
@@ -79,8 +95,8 @@ func validateAndPrepareQuery(query string) (string, error) {
 		return query, nil
 	}
 
-	// No timeframe, prepend -30d
-	return "-30d | " + query, nil
+	// No timeframe, prepend -720h (30 days in hours, since LCQL doesn't support 'd')
+	return "-720h | " + query, nil
 }
 
 // RegisterRunLCQLQuery registers the run_lcql_query tool
@@ -207,10 +223,10 @@ func RegisterRunLCQLQueryFree() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("run_lcql_query_free",
-			mcp.WithDescription("Run a LimaCharlie Query Language (LCQL) query limited to the last 30 days (free tier). Automatically adds '-30d' timeframe if not specified. If a timeframe is provided, it must be <= 30 days."),
+			mcp.WithDescription("Run a LimaCharlie Query Language (LCQL) query limited to the last 30 days (free tier). Automatically adds '-720h' (30 days) timeframe if not specified. If a timeframe is provided, it must be <= 30 days (720 hours). Note: LCQL uses hours (h) and minutes (m), not days."),
 			mcp.WithString("query",
 				mcp.Required(),
-				mcp.Description("The LCQL query to run (without timeframe, or with timeframe <= 30 days)")),
+				mcp.Description("The LCQL query to run (without timeframe, or with timeframe <= 720h/30 days)")),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
 			mcp.WithString("stream",

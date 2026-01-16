@@ -14,159 +14,203 @@ import (
 )
 
 func TestParseTimeframe(t *testing.T) {
-	tests := []struct {
-		name     string
-		query    string
-		wantHas  bool
-		wantDays float64
-		wantErr  bool
-	}{
-		{
-			name:     "No timeframe",
-			query:    "plat == windows | * | event/* contains 'psexec'",
-			wantHas:  false,
-			wantDays: 0,
-			wantErr:  false,
-		},
-		{
-			name:     "30 days",
-			query:    "-30d | plat == windows | * | event/* contains 'psexec'",
-			wantHas:  true,
-			wantDays: 30,
-			wantErr:  false,
-		},
-		{
-			name:     "7 days",
-			query:    "-7d | plat == windows | * | event/* contains 'psexec'",
-			wantHas:  true,
-			wantDays: 7,
-			wantErr:  false,
-		},
-		{
-			name:     "24 hours",
-			query:    "-24h | plat == windows | * | event/* contains 'psexec'",
-			wantHas:  true,
-			wantDays: 1,
-			wantErr:  false,
-		},
-		{
-			name:     "48 hours",
-			query:    "-48h | plat == windows | * | event/* contains 'psexec'",
-			wantHas:  true,
-			wantDays: 2,
-			wantErr:  false,
-		},
-		{
-			name:     "30 minutes",
-			query:    "-30m | plat == windows | * | event/* contains 'psexec'",
-			wantHas:  true,
-			wantDays: 30.0 / (60 * 24), // 0.0208333...
-			wantErr:  false,
-		},
-		{
-			name:     "60 days",
-			query:    "-60d | plat == windows | * | event/* contains 'psexec'",
-			wantHas:  true,
-			wantDays: 60,
-			wantErr:  false,
-		},
-		{
-			name:     "Timeframe without pipe",
-			query:    "-7d plat == windows | * | event/* contains 'psexec'",
-			wantHas:  true,
-			wantDays: 7,
-			wantErr:  false,
-		},
-	}
+	// LCQL only supports hours (h) and minutes (m), not days (d)
+	t.Run("no timeframe", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != false {
+			t.Errorf("parseTimeframe() gotHas = %v, want false", gotHas)
+		}
+		if gotDays != 0 {
+			t.Errorf("parseTimeframe() gotDays = %v, want 0", gotDays)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotHas, gotDays, err := parseTimeframe(tt.query)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parseTimeframe() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if gotHas != tt.wantHas {
-				t.Errorf("parseTimeframe() gotHas = %v, want %v", gotHas, tt.wantHas)
-			}
-			// For days comparison, use a small epsilon for floating point comparison
-			epsilon := 0.0001
-			if gotHas && !floatEquals(gotDays, tt.wantDays, epsilon) {
-				t.Errorf("parseTimeframe() gotDays = %v, want %v", gotDays, tt.wantDays)
-			}
-		})
-	}
+	t.Run("720 hours (30 days)", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("-720h | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != true {
+			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		}
+		if !floatEquals(gotDays, 30, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 30", gotDays)
+		}
+	})
+
+	t.Run("168 hours (7 days)", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("-168h | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != true {
+			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		}
+		if !floatEquals(gotDays, 7, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 7", gotDays)
+		}
+	})
+
+	t.Run("24 hours (1 day)", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("-24h | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != true {
+			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		}
+		if !floatEquals(gotDays, 1, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 1", gotDays)
+		}
+	})
+
+	t.Run("48 hours (2 days)", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("-48h | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != true {
+			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		}
+		if !floatEquals(gotDays, 2, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 2", gotDays)
+		}
+	})
+
+	t.Run("30 minutes", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("-30m | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != true {
+			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		}
+		expectedDays := 30.0 / (60 * 24) // 0.0208333...
+		if !floatEquals(gotDays, expectedDays, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want %v", gotDays, expectedDays)
+		}
+	})
+
+	t.Run("1440 hours (60 days)", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("-1440h | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != true {
+			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		}
+		if !floatEquals(gotDays, 60, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 60", gotDays)
+		}
+	})
+
+	t.Run("timeframe without pipe separator", func(t *testing.T) {
+		gotHas, gotDays, err := parseTimeframe("-168h plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != true {
+			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		}
+		if !floatEquals(gotDays, 7, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 7", gotDays)
+		}
+	})
+
+	t.Run("days suffix not supported - treated as no timeframe", func(t *testing.T) {
+		// LCQL doesn't support 'd' suffix, so it should not match
+		gotHas, _, err := parseTimeframe("-30d | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotHas != false {
+			t.Errorf("parseTimeframe() gotHas = %v, want false (d suffix not supported)", gotHas)
+		}
+	})
 }
 
 func TestValidateAndPrepareQuery(t *testing.T) {
-	tests := []struct {
-		name    string
-		query   string
-		want    string
-		wantErr bool
-	}{
-		{
-			name:    "No timeframe - adds -30d",
-			query:   "plat == windows | * | event/* contains 'psexec'",
-			want:    "-30d | plat == windows | * | event/* contains 'psexec'",
-			wantErr: false,
-		},
-		{
-			name:    "7 days - allowed",
-			query:   "-7d | plat == windows | * | event/* contains 'psexec'",
-			want:    "-7d | plat == windows | * | event/* contains 'psexec'",
-			wantErr: false,
-		},
-		{
-			name:    "30 days - allowed",
-			query:   "-30d | plat == windows | * | event/* contains 'psexec'",
-			want:    "-30d | plat == windows | * | event/* contains 'psexec'",
-			wantErr: false,
-		},
-		{
-			name:    "24 hours - allowed",
-			query:   "-24h | plat == windows | * | event/* contains 'psexec'",
-			want:    "-24h | plat == windows | * | event/* contains 'psexec'",
-			wantErr: false,
-		},
-		{
-			name:    "60 days - rejected",
-			query:   "-60d | plat == windows | * | event/* contains 'psexec'",
-			want:    "",
-			wantErr: true,
-		},
-		{
-			name:    "31 days - rejected",
-			query:   "-31d | plat == windows | * | event/* contains 'psexec'",
-			want:    "",
-			wantErr: true,
-		},
-		{
-			name:    "720 hours (30 days) - allowed",
-			query:   "-720h | plat == windows | * | event/* contains 'psexec'",
-			want:    "-720h | plat == windows | * | event/* contains 'psexec'",
-			wantErr: false,
-		},
-		{
-			name:    "721 hours (>30 days) - rejected",
-			query:   "-721h | plat == windows | * | event/* contains 'psexec'",
-			want:    "",
-			wantErr: true,
-		},
-	}
+	// LCQL only supports hours (h) and minutes (m), not days (d)
+	t.Run("no timeframe - adds -720h (30 days)", func(t *testing.T) {
+		got, err := validateAndPrepareQuery("plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		want := "-720h | plat == windows | * | event/* contains 'psexec'"
+		if got != want {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, want)
+		}
+	})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := validateAndPrepareQuery(tt.query)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("validateAndPrepareQuery() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("validateAndPrepareQuery() = %v, want %v", got, tt.want)
-			}
-		})
-	}
+	t.Run("168 hours (7 days) - allowed", func(t *testing.T) {
+		query := "-168h | plat == windows | * | event/* contains 'psexec'"
+		got, err := validateAndPrepareQuery(query)
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("720 hours (30 days) - allowed", func(t *testing.T) {
+		query := "-720h | plat == windows | * | event/* contains 'psexec'"
+		got, err := validateAndPrepareQuery(query)
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("24 hours - allowed", func(t *testing.T) {
+		query := "-24h | plat == windows | * | event/* contains 'psexec'"
+		got, err := validateAndPrepareQuery(query)
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("1440 hours (60 days) - rejected", func(t *testing.T) {
+		_, err := validateAndPrepareQuery("-1440h | plat == windows | * | event/* contains 'psexec'")
+		if err == nil {
+			t.Error("validateAndPrepareQuery() expected error for >30 days timeframe")
+		}
+	})
+
+	t.Run("744 hours (31 days) - rejected", func(t *testing.T) {
+		_, err := validateAndPrepareQuery("-744h | plat == windows | * | event/* contains 'psexec'")
+		if err == nil {
+			t.Error("validateAndPrepareQuery() expected error for >30 days timeframe")
+		}
+	})
+
+	t.Run("721 hours (>30 days) - rejected", func(t *testing.T) {
+		_, err := validateAndPrepareQuery("-721h | plat == windows | * | event/* contains 'psexec'")
+		if err == nil {
+			t.Error("validateAndPrepareQuery() expected error for >30 days timeframe")
+		}
+	})
+
+	t.Run("days suffix treated as no timeframe - adds -720h", func(t *testing.T) {
+		// Since LCQL doesn't support 'd' suffix, it's treated as no timeframe
+		got, err := validateAndPrepareQuery("-30d | plat == windows | * | event/* contains 'psexec'")
+		if err != nil {
+			t.Errorf("validateAndPrepareQuery() unexpected error: %v", err)
+		}
+		// The -30d is not recognized as timeframe, so -720h is prepended
+		want := "-720h | -30d | plat == windows | * | event/* contains 'psexec'"
+		if got != want {
+			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, want)
+		}
+	})
 }
 
 // Helper function for floating point comparison
@@ -271,8 +315,11 @@ func TestValidateLCQLQueryTool(t *testing.T) {
 	t.Run("valid query returns success with valid=true", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
-				return &lc.ValidationResponse{Error: ""}, nil
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation:      &lc.ValidationResponse{Error: ""},
+					BillingEstimate: &lc.BillingEstimate{},
+				}, nil
 			},
 		}
 		ctx = tools.WithOrganizationClient(ctx, mock)
@@ -315,8 +362,10 @@ func TestValidateLCQLQueryTool(t *testing.T) {
 	t.Run("invalid query returns success with valid=false and error message", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
-				return &lc.ValidationResponse{Error: "invalid filter syntax at position 10"}, nil
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation: &lc.ValidationResponse{Error: "invalid filter syntax at position 10"},
+				}, nil
 			},
 		}
 		ctx = tools.WithOrganizationClient(ctx, mock)
@@ -358,7 +407,7 @@ func TestValidateLCQLQueryTool(t *testing.T) {
 	t.Run("API error returns success with valid=false and validation error", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
 				return nil, errors.New("connection timeout")
 			},
 		}
@@ -403,9 +452,12 @@ func TestValidateLCQLQueryTool(t *testing.T) {
 		ctx := setupTestContext()
 		var receivedQuery string
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
 				receivedQuery = query
-				return &lc.ValidationResponse{Error: ""}, nil
+				return &lc.QueryValidationResult{
+					Validation:      &lc.ValidationResponse{Error: ""},
+					BillingEstimate: &lc.BillingEstimate{},
+				}, nil
 			},
 		}
 		ctx = tools.WithOrganizationClient(ctx, mock)
@@ -453,12 +505,22 @@ func TestEstimateLCQLQueryTool(t *testing.T) {
 	t.Run("valid query returns estimates", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
-				return &lc.ValidationResponse{
-					Error:     "",
-					NumEvals:  1500,
-					NumEvents: 750,
-					EvalTime:  3.2,
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation: &lc.ValidationResponse{
+						Error:     "",
+						NumEvals:  1500,
+						NumEvents: 750,
+						EvalTime:  3.2,
+					},
+					BillingEstimate: &lc.BillingEstimate{
+						BilledEvents: 50000,
+						FreeEvents:   10000,
+						EstimatedPrice: lc.EstimatedPrice{
+							Price:    25.0,
+							Currency: "USD cents",
+						},
+					},
 				}, nil
 			},
 		}
@@ -494,7 +556,7 @@ func TestEstimateLCQLQueryTool(t *testing.T) {
 		if resultData["query"] != testQuery {
 			t.Errorf("expected query='%s', got '%v'", testQuery, resultData["query"])
 		}
-		// Check estimates are returned (JSON numbers are float64)
+		// Check D&R validation fields
 		if resultData["num_evals"].(float64) != 1500 {
 			t.Errorf("expected num_evals=1500, got %v", resultData["num_evals"])
 		}
@@ -504,13 +566,22 @@ func TestEstimateLCQLQueryTool(t *testing.T) {
 		if resultData["eval_time"].(float64) != 3.2 {
 			t.Errorf("expected eval_time=3.2, got %v", resultData["eval_time"])
 		}
+		// Check billing estimate fields
+		if resultData["billed_events"].(float64) != 50000 {
+			t.Errorf("expected billed_events=50000, got %v", resultData["billed_events"])
+		}
+		if resultData["free_events"].(float64) != 10000 {
+			t.Errorf("expected free_events=10000, got %v", resultData["free_events"])
+		}
 	})
 
 	t.Run("invalid query returns error", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
-				return &lc.ValidationResponse{Error: "syntax error"}, nil
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation: &lc.ValidationResponse{Error: "syntax error"},
+				}, nil
 			},
 		}
 		ctx = tools.WithOrganizationClient(ctx, mock)
@@ -566,12 +637,22 @@ func TestAnalyzeLCQLQueryTool(t *testing.T) {
 	t.Run("valid query returns validation and estimates", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
-				return &lc.ValidationResponse{
-					Error:     "",
-					NumEvals:  2000,
-					NumEvents: 1000,
-					EvalTime:  5.5,
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation: &lc.ValidationResponse{
+						Error:     "",
+						NumEvals:  2000,
+						NumEvents: 1000,
+						EvalTime:  5.5,
+					},
+					BillingEstimate: &lc.BillingEstimate{
+						BilledEvents: 100000,
+						FreeEvents:   20000,
+						EstimatedPrice: lc.EstimatedPrice{
+							Price:    50.0,
+							Currency: "USD cents",
+						},
+					},
 				}, nil
 			},
 		}
@@ -616,7 +697,7 @@ func TestAnalyzeLCQLQueryTool(t *testing.T) {
 			t.Error("expected no error field for valid query")
 		}
 
-		// Check estimates
+		// Check D&R validation estimates
 		if resultData["num_evals"].(float64) != 2000 {
 			t.Errorf("expected num_evals=2000, got %v", resultData["num_evals"])
 		}
@@ -626,17 +707,27 @@ func TestAnalyzeLCQLQueryTool(t *testing.T) {
 		if resultData["eval_time"].(float64) != 5.5 {
 			t.Errorf("expected eval_time=5.5, got %v", resultData["eval_time"])
 		}
+
+		// Check billing estimates
+		if resultData["billed_events"].(float64) != 100000 {
+			t.Errorf("expected billed_events=100000, got %v", resultData["billed_events"])
+		}
+		if resultData["free_events"].(float64) != 20000 {
+			t.Errorf("expected free_events=20000, got %v", resultData["free_events"])
+		}
 	})
 
 	t.Run("invalid query returns validation error and estimates", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
-				return &lc.ValidationResponse{
-					Error:     "invalid filter at position 5",
-					NumEvals:  100,
-					NumEvents: 50,
-					EvalTime:  0.5,
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation: &lc.ValidationResponse{
+						Error:     "invalid filter at position 5",
+						NumEvals:  100,
+						NumEvents: 50,
+						EvalTime:  0.5,
+					},
 				}, nil
 			},
 		}
@@ -677,17 +768,12 @@ func TestAnalyzeLCQLQueryTool(t *testing.T) {
 		if resultData["error"] != "invalid filter at position 5" {
 			t.Errorf("expected error message, got '%v'", resultData["error"])
 		}
-
-		// Estimates should still be returned
-		if resultData["num_evals"].(float64) != 100 {
-			t.Errorf("expected num_evals=100, got %v", resultData["num_evals"])
-		}
 	})
 
 	t.Run("API error returns validation error", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
-			ValidateLCQLQueryFunc: func(query string) (*lc.ValidationResponse, error) {
+			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
 				return nil, errors.New("API unavailable")
 			},
 		}
