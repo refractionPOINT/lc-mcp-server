@@ -9,9 +9,10 @@ LCQL queries contain 4 required components and 1 optional component, separated b
 1. **Timeframe** | 2. **Sensors** | 3. **Events** | 4. **Filter** | 5. **Projection** (optional)
 
 ### 1. Timeframe Component
-Specifies the time range for the query:
-- **Past offset**: `-1h`, `-30m`, `-24h`, `-7d`
+Specifies the time range for the query using Go duration format:
+- **Past offset**: `-1h`, `-30m`, `-24h`, `-168h` (7 days), `-720h` (30 days), `-1h30m` (mixed)
 - **Date range**: `2022-01-22 10:00:00 to 2022-01-25 14:00:00`
+- **Note**: Days (`d`) are NOT supported - use hours instead (e.g., `-168h` for 7 days, `-720h` for 30 days)
 
 ### 2. Sensors Component
 Defines which sensors to query:

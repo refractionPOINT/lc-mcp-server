@@ -57,6 +57,9 @@ var ProfileDefinitions = map[string][]string{
 	"historical_data": {
 		"run_lcql_query",
 		"run_lcql_query_free",
+		"validate_lcql_query",
+		"estimate_lcql_query",
+		"analyze_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
 		"get_detection",
@@ -82,6 +85,9 @@ var ProfileDefinitions = map[string][]string{
 		// Same as historical_data but conceptually read-only
 		"run_lcql_query",
 		"run_lcql_query_free",
+		"validate_lcql_query",
+		"estimate_lcql_query",
+		"analyze_lcql_query",
 		"get_historic_events",
 		"get_historic_detections",
 		"get_detection",
@@ -226,6 +232,7 @@ var ProfileDefinitions = map[string][]string{
 		// Extensions
 		"list_extension_configs",
 		"get_extension_config",
+		"get_extension_schema",
 		"set_extension_config",
 		"delete_extension_config",
 		"subscribe_to_extension",

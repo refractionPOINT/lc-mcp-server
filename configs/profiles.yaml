@@ -16,6 +16,9 @@ historical_data:
   # Core historical data queries
   - run_lcql_query
   - run_lcql_query_free
+  - validate_lcql_query
+  - estimate_lcql_query
+  - analyze_lcql_query
   - get_historic_events
   - get_historic_detections
   - get_detection
@@ -42,6 +45,9 @@ historical_data_readonly:
   # Core historical data queries
   - run_lcql_query
   - run_lcql_query_free
+  - validate_lcql_query
+  - estimate_lcql_query
+  - analyze_lcql_query
   - get_historic_events
   - get_historic_detections
   - get_detection
