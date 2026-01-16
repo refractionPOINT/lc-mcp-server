@@ -715,7 +715,7 @@ func TestEstimateLCQLQueryTool(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid query returns error", func(t *testing.T) {
+	t.Run("invalid query returns validation error with estimates", func(t *testing.T) {
 		ctx := setupTestContext()
 		mock := &testutil.MockOrganization{
 			ValidateAndEstimateLCQLQueryFunc: func(query string) (*lc.QueryValidationResult, error) {
@@ -731,24 +731,39 @@ func TestEstimateLCQLQueryTool(t *testing.T) {
 			t.Fatal("estimate_lcql_query tool not registered")
 		}
 
+		testQuery := "-1h | invalid"
 		result, err := reg.Handler(ctx, map[string]any{
-			"query": "-1h | invalid",
+			"query": testQuery,
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		// Estimate tool returns error for invalid queries
-		if result.IsError != true {
-			t.Error("expected IsError to be true for invalid query")
+		// Estimate tool returns success even for invalid queries (with valid=false)
+		// This is consistent with analyze_lcql_query and validate_lcql_query
+		if result.IsError {
+			t.Error("expected IsError to be false - estimate returns structured result")
 		}
 
 		text, ok := extractResultText(result)
 		if !ok {
 			t.Fatal("failed to extract result text")
 		}
-		if text != "invalid query: syntax error" {
-			t.Errorf("expected 'invalid query: syntax error', got '%s'", text)
+
+		var resultData map[string]any
+		if err := json.Unmarshal([]byte(text), &resultData); err != nil {
+			t.Fatalf("failed to parse result JSON: %v", err)
+		}
+
+		// Check validation fields
+		if resultData["valid"] != false {
+			t.Error("expected valid=false for invalid query")
+		}
+		if resultData["error"] != "syntax error" {
+			t.Errorf("expected error='syntax error', got '%v'", resultData["error"])
+		}
+		if resultData["query"] != testQuery {
+			t.Errorf("expected query='%s', got '%v'", testQuery, resultData["query"])
 		}
 	})
 }
