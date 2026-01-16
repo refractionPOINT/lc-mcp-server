@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -14,14 +15,14 @@ import (
 )
 
 func TestParseTimeframe(t *testing.T) {
-	// LCQL only supports hours (h) and minutes (m), not days (d)
+	// Test relative timeframes - LCQL only supports hours (h) and minutes (m), not days (d)
 	t.Run("no timeframe", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("plat == windows | * | event/* contains 'psexec'")
+		gotType, gotDays, err := parseTimeframe("plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != false {
-			t.Errorf("parseTimeframe() gotHas = %v, want false", gotHas)
+		if gotType != timeframeNone {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeNone", gotType)
 		}
 		if gotDays != 0 {
 			t.Errorf("parseTimeframe() gotDays = %v, want 0", gotDays)
@@ -29,12 +30,12 @@ func TestParseTimeframe(t *testing.T) {
 	})
 
 	t.Run("720 hours (30 days)", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("-720h | plat == windows | * | event/* contains 'psexec'")
+		gotType, gotDays, err := parseTimeframe("-720h | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != true {
-			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
 		}
 		if !floatEquals(gotDays, 30, 0.0001) {
 			t.Errorf("parseTimeframe() gotDays = %v, want 30", gotDays)
@@ -42,12 +43,12 @@ func TestParseTimeframe(t *testing.T) {
 	})
 
 	t.Run("168 hours (7 days)", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("-168h | plat == windows | * | event/* contains 'psexec'")
+		gotType, gotDays, err := parseTimeframe("-168h | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != true {
-			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
 		}
 		if !floatEquals(gotDays, 7, 0.0001) {
 			t.Errorf("parseTimeframe() gotDays = %v, want 7", gotDays)
@@ -55,12 +56,12 @@ func TestParseTimeframe(t *testing.T) {
 	})
 
 	t.Run("24 hours (1 day)", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("-24h | plat == windows | * | event/* contains 'psexec'")
+		gotType, gotDays, err := parseTimeframe("-24h | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != true {
-			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
 		}
 		if !floatEquals(gotDays, 1, 0.0001) {
 			t.Errorf("parseTimeframe() gotDays = %v, want 1", gotDays)
@@ -68,12 +69,12 @@ func TestParseTimeframe(t *testing.T) {
 	})
 
 	t.Run("48 hours (2 days)", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("-48h | plat == windows | * | event/* contains 'psexec'")
+		gotType, gotDays, err := parseTimeframe("-48h | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != true {
-			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
 		}
 		if !floatEquals(gotDays, 2, 0.0001) {
 			t.Errorf("parseTimeframe() gotDays = %v, want 2", gotDays)
@@ -81,12 +82,12 @@ func TestParseTimeframe(t *testing.T) {
 	})
 
 	t.Run("30 minutes", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("-30m | plat == windows | * | event/* contains 'psexec'")
+		gotType, gotDays, err := parseTimeframe("-30m | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != true {
-			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
 		}
 		expectedDays := 30.0 / (60 * 24) // 0.0208333...
 		if !floatEquals(gotDays, expectedDays, 0.0001) {
@@ -95,39 +96,86 @@ func TestParseTimeframe(t *testing.T) {
 	})
 
 	t.Run("1440 hours (60 days)", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("-1440h | plat == windows | * | event/* contains 'psexec'")
+		gotType, gotDays, err := parseTimeframe("-1440h | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != true {
-			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		if gotType != timeframeRelative {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeRelative", gotType)
 		}
 		if !floatEquals(gotDays, 60, 0.0001) {
 			t.Errorf("parseTimeframe() gotDays = %v, want 60", gotDays)
 		}
 	})
 
-	t.Run("timeframe without pipe separator", func(t *testing.T) {
-		gotHas, gotDays, err := parseTimeframe("-168h plat == windows | * | event/* contains 'psexec'")
+	t.Run("days suffix not supported - treated as no timeframe", func(t *testing.T) {
+		// LCQL doesn't support 'd' suffix, so it should not match
+		gotType, _, err := parseTimeframe("-30d | plat == windows | * | event/* contains 'psexec'")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != true {
-			t.Errorf("parseTimeframe() gotHas = %v, want true", gotHas)
+		if gotType != timeframeNone {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeNone (d suffix not supported)", gotType)
+		}
+	})
+
+	// Test absolute date ranges
+	t.Run("absolute date range - 7 days", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("2025-01-01 to 2025-01-08 | * | * | *")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotType != timeframeAbsolute {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeAbsolute", gotType)
 		}
 		if !floatEquals(gotDays, 7, 0.0001) {
 			t.Errorf("parseTimeframe() gotDays = %v, want 7", gotDays)
 		}
 	})
 
-	t.Run("days suffix not supported - treated as no timeframe", func(t *testing.T) {
-		// LCQL doesn't support 'd' suffix, so it should not match
-		gotHas, _, err := parseTimeframe("-30d | plat == windows | * | event/* contains 'psexec'")
+	t.Run("absolute date range - 30 days", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("2025-01-01 to 2025-01-31 | * | * | *")
 		if err != nil {
 			t.Errorf("parseTimeframe() unexpected error: %v", err)
 		}
-		if gotHas != false {
-			t.Errorf("parseTimeframe() gotHas = %v, want false (d suffix not supported)", gotHas)
+		if gotType != timeframeAbsolute {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeAbsolute", gotType)
+		}
+		if !floatEquals(gotDays, 30, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 30", gotDays)
+		}
+	})
+
+	t.Run("absolute date range - same day", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("2025-01-15 to 2025-01-15 | * | * | *")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotType != timeframeAbsolute {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeAbsolute", gotType)
+		}
+		if !floatEquals(gotDays, 0, 0.0001) {
+			t.Errorf("parseTimeframe() gotDays = %v, want 0", gotDays)
+		}
+	})
+
+	t.Run("absolute date range - exceeds 30 days", func(t *testing.T) {
+		gotType, gotDays, err := parseTimeframe("2025-01-01 to 2025-03-01 | * | * | *")
+		if err != nil {
+			t.Errorf("parseTimeframe() unexpected error: %v", err)
+		}
+		if gotType != timeframeAbsolute {
+			t.Errorf("parseTimeframe() gotType = %v, want timeframeAbsolute", gotType)
+		}
+		if gotDays <= 30 {
+			t.Errorf("parseTimeframe() gotDays = %v, want > 30", gotDays)
+		}
+	})
+
+	t.Run("absolute date range - end before start is error", func(t *testing.T) {
+		_, _, err := parseTimeframe("2025-01-15 to 2025-01-01 | * | * | *")
+		if err == nil {
+			t.Error("parseTimeframe() expected error for end date before start date")
 		}
 	})
 }
@@ -209,6 +257,98 @@ func TestValidateAndPrepareQuery(t *testing.T) {
 		want := "-720h | -30d | plat == windows | * | event/* contains 'psexec'"
 		if got != want {
 			t.Errorf("validateAndPrepareQuery() = %v, want %v", got, want)
+		}
+	})
+}
+
+func TestValidateAndPrepareQueryAbsoluteDateRange(t *testing.T) {
+	// Use a fixed reference time for predictable testing: January 15, 2025
+	referenceTime := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	t.Run("absolute date range within 30 days - allowed", func(t *testing.T) {
+		// Date range from Jan 1 to Jan 8 (7 days), both within 30 days of Jan 15
+		query := "2025-01-01 to 2025-01-08 | * | * | *"
+		got, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err != nil {
+			t.Errorf("validateAndPrepareQueryWithTime() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQueryWithTime() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("absolute date range exactly 30 days span - allowed if recent", func(t *testing.T) {
+		// Date range from Dec 17 to Jan 16 (30 days), Dec 17 is 29 days before Jan 15
+		// This should pass since Dec 17 is within 30 days of Jan 15
+		query := "2024-12-17 to 2025-01-16 | * | * | *"
+		got, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err != nil {
+			t.Errorf("validateAndPrepareQueryWithTime() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQueryWithTime() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("absolute date range span exceeds 30 days - rejected", func(t *testing.T) {
+		// Date range from Dec 1 to Jan 15 (45 days) - span exceeds 30 days
+		query := "2024-12-01 to 2025-01-15 | * | * | *"
+		_, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err == nil {
+			t.Error("validateAndPrepareQueryWithTime() expected error for span > 30 days")
+		}
+	})
+
+	t.Run("absolute date range start date too old - rejected", func(t *testing.T) {
+		// Date range from Dec 1 to Dec 10 (9 days span), but Dec 1 is 45 days before Jan 15
+		// This should fail because start date is more than 30 days ago
+		query := "2024-12-01 to 2024-12-10 | * | * | *"
+		_, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err == nil {
+			t.Error("validateAndPrepareQueryWithTime() expected error for start date > 30 days ago")
+		}
+	})
+
+	t.Run("absolute date range start date within 30 days - allowed", func(t *testing.T) {
+		// Date range from Dec 17 to Dec 20 (3 days span), Dec 17 is 29 days before Jan 15
+		// (Dec 16 would be exactly at the boundary which may fail due to time of day)
+		query := "2024-12-17 to 2024-12-20 | * | * | *"
+		got, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err != nil {
+			t.Errorf("validateAndPrepareQueryWithTime() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQueryWithTime() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("absolute date range start date 31 days ago - rejected", func(t *testing.T) {
+		// Date range from Dec 15 to Dec 20 (5 days span), Dec 15 is 31 days before Jan 15
+		query := "2024-12-15 to 2024-12-20 | * | * | *"
+		_, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err == nil {
+			t.Error("validateAndPrepareQueryWithTime() expected error for start date > 30 days ago")
+		}
+	})
+
+	t.Run("absolute date range same day - allowed", func(t *testing.T) {
+		// Single day query on Jan 10
+		query := "2025-01-10 to 2025-01-10 | * | * | *"
+		got, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err != nil {
+			t.Errorf("validateAndPrepareQueryWithTime() unexpected error: %v", err)
+		}
+		if got != query {
+			t.Errorf("validateAndPrepareQueryWithTime() = %v, want %v", got, query)
+		}
+	})
+
+	t.Run("absolute date range end before start - error in parseTimeframe", func(t *testing.T) {
+		// Invalid: end date is before start date
+		query := "2025-01-15 to 2025-01-01 | * | * | *"
+		_, err := validateAndPrepareQueryWithTime(query, referenceTime)
+		if err == nil {
+			t.Error("validateAndPrepareQueryWithTime() expected error for end date before start")
 		}
 	})
 }

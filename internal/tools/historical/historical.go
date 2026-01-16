@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -30,50 +31,93 @@ func init() {
 	RegisterGetAtomChildren()
 }
 
-// timeframePattern matches LCQL timeframe patterns like -24h, -30m
+// relativeTimeframePattern matches LCQL relative timeframe patterns like -24h, -30m
 // Note: LCQL uses Go's duration parser which only supports h (hours) and m (minutes),
 // not d (days). Use hours for day-equivalent timeframes (e.g., -720h for 30 days).
-var timeframePattern = regexp.MustCompile(`^-(\d+)([mh])\s*\|?`)
+var relativeTimeframePattern = regexp.MustCompile(`^-(\d+)([mh])\s*\|`)
+
+// absoluteDateRangePattern matches LCQL absolute date range patterns like "2025-01-01 to 2025-01-15"
+// The dates must be in YYYY-MM-DD format.
+var absoluteDateRangePattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})\s*\|`)
+
+// timeframeType indicates the type of timeframe detected in a query
+type timeframeType int
+
+const (
+	timeframeNone     timeframeType = iota // No timeframe detected
+	timeframeRelative                      // Relative timeframe like -24h
+	timeframeAbsolute                      // Absolute date range like "2025-01-01 to 2025-01-15"
+)
 
 // parseTimeframe extracts and validates a timeframe from an LCQL query.
-// LCQL only supports hours (h) and minutes (m) - not days.
+// LCQL supports both relative timeframes (-24h, -720h) and absolute date ranges
+// (2025-01-01 to 2025-01-15).
 //
 // Parameters:
 //   - query: The LCQL query string to parse
 //
 // Returns:
-//   - hasTimeframe: true if a valid timeframe was found
-//   - daysEquivalent: the timeframe converted to days for limit checking
+//   - timeframeType: the type of timeframe detected
+//   - daysEquivalent: the timeframe span converted to days for limit checking
 //   - error: error if parsing fails
-func parseTimeframe(query string) (bool, float64, error) {
+func parseTimeframe(query string) (timeframeType, float64, error) {
 	query = strings.TrimSpace(query)
-	matches := timeframePattern.FindStringSubmatch(query)
-	if len(matches) == 0 {
-		return false, 0, nil
+
+	// Check for relative timeframe first (-24h, -720h, etc.)
+	relMatches := relativeTimeframePattern.FindStringSubmatch(query)
+	if len(relMatches) > 0 {
+		value, err := strconv.ParseFloat(relMatches[1], 64)
+		if err != nil {
+			return timeframeNone, 0, fmt.Errorf("invalid relative timeframe value: %v", err)
+		}
+
+		unit := relMatches[2]
+		var days float64
+
+		switch unit {
+		case "m": // minutes
+			days = value / (60 * 24)
+		case "h": // hours
+			days = value / 24
+		default:
+			return timeframeNone, 0, fmt.Errorf("unsupported timeframe unit: %s (LCQL only supports 'h' for hours and 'm' for minutes)", unit)
+		}
+
+		return timeframeRelative, days, nil
 	}
 
-	value, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		return false, 0, fmt.Errorf("invalid timeframe value: %v", err)
+	// Check for absolute date range (2025-01-01 to 2025-01-15)
+	absMatches := absoluteDateRangePattern.FindStringSubmatch(query)
+	if len(absMatches) > 0 {
+		startDate, err := time.Parse("2006-01-02", absMatches[1])
+		if err != nil {
+			return timeframeNone, 0, fmt.Errorf("invalid start date '%s': %v", absMatches[1], err)
+		}
+
+		endDate, err := time.Parse("2006-01-02", absMatches[2])
+		if err != nil {
+			return timeframeNone, 0, fmt.Errorf("invalid end date '%s': %v", absMatches[2], err)
+		}
+
+		// Validate end date is after start date
+		if endDate.Before(startDate) {
+			return timeframeNone, 0, fmt.Errorf("end date '%s' is before start date '%s'", absMatches[2], absMatches[1])
+		}
+
+		// Calculate span in days
+		days := endDate.Sub(startDate).Hours() / 24
+
+		return timeframeAbsolute, days, nil
 	}
 
-	unit := matches[2]
-	var days float64
-
-	switch unit {
-	case "m": // minutes
-		days = value / (60 * 24)
-	case "h": // hours
-		days = value / 24
-	default:
-		return false, 0, fmt.Errorf("unsupported timeframe unit: %s (LCQL only supports 'h' for hours and 'm' for minutes)", unit)
-	}
-
-	return true, days, nil
+	// No timeframe detected
+	return timeframeNone, 0, nil
 }
 
 // validateAndPrepareQuery validates the timeframe is within 30 days and prepares the query.
-// LCQL only supports hours (h) and minutes (m), so 30 days = 720 hours.
+// Supports both relative timeframes (-24h, -720h) and absolute date ranges (2025-01-01 to 2025-01-15).
+// For absolute date ranges, the entire range must fall within the past 30 days from now.
+// LCQL only supports hours (h) and minutes (m) for relative timeframes, so 30 days = 720 hours.
 //
 // Parameters:
 //   - query: The LCQL query string to validate and prepare
@@ -82,21 +126,78 @@ func parseTimeframe(query string) (bool, float64, error) {
 //   - string: The prepared query with timeframe
 //   - error: Error if validation fails
 func validateAndPrepareQuery(query string) (string, error) {
-	hasTimeframe, days, err := parseTimeframe(query)
+	return validateAndPrepareQueryWithTime(query, time.Now())
+}
+
+// validateAndPrepareQueryWithTime is the internal implementation that accepts a time parameter
+// for testing purposes.
+//
+// Parameters:
+//   - query: The LCQL query string to validate and prepare
+//   - now: The current time to use for validation
+//
+// Returns:
+//   - string: The prepared query with timeframe
+//   - error: Error if validation fails
+func validateAndPrepareQueryWithTime(query string, now time.Time) (string, error) {
+	tfType, days, err := parseTimeframe(query)
 	if err != nil {
 		return "", err
 	}
 
-	if hasTimeframe {
+	switch tfType {
+	case timeframeRelative:
+		// Validate relative timeframe is within 30 days
 		if days > 30 {
-			return "", fmt.Errorf("timeframe exceeds free tier limit of 30 days (%.1f days specified). Use 'run_lcql_query' for longer timeframes", days)
+			return "", fmt.Errorf("timeframe exceeds free tier limit of 30 days (%.1f days specified). Use 'run_lcql_query' for longer timeframes or reduce to -720h (30 days) or less", days)
 		}
 		// Query already has a valid timeframe, use as-is
 		return query, nil
-	}
 
-	// No timeframe, prepend -720h (30 days in hours, since LCQL doesn't support 'd')
-	return "-720h | " + query, nil
+	case timeframeAbsolute:
+		// For absolute date ranges, validate:
+		// 1. The date range span is at most 30 days
+		// 2. The start date is within the last 30 days from now
+		if days > 30 {
+			return "", fmt.Errorf("date range span exceeds free tier limit of 30 days (%.1f days specified). Use 'run_lcql_query' for longer timeframes or specify a date range of 30 days or less", days)
+		}
+
+		// Parse the start date to validate it's within the past 30 days
+		startDate, err := parseAbsoluteStartDate(query)
+		if err != nil {
+			return "", err
+		}
+
+		// Calculate how many days ago the start date is
+		thirtyDaysAgo := now.AddDate(0, 0, -30)
+		if startDate.Before(thirtyDaysAgo) {
+			return "", fmt.Errorf("start date '%s' is more than 30 days ago. The free tier only supports queries within the past 30 days. Use 'run_lcql_query' for older data", startDate.Format("2006-01-02"))
+		}
+
+		// Query already has a valid timeframe, use as-is
+		return query, nil
+
+	default:
+		// No timeframe detected, prepend -720h (30 days in hours)
+		return "-720h | " + query, nil
+	}
+}
+
+// parseAbsoluteStartDate extracts the start date from an absolute date range query.
+//
+// Parameters:
+//   - query: The LCQL query string with absolute date range
+//
+// Returns:
+//   - time.Time: The parsed start date
+//   - error: Error if parsing fails
+func parseAbsoluteStartDate(query string) (time.Time, error) {
+	query = strings.TrimSpace(query)
+	matches := absoluteDateRangePattern.FindStringSubmatch(query)
+	if len(matches) < 2 {
+		return time.Time{}, fmt.Errorf("failed to parse start date from query")
+	}
+	return time.Parse("2006-01-02", matches[1])
 }
 
 // RegisterRunLCQLQuery registers the run_lcql_query tool
@@ -223,7 +324,7 @@ func RegisterRunLCQLQueryFree() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("run_lcql_query_free",
-			mcp.WithDescription("Run a LimaCharlie Query Language (LCQL) query limited to the last 30 days (free tier). Automatically adds '-720h' (30 days) timeframe if not specified. If a timeframe is provided, it must be <= 30 days (720 hours). Note: LCQL uses hours (h) and minutes (m), not days."),
+			mcp.WithDescription("Run a LimaCharlie Query Language (LCQL) query limited to the last 30 days (free tier). Supports both relative timeframes (-24h, -720h) and absolute date ranges (2025-01-01 to 2025-01-15). Automatically adds '-720h' (30 days) timeframe if not specified. If a timeframe is provided, it must span <= 30 days. Note: LCQL uses hours (h) and minutes (m) for relative timeframes, not days."),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("The LCQL query to run (without timeframe, or with timeframe <= 720h/30 days)")),
@@ -411,13 +512,10 @@ func RegisterEstimateLCQLQuery() {
 			// Get full validation result including billing estimates
 			result := tools.ValidateLCQLQueryFull(org, query)
 
-			// Return error if query is invalid
-			if !result.Valid {
-				return tools.ErrorResultf("invalid query: %s", result.Error), nil
-			}
-
+			// Build response with consistent structure (matching analyze_lcql_query)
 			response := map[string]any{
 				"query": query,
+				"valid": result.Valid,
 				// D&R validation fields
 				"num_evals":  result.NumEvals,
 				"num_events": result.NumEvents,
@@ -426,6 +524,11 @@ func RegisterEstimateLCQLQuery() {
 				"billed_events":      result.BilledEvents,
 				"free_events":        result.FreeEvents,
 				"estimated_cost_usd": result.EstimatedPriceUSD,
+			}
+
+			// Include error message if query is invalid
+			if !result.Valid {
+				response["error"] = result.Error
 			}
 
 			return tools.SuccessResult(response), nil
