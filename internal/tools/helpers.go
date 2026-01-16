@@ -116,6 +116,13 @@ func ValidateLCQLQueryFull(validator LCQLValidator, query string) *LCQLValidatio
 		}
 	}
 
+	if resp == nil || resp.Validation == nil {
+		return &LCQLValidationResult{
+			Valid: false,
+			Error: "validation error: missing validation response",
+		}
+	}
+
 	// Check if validation found an error
 	if resp.Validation.Error != "" {
 		return &LCQLValidationResult{

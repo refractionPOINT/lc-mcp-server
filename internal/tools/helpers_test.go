@@ -134,6 +134,26 @@ func TestValidateLCQLQuery(t *testing.T) {
 			t.Errorf("expected query '%s' to be passed to validator, got '%s'", testQuery, receivedQuery)
 		}
 	})
+
+	t.Run("nil validation response returns error", func(t *testing.T) {
+		mock := &mockLCQLValidator{
+			validateAndEstimateFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation:      nil,
+					BillingEstimate: nil,
+				}, nil
+			},
+		}
+
+		valid, errMsg := ValidateLCQLQuery(mock, "-1h | * | * | / exists")
+
+		if valid {
+			t.Error("expected valid to be false for nil validation response")
+		}
+		if errMsg != "validation error: missing validation response" {
+			t.Errorf("expected error message for missing validation response, got '%s'", errMsg)
+		}
+	})
 }
 
 func TestValidateLCQLQueryFull(t *testing.T) {
@@ -277,6 +297,26 @@ func TestValidateLCQLQueryFull(t *testing.T) {
 		}
 		if result.Error != "validation error: network error" {
 			t.Errorf("expected 'validation error: network error', got '%s'", result.Error)
+		}
+	})
+
+	t.Run("nil validation response returns error result", func(t *testing.T) {
+		mock := &mockLCQLValidator{
+			validateAndEstimateFunc: func(query string) (*lc.QueryValidationResult, error) {
+				return &lc.QueryValidationResult{
+					Validation:      nil,
+					BillingEstimate: nil,
+				}, nil
+			},
+		}
+
+		result := ValidateLCQLQueryFull(mock, "-1h | * | * | / exists")
+
+		if result.Valid {
+			t.Error("expected Valid to be false when validation response is nil")
+		}
+		if result.Error != "validation error: missing validation response" {
+			t.Errorf("expected error 'validation error: missing validation response', got '%s'", result.Error)
 		}
 	})
 }
