@@ -15,6 +15,7 @@ core:
 historical_data:
   # Core historical data queries
   - run_lcql_query
+  - run_lcql_query_free
   - validate_lcql_query
   - estimate_lcql_query
   - analyze_lcql_query
@@ -43,6 +44,7 @@ historical_data_readonly:
   # Same as historical_data but conceptually read-only
   # Core historical data queries
   - run_lcql_query
+  - run_lcql_query_free
   - validate_lcql_query
   - estimate_lcql_query
   - analyze_lcql_query
@@ -201,6 +203,7 @@ platform_admin:
   # Extensions
   - list_extension_configs
   - get_extension_config
+  - get_extension_schema
   - set_extension_config
   - delete_extension_config
   - subscribe_to_extension

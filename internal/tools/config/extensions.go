@@ -16,6 +16,7 @@ func init() {
 	RegisterSubscribeToExtension()
 	RegisterUnsubscribeFromExtension()
 	RegisterListExtensionSubscriptions()
+	RegisterGetExtensionSchema()
 }
 
 // RegisterSubscribeToExtension registers the subscribe_to_extension tool
@@ -117,6 +118,43 @@ func RegisterListExtensionSubscriptions() {
 
 			return tools.SuccessResult(map[string]interface{}{
 				"subscriptions": extensions,
+			}), nil
+		},
+	})
+}
+
+// RegisterGetExtensionSchema registers the get_extension_schema tool
+func RegisterGetExtensionSchema() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_extension_schema",
+		Description: "Get the configuration schema for an extension",
+		Profile:     "platform_admin",
+		RequiresOID: true,
+		Schema: mcp.NewTool("get_extension_schema",
+			mcp.WithDescription("Get the configuration schema definition for an extension"),
+			mcp.WithString("extension_name",
+				mcp.Required(),
+				mcp.Description("Name of the extension to get the schema for")),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			extensionName, ok := args["extension_name"].(string)
+			if !ok || extensionName == "" {
+				return tools.ErrorResult("extension_name parameter is required"), nil
+			}
+
+			org, err := getOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			schema, err := org.GetExtensionSchema(lc.ExtensionName(extensionName))
+			if err != nil {
+				return tools.ErrorResultf("failed to get extension schema: %v", err), nil
+			}
+
+			return tools.SuccessResult(map[string]interface{}{
+				"extension_name": extensionName,
+				"schema":         schema,
 			}), nil
 		},
 	})

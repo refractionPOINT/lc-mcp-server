@@ -1,9 +1,11 @@
 package tools_test
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
@@ -26,6 +28,94 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/rules"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/schemas"
 )
+
+// skipPackages contains packages under internal/tools/ that should NOT be imported
+// in the test file because they don't register tools via init().
+//
+// Add a package here if:
+//   - It's a utility/helper package (e.g., testutil, mocks)
+//   - It doesn't have an init() function that calls RegisterTool()
+//   - It's not a real tool package
+var skipPackages = map[string]bool{
+	"testutil": true, // Test utilities and mocks, no tool registration
+}
+
+// TestAllToolPackagesImported verifies that all tool subdirectories under internal/tools/
+// are imported in this test file. This ensures that when a new tool package is added,
+// it gets imported here to trigger its init() registration.
+//
+// If a new package is added that is NOT a tool package (e.g., utilities, mocks),
+// add it to the skipPackages map above to exclude it from this check.
+func TestAllToolPackagesImported(t *testing.T) {
+	// Get the directory containing this test file
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to get current file path")
+	}
+	toolsDir := filepath.Dir(thisFile)
+
+	// Read this test file to check for imports
+	testFileContent, err := os.ReadFile(thisFile)
+	if err != nil {
+		t.Fatalf("failed to read test file: %v", err)
+	}
+	testFileStr := string(testFileContent)
+
+	// Find all subdirectories in internal/tools/
+	entries, err := os.ReadDir(toolsDir)
+	if err != nil {
+		t.Fatalf("failed to read tools directory: %v", err)
+	}
+
+	var missingImports []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		pkgName := entry.Name()
+
+		// Skip packages that are not tool packages (utilities, mocks, etc.)
+		if skipPackages[pkgName] {
+			continue
+		}
+
+		// Check if directory contains Go files (is a package)
+		pkgPath := filepath.Join(toolsDir, pkgName)
+		goFiles, err := filepath.Glob(filepath.Join(pkgPath, "*.go"))
+		if err != nil || len(goFiles) == 0 {
+			continue // Not a Go package, skip
+		}
+
+		// Check if any go file is not a test file (has actual code)
+		hasNonTestFile := false
+		for _, f := range goFiles {
+			if !strings.HasSuffix(f, "_test.go") {
+				hasNonTestFile = true
+				break
+			}
+		}
+		if !hasNonTestFile {
+			continue // Only test files, skip
+		}
+
+		// Check if this package is imported in the test file
+		expectedImport := `"github.com/refractionpoint/lc-mcp-go/internal/tools/` + pkgName + `"`
+		if !strings.Contains(testFileStr, expectedImport) {
+			missingImports = append(missingImports, pkgName)
+		}
+	}
+
+	if len(missingImports) > 0 {
+		sort.Strings(missingImports)
+		t.Errorf("tool packages not imported in registry_test.go (add blank import to trigger init() registration): %v", missingImports)
+		t.Log("Add the following imports to registry_test.go:")
+		for _, pkg := range missingImports {
+			t.Logf(`  _ "github.com/refractionpoint/lc-mcp-go/internal/tools/%s"`, pkg)
+		}
+		t.Log("If this is NOT a tool package, add it to skipPackages map in registry_test.go")
+	}
+}
 
 // TestAllProfileToolsAreRegistered verifies that all tools listed in ProfileDefinitions
 // are actually registered in the global registry. This catches cases where a tool name
