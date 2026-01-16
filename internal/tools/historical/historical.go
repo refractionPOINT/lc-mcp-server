@@ -366,15 +366,15 @@ func RegisterValidateLCQLQuery() {
 }
 
 // RegisterEstimateLCQLQuery registers the estimate_lcql_query tool.
-// This tool returns resource estimates for an LCQL query without executing it.
+// This tool returns billing estimates for an LCQL query without executing it.
 func RegisterEstimateLCQLQuery() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "estimate_lcql_query",
-		Description: "Get resource estimates for an LCQL query without executing it",
+		Description: "Get billing estimates for an LCQL query without executing it",
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("estimate_lcql_query",
-			mcp.WithDescription("Get resource estimates for an LCQL (LimaCharlie Query Language) query without executing it. Returns estimated number of events, evaluations, and processing time. Use this to understand query cost before running."),
+			mcp.WithDescription("Get billing estimates for an LCQL (LimaCharlie Query Language) query without executing it. Returns estimated number of billed events, free events, and cost in USD. Use this to understand query cost before running."),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("The LCQL query to estimate")),
@@ -392,7 +392,7 @@ func RegisterEstimateLCQLQuery() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get full validation result including estimates
+			// Get full validation result including billing estimates
 			result := tools.ValidateLCQLQueryFull(org, query)
 
 			// Return error if query is invalid
@@ -401,10 +401,15 @@ func RegisterEstimateLCQLQuery() {
 			}
 
 			response := map[string]any{
-				"query":      query,
+				"query": query,
+				// D&R validation fields
 				"num_evals":  result.NumEvals,
 				"num_events": result.NumEvents,
 				"eval_time":  result.EvalTime,
+				// Billing estimate fields
+				"billed_events":      result.BilledEvents,
+				"free_events":        result.FreeEvents,
+				"estimated_cost_usd": result.EstimatedPriceUSD,
 			}
 
 			return tools.SuccessResult(response), nil
@@ -421,7 +426,7 @@ func RegisterAnalyzeLCQLQuery() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("analyze_lcql_query",
-			mcp.WithDescription("Analyze an LCQL (LimaCharlie Query Language) query without executing it. Returns both validation status and resource estimates (number of events, evaluations, processing time). Use this for complete query analysis before running."),
+			mcp.WithDescription("Analyze an LCQL (LimaCharlie Query Language) query without executing it. Returns both validation status and billing estimates (billed events, free events, estimated cost). Use this for complete query analysis before running."),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("The LCQL query to analyze")),
@@ -439,15 +444,20 @@ func RegisterAnalyzeLCQLQuery() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get full validation result including estimates
+			// Get full validation result including billing estimates
 			result := tools.ValidateLCQLQueryFull(org, query)
 
 			response := map[string]any{
-				"query":      query,
-				"valid":      result.Valid,
+				"query": query,
+				"valid": result.Valid,
+				// D&R validation fields
 				"num_evals":  result.NumEvals,
 				"num_events": result.NumEvents,
 				"eval_time":  result.EvalTime,
+				// Billing estimate fields
+				"billed_events":      result.BilledEvents,
+				"free_events":        result.FreeEvents,
+				"estimated_cost_usd": result.EstimatedPriceUSD,
 			}
 
 			if !result.Valid {

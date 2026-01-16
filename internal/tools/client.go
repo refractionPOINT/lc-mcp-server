@@ -64,7 +64,7 @@ type OrganizationClient interface {
 	// Core Organization Info
 	GetOID() string
 	GetInfo() (lc.OrganizationInformation, error)
-	GetUsageStats() (*lc.UsageStats, error)
+	GetUsageStats() (lc.Dict, error)
 
 	// Sensor Operations
 	GetSensor(sid string) *lc.Sensor
@@ -105,6 +105,8 @@ type OrganizationClient interface {
 	InsightObjects(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
 	InsightObjectsBatch(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
 	ValidateLCQLQuery(query string) (*lc.ValidationResponse, error)
+	EstimateLCQLQueryBilling(query string) (*lc.BillingEstimate, error)
+	ValidateAndEstimateLCQLQuery(query string) (*lc.QueryValidationResult, error)
 
 	// Artifacts
 	ExportArtifact(artifactID string, deadline time.Time) (io.ReadCloser, error)

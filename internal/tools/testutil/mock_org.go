@@ -14,7 +14,7 @@ type MockOrganization struct {
 	// Core Organization Info
 	GetOIDFunc        func() string
 	GetInfoFunc       func() (lc.OrganizationInformation, error)
-	GetUsageStatsFunc func() (*lc.UsageStats, error)
+	GetUsageStatsFunc func() (lc.Dict, error)
 
 	// Sensor Operations
 	GetSensorFunc                func(sid string) *lc.Sensor
@@ -46,15 +46,17 @@ type MockOrganization struct {
 	YaraSourceDeleteFunc func(sourceName string) error
 
 	// Historical Data & Queries
-	GetHistoricEventsFunc    func(sensorID string, req lc.HistoricEventsRequest) (chan lc.IteratedEvent, func(), error)
-	QueryFunc                func(req lc.QueryRequest) (*lc.QueryResponse, error)
-	QueryAllFunc             func(req lc.QueryRequest) (*lc.QueryIterator, error)
-	QueryAllWithContextFunc  func(ctx context.Context, req lc.QueryRequest) (*lc.QueryIterator, error)
-	QueryWithContextFunc     func(ctx context.Context, req lc.QueryRequest) (*lc.QueryResponse, error)
-	HistoricalDetectionsFunc func(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
-	InsightObjectsFunc       func(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
-	InsightObjectsBatchFunc  func(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
-	ValidateLCQLQueryFunc    func(query string) (*lc.ValidationResponse, error)
+	GetHistoricEventsFunc           func(sensorID string, req lc.HistoricEventsRequest) (chan lc.IteratedEvent, func(), error)
+	QueryFunc                       func(req lc.QueryRequest) (*lc.QueryResponse, error)
+	QueryAllFunc                    func(req lc.QueryRequest) (*lc.QueryIterator, error)
+	QueryAllWithContextFunc         func(ctx context.Context, req lc.QueryRequest) (*lc.QueryIterator, error)
+	QueryWithContextFunc            func(ctx context.Context, req lc.QueryRequest) (*lc.QueryResponse, error)
+	HistoricalDetectionsFunc        func(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
+	InsightObjectsFunc              func(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
+	InsightObjectsBatchFunc         func(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
+	ValidateLCQLQueryFunc           func(query string) (*lc.ValidationResponse, error)
+	EstimateLCQLQueryBillingFunc    func(query string) (*lc.BillingEstimate, error)
+	ValidateAndEstimateLCQLQueryFunc func(query string) (*lc.QueryValidationResult, error)
 
 	// Artifacts
 	ExportArtifactFunc func(artifactID string, deadline time.Time) (io.ReadCloser, error)
@@ -122,7 +124,7 @@ func (m *MockOrganization) GetInfo() (lc.OrganizationInformation, error) {
 	return lc.OrganizationInformation{}, nil
 }
 
-func (m *MockOrganization) GetUsageStats() (*lc.UsageStats, error) {
+func (m *MockOrganization) GetUsageStats() (lc.Dict, error) {
 	if m.GetUsageStatsFunc != nil {
 		return m.GetUsageStatsFunc()
 	}
@@ -328,7 +330,24 @@ func (m *MockOrganization) ValidateLCQLQuery(query string) (*lc.ValidationRespon
 	if m.ValidateLCQLQueryFunc != nil {
 		return m.ValidateLCQLQueryFunc(query)
 	}
-	return &lc.ValidationResponse{}, nil
+	return &lc.ValidationResponse{Success: true}, nil
+}
+
+func (m *MockOrganization) EstimateLCQLQueryBilling(query string) (*lc.BillingEstimate, error) {
+	if m.EstimateLCQLQueryBillingFunc != nil {
+		return m.EstimateLCQLQueryBillingFunc(query)
+	}
+	return &lc.BillingEstimate{}, nil
+}
+
+func (m *MockOrganization) ValidateAndEstimateLCQLQuery(query string) (*lc.QueryValidationResult, error) {
+	if m.ValidateAndEstimateLCQLQueryFunc != nil {
+		return m.ValidateAndEstimateLCQLQueryFunc(query)
+	}
+	return &lc.QueryValidationResult{
+		Validation: &lc.ValidationResponse{Success: true},
+		BillingEstimate: &lc.BillingEstimate{},
+	}, nil
 }
 
 // Artifacts
