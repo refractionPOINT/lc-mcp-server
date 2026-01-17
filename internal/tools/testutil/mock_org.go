@@ -73,9 +73,19 @@ type MockOrganization struct {
 	DelInstallationKeyFunc func(iid string) error
 
 	// API Keys
-	GetAPIKeysFunc   func() ([]lc.APIKeyInfo, error)
-	CreateAPIKeyFunc func(name string, permissions []string) (*lc.APIKeyCreate, error)
-	DeleteAPIKeyFunc func(keyHash string) error
+	GetAPIKeysFunc              func() ([]lc.APIKeyInfo, error)
+	CreateAPIKeyFunc            func(name string, permissions []string) (*lc.APIKeyCreate, error)
+	CreateAPIKeyWithOptionsFunc func(name string, permissions []string, allowedIPRange string) (*lc.APIKeyCreate, error)
+	DeleteAPIKeyFunc            func(keyHash string) error
+
+	// User Management
+	GetUsersFunc            func() ([]string, error)
+	AddUserFunc             func(email string, inviteMissing bool, role string) (*lc.AddUserResponse, error)
+	RemoveUserFunc          func(email string) error
+	GetUsersPermissionsFunc func() (*lc.OrgUsersPermissions, error)
+	AddUserPermissionFunc   func(email, perm string) error
+	RemoveUserPermissionFunc func(email, perm string) error
+	SetUserRoleFunc         func(email, role string) (*lc.SetUserRoleResponse, error)
 
 	// Schemas
 	GetSchemaFunc             func(name string) (*lc.SchemaResponse, error)
@@ -429,6 +439,63 @@ func (m *MockOrganization) DeleteAPIKey(keyHash string) error {
 		return m.DeleteAPIKeyFunc(keyHash)
 	}
 	return nil
+}
+
+func (m *MockOrganization) CreateAPIKeyWithOptions(name string, permissions []string, allowedIPRange string) (*lc.APIKeyCreate, error) {
+	if m.CreateAPIKeyWithOptionsFunc != nil {
+		return m.CreateAPIKeyWithOptionsFunc(name, permissions, allowedIPRange)
+	}
+	return nil, nil
+}
+
+// User Management
+func (m *MockOrganization) GetUsers() ([]string, error) {
+	if m.GetUsersFunc != nil {
+		return m.GetUsersFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockOrganization) AddUser(email string, inviteMissing bool, role string) (*lc.AddUserResponse, error) {
+	if m.AddUserFunc != nil {
+		return m.AddUserFunc(email, inviteMissing, role)
+	}
+	return nil, nil
+}
+
+func (m *MockOrganization) RemoveUser(email string) error {
+	if m.RemoveUserFunc != nil {
+		return m.RemoveUserFunc(email)
+	}
+	return nil
+}
+
+func (m *MockOrganization) GetUsersPermissions() (*lc.OrgUsersPermissions, error) {
+	if m.GetUsersPermissionsFunc != nil {
+		return m.GetUsersPermissionsFunc()
+	}
+	return nil, nil
+}
+
+func (m *MockOrganization) AddUserPermission(email, perm string) error {
+	if m.AddUserPermissionFunc != nil {
+		return m.AddUserPermissionFunc(email, perm)
+	}
+	return nil
+}
+
+func (m *MockOrganization) RemoveUserPermission(email, perm string) error {
+	if m.RemoveUserPermissionFunc != nil {
+		return m.RemoveUserPermissionFunc(email, perm)
+	}
+	return nil
+}
+
+func (m *MockOrganization) SetUserRole(email, role string) (*lc.SetUserRoleResponse, error) {
+	if m.SetUserRoleFunc != nil {
+		return m.SetUserRoleFunc(email, role)
+	}
+	return nil, nil
 }
 
 // Schemas

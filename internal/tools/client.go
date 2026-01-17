@@ -125,7 +125,17 @@ type OrganizationClient interface {
 	// API Keys
 	GetAPIKeys() ([]lc.APIKeyInfo, error)
 	CreateAPIKey(name string, permissions []string) (*lc.APIKeyCreate, error)
+	CreateAPIKeyWithOptions(name string, permissions []string, allowedIPRange string) (*lc.APIKeyCreate, error)
 	DeleteAPIKey(keyHash string) error
+
+	// User Management
+	GetUsers() ([]string, error)
+	AddUser(email string, inviteMissing bool, role string) (*lc.AddUserResponse, error)
+	RemoveUser(email string) error
+	GetUsersPermissions() (*lc.OrgUsersPermissions, error)
+	AddUserPermission(email, perm string) error
+	RemoveUserPermission(email, perm string) error
+	SetUserRole(email, role string) (*lc.SetUserRoleResponse, error)
 
 	// Schemas
 	GetSchema(name string) (*lc.SchemaResponse, error)

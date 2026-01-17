@@ -427,6 +427,8 @@ func RegisterCreateAPIKey() {
 				mcp.Description("Description/name for the API key")),
 			mcp.WithArray("permissions",
 				mcp.Description("Optional list of permissions for the key")),
+			mcp.WithString("allowed_ip_range",
+				mcp.Description("Optional CIDR notation IP range to restrict key usage (e.g., '192.168.1.0/24')")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			keyName, ok := args["key_name"].(string)
@@ -443,20 +445,30 @@ func RegisterCreateAPIKey() {
 				}
 			}
 
+			allowedIPRange := ""
+			if ipRange, ok := args["allowed_ip_range"].(string); ok {
+				allowedIPRange = ipRange
+			}
+
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			key, err := org.CreateAPIKey(keyName, permissions)
+			key, err := org.CreateAPIKeyWithOptions(keyName, permissions, allowedIPRange)
 			if err != nil {
 				return tools.ErrorResultf("failed to create API key: %v", err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"key":      key.Key,     // Only returned on creation
 				"key_hash": key.KeyHash, // Use this to retrieve full key details later
-			}), nil
+			}
+			if allowedIPRange != "" {
+				result["allowed_ip_range"] = allowedIPRange
+			}
+
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
