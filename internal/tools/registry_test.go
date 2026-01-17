@@ -331,4 +331,3 @@ func TestProfileDefinitionsMatchYAML(t *testing.T) {
 		}
 	})
 }
-

@@ -46,16 +46,16 @@ type MockOrganization struct {
 	YaraSourceDeleteFunc func(sourceName string) error
 
 	// Historical Data & Queries
-	GetHistoricEventsFunc           func(sensorID string, req lc.HistoricEventsRequest) (chan lc.IteratedEvent, func(), error)
-	QueryFunc                       func(req lc.QueryRequest) (*lc.QueryResponse, error)
-	QueryAllFunc                    func(req lc.QueryRequest) (*lc.QueryIterator, error)
-	QueryAllWithContextFunc         func(ctx context.Context, req lc.QueryRequest) (*lc.QueryIterator, error)
-	QueryWithContextFunc            func(ctx context.Context, req lc.QueryRequest) (*lc.QueryResponse, error)
-	HistoricalDetectionsFunc        func(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
-	InsightObjectsFunc              func(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
-	InsightObjectsBatchFunc         func(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
-	ValidateLCQLQueryFunc           func(query string) (*lc.ValidationResponse, error)
-	EstimateLCQLQueryBillingFunc    func(query string) (*lc.BillingEstimate, error)
+	GetHistoricEventsFunc            func(sensorID string, req lc.HistoricEventsRequest) (chan lc.IteratedEvent, func(), error)
+	QueryFunc                        func(req lc.QueryRequest) (*lc.QueryResponse, error)
+	QueryAllFunc                     func(req lc.QueryRequest) (*lc.QueryIterator, error)
+	QueryAllWithContextFunc          func(ctx context.Context, req lc.QueryRequest) (*lc.QueryIterator, error)
+	QueryWithContextFunc             func(ctx context.Context, req lc.QueryRequest) (*lc.QueryResponse, error)
+	HistoricalDetectionsFunc         func(detectionReq lc.HistoricalDetectionsRequest) (lc.HistoricalDetectionsResponse, error)
+	InsightObjectsFunc               func(insightReq lc.InsightObjectsRequest) (lc.InsightObjectsResponse, error)
+	InsightObjectsBatchFunc          func(insightReq lc.InsightObjectsBatchRequest) (lc.InsightObjectBatchResponse, error)
+	ValidateLCQLQueryFunc            func(query string) (*lc.ValidationResponse, error)
+	EstimateLCQLQueryBillingFunc     func(query string) (*lc.BillingEstimate, error)
 	ValidateAndEstimateLCQLQueryFunc func(query string) (*lc.QueryValidationResult, error)
 
 	// Artifacts
@@ -79,13 +79,13 @@ type MockOrganization struct {
 	DeleteAPIKeyFunc            func(keyHash string) error
 
 	// User Management
-	GetUsersFunc            func() ([]string, error)
-	AddUserFunc             func(email string, inviteMissing bool, role string) (*lc.AddUserResponse, error)
-	RemoveUserFunc          func(email string) error
-	GetUsersPermissionsFunc func() (*lc.OrgUsersPermissions, error)
-	AddUserPermissionFunc   func(email, perm string) error
+	GetUsersFunc             func() ([]string, error)
+	AddUserFunc              func(email string, inviteMissing bool, role string) (*lc.AddUserResponse, error)
+	RemoveUserFunc           func(email string) error
+	GetUsersPermissionsFunc  func() (*lc.OrgUsersPermissions, error)
+	AddUserPermissionFunc    func(email, perm string) error
 	RemoveUserPermissionFunc func(email, perm string) error
-	SetUserRoleFunc         func(email, role string) (*lc.SetUserRoleResponse, error)
+	SetUserRoleFunc          func(email, role string) (*lc.SetUserRoleResponse, error)
 
 	// Schemas
 	GetSchemaFunc             func(name string) (*lc.SchemaResponse, error)
@@ -355,7 +355,7 @@ func (m *MockOrganization) ValidateAndEstimateLCQLQuery(query string) (*lc.Query
 		return m.ValidateAndEstimateLCQLQueryFunc(query)
 	}
 	return &lc.QueryValidationResult{
-		Validation: &lc.ValidationResponse{Success: true},
+		Validation:      &lc.ValidationResponse{Success: true},
 		BillingEstimate: &lc.BillingEstimate{},
 	}, nil
 }
