@@ -377,3 +377,121 @@ func (c *SDKCache) GetFromContext(ctx context.Context) (*lc.Organization, error)
 
 	return c.GetOrCreate(ctx, auth)
 }
+
+// GetClientFromContext is a convenience method that extracts auth from context
+// and returns the raw *lc.Client for user-level operations (like group management)
+// that don't require an Organization wrapper.
+func (c *SDKCache) GetClientFromContext(ctx context.Context) (*lc.Client, error) {
+	authCtx, err := FromContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get auth from context: %w", err)
+	}
+
+	if err := authCtx.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid auth context: %w", err)
+	}
+
+	cacheKey := authCtx.CacheKey()
+
+	// Try to get from cache (read lock)
+	c.mu.RLock()
+	cached, exists := c.cache[cacheKey]
+	c.mu.RUnlock()
+
+	if exists {
+		// Check if cache TTL expired
+		if time.Since(cached.CreatedAt) < c.ttl {
+			// CRITICAL: If using JWT, also check if token expired
+			if authCtx.JWTToken != "" {
+				tokenExpiry, jwtErr := GetJWTExpirationTime(authCtx.JWTToken)
+				if jwtErr != nil {
+					// Can't read expiration - invalidate cache and create new
+					c.mu.Lock()
+					delete(c.cache, cacheKey)
+					c.mu.Unlock()
+					atomic.AddUint64(&c.metrics.evictions, 1)
+					c.logger.Warn("Invalidated cache entry: unable to parse JWT expiration")
+				} else if time.Now().After(tokenExpiry) {
+					// JWT expired - invalidate cache entry
+					c.mu.Lock()
+					delete(c.cache, cacheKey)
+					c.mu.Unlock()
+					atomic.AddUint64(&c.metrics.evictions, 1)
+					return nil, fmt.Errorf("JWT token expired at %s", tokenExpiry.Format(time.RFC3339))
+				}
+			}
+
+			// Cache is valid and token (if present) hasn't expired
+			c.mu.Lock()
+			cached.LastUsed = time.Now()
+			c.mu.Unlock()
+
+			atomic.AddUint64(&c.metrics.hits, 1)
+			return cached.Client, nil
+		}
+
+		// Expired, remove from cache
+		c.mu.Lock()
+		delete(c.cache, cacheKey)
+		c.mu.Unlock()
+		atomic.AddUint64(&c.metrics.evictions, 1)
+	}
+
+	// Cache miss - create new SDK instance
+	atomic.AddUint64(&c.metrics.misses, 1)
+
+	// Create new client
+	opts := authCtx.GetClientOptions()
+
+	// CRITICAL: For AuthModeUIDKey with no OID (user-level operations),
+	// pre-generate a JWT with oid="-" to avoid the SDK generating an
+	// "all orgs" JWT which can be too large for users with many orgs.
+	if authCtx.Mode == AuthModeUIDKey && authCtx.OID == "" && opts.JWT == "" {
+		jwt, jwtErr := ExchangeAPIKeyForJWT(authCtx.UID, authCtx.APIKey, "-", c.logger)
+		if jwtErr != nil {
+			return nil, fmt.Errorf("failed to generate user-level JWT for AuthModeUIDKey: %w", jwtErr)
+		}
+		opts.JWT = jwt
+		c.logger.Debug("Pre-generated user-level JWT for AuthModeUIDKey",
+			"uid", authCtx.UID,
+			"jwt_prefix", safePrefix(jwt, 20))
+	}
+
+	// Create client with appropriate loaders
+	var client *lc.Client
+	var clientErr error
+
+	sdkLogger := NewLCLoggerSlog(c.logger)
+
+	if authCtx.Environment != "" {
+		client, clientErr = lc.NewClientFromLoader(
+			opts,
+			sdkLogger,
+			&lc.EnvironmentClientOptionLoader{},
+			lc.NewFileClientOptionLoader(""),
+		)
+	} else {
+		client, clientErr = lc.NewClient(opts, sdkLogger)
+	}
+
+	if clientErr != nil {
+		return nil, fmt.Errorf("failed to create SDK client: %w", clientErr)
+	}
+
+	// Cache the client instance
+	cached = &CachedSDK{
+		Client:    client,
+		CreatedAt: time.Now(),
+		LastUsed:  time.Now(),
+		CacheKey:  cacheKey,
+	}
+
+	c.mu.Lock()
+	if len(c.cache) >= c.maxSize {
+		c.evictOldestLocked()
+	}
+	c.cache[cacheKey] = cached
+	c.mu.Unlock()
+
+	return client, nil
+}
