@@ -233,6 +233,13 @@ func RegisterCreateOrg() {
 	})
 }
 
+// SimpleOrgInfo contains simplified organization information for list_user_orgs response
+type SimpleOrgInfo struct {
+	OID         string `json:"oid"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 // RegisterListUserOrgs registers the list_user_orgs tool
 func RegisterListUserOrgs() {
 	tools.RegisterTool(&tools.ToolRegistration{
@@ -248,8 +255,6 @@ func RegisterListUserOrgs() {
 				mcp.Description("Optional field to sort by")),
 			mcp.WithString("sort_order",
 				mcp.Description("Optional sort order ('asc' or 'desc')")),
-			mcp.WithString("with_names",
-				mcp.Description("Whether to include organization names (\"true\" or \"false\", default: \"true\")")),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			var filter, sortBy, sortOrder *string
@@ -264,13 +269,6 @@ func RegisterListUserOrgs() {
 
 			if so, ok := args["sort_order"].(string); ok && so != "" {
 				sortOrder = &so
-			}
-
-			withNames := true
-			if wn, ok := args["with_names"].(string); ok {
-				withNames = (wn == "true")
-			} else if wn, ok := args["with_names"].(bool); ok {
-				withNames = wn
 			}
 
 			org, err := tools.GetOrganization(ctx)
@@ -288,7 +286,8 @@ func RegisterListUserOrgs() {
 				offsetPtr := &offset
 				limitPtr := &pageSize
 
-				orgs, err := org.ListUserOrgs(offsetPtr, limitPtr, filter, sortBy, sortOrder, withNames)
+				// Always fetch with names (true) since we need the name field
+				orgs, err := org.ListUserOrgs(offsetPtr, limitPtr, filter, sortBy, sortOrder, true)
 				if err != nil {
 					return tools.ErrorResultf("failed to list user organizations: %v", err), nil
 				}
@@ -304,9 +303,19 @@ func RegisterListUserOrgs() {
 				offset += pageSize
 			}
 
+			// Transform to simplified response with only oid, name, description
+			simpleOrgs := make([]SimpleOrgInfo, len(allOrgs))
+			for i, org := range allOrgs {
+				simpleOrgs[i] = SimpleOrgInfo{
+					OID:         org.OID,
+					Name:        org.Name,
+					Description: org.Description,
+				}
+			}
+
 			return tools.SuccessResult(map[string]interface{}{
-				"orgs":  allOrgs,
-				"count": len(allOrgs),
+				"orgs":  simpleOrgs,
+				"count": len(simpleOrgs),
 			}), nil
 		},
 	})
