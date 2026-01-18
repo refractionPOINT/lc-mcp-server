@@ -283,11 +283,22 @@ func RegisterListUserOrgs() {
 			allOrgs := []lc.UserOrgInfo{}
 
 			for {
-				offsetPtr := &offset
-				limitPtr := &pageSize
+				opts := lc.ListUserOrgsOptions{
+					Offset: offset,
+					Limit:  pageSize,
+					Fields: []string{"oid", "name", "description"},
+				}
+				if filter != nil {
+					opts.Filter = *filter
+				}
+				if sortBy != nil {
+					opts.SortBy = *sortBy
+				}
+				if sortOrder != nil {
+					opts.SortOrder = *sortOrder
+				}
 
-				// Always fetch with names (true) since we need the name field
-				orgs, err := org.ListUserOrgs(offsetPtr, limitPtr, filter, sortBy, sortOrder, true)
+				orgs, _, err := org.ListUserOrgsWithOptions(opts)
 				if err != nil {
 					return tools.ErrorResultf("failed to list user organizations: %v", err), nil
 				}
