@@ -94,6 +94,14 @@ live_investigation:
   - list_velociraptor_artifacts
   - show_velociraptor_artifact
   - collect_velociraptor_artifact
+  # Binlib binary analysis
+  - binlib_check_hash
+  - binlib_get_hash_metadata
+  - binlib_get_hash_data
+  - binlib_tag
+  - binlib_untag
+  - binlib_search
+  - binlib_yara_scan
   # Artifacts
   - list_artifacts
   - get_artifact
