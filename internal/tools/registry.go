@@ -130,6 +130,14 @@ var ProfileDefinitions = map[string][]string{
 		"list_velociraptor_artifacts",
 		"show_velociraptor_artifact",
 		"collect_velociraptor_artifact",
+		// Binlib binary analysis
+		"binlib_check_hash",
+		"binlib_get_hash_metadata",
+		"binlib_get_hash_data",
+		"binlib_tag",
+		"binlib_untag",
+		"binlib_search",
+		"binlib_yara_scan",
 		// Artifacts
 		"list_artifacts",
 		"get_artifact",
@@ -519,6 +527,11 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("failed to switch OID: %v", err)), nil
 				}
+
+				// Check ai_agent.operate permission after successful OID switch
+				if err := checkAIAgentPermission(ctx, oidParam); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
 			}
 		}
 
@@ -556,6 +569,48 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 		// If type assertion fails, return original
 		return result, nil
 	}
+}
+
+// checkAIAgentPermission verifies that the current credentials have the ai_agent.operate
+// permission for the specified organization. This ensures that API keys/JWTs are
+// explicitly authorized for AI agent operations.
+//
+// Returns nil if:
+//   - Permission checking is disabled (no permission cache in context)
+//   - Enforcement is disabled via context
+//   - The credential has the ai_agent.operate permission for the OID
+//
+// Returns an error if the permission check fails or permission is denied.
+func checkAIAgentPermission(ctx context.Context, oid string) error {
+	// Check if permission enforcement is enabled
+	if !auth.IsPermissionEnforcementEnabled(ctx) {
+		return nil
+	}
+
+	// Get permission cache from context
+	permCache := auth.GetPermissionCache(ctx)
+	if permCache == nil {
+		// Permission checking not configured - allow by default
+		return nil
+	}
+
+	// Get organization to call WhoAmI
+	org, err := GetOrganization(ctx)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+
+	// Check for ai_agent.operate permission
+	hasPermission, err := permCache.CheckPermission(ctx, org, oid, "ai_agent.operate")
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+
+	if !hasPermission {
+		return fmt.Errorf("access denied: missing 'ai_agent.operate' permission for organization %s", oid)
+	}
+
+	return nil
 }
 
 // Helper functions for creating tool results
@@ -732,6 +787,11 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 			ctx, err = auth.WithOID(ctx, oidParam, nil)
 			if err != nil {
 				return ErrorResultf("failed to switch OID: %v", err), nil
+			}
+
+			// Check ai_agent.operate permission after successful OID switch
+			if err := checkAIAgentPermission(ctx, oidParam); err != nil {
+				return ErrorResultf("%v", err), nil
 			}
 		}
 	}
