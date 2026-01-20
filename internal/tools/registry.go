@@ -31,12 +31,13 @@ type ToolRegistration struct {
 
 	// Legacy struct fields (kept for backward compatibility)
 	// These are used when Tool is nil
-	Name        string
-	Description string
-	Handler     ToolHandler
-	Schema      mcp.Tool
-	Profile     string
-	RequiresOID bool // Whether tool requires an OID parameter in UID mode
+	Name                   string
+	Description            string
+	Handler                ToolHandler
+	Schema                 mcp.Tool
+	Profile                string
+	RequiresOID            bool // Whether tool requires an OID parameter in UID mode
+	SkipsAIAgentPermission bool // Whether tool should bypass ai_agent.operate permission check
 }
 
 // Global tool registry
@@ -521,17 +522,23 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 				}
 
 				// Check ai_agent.operate permission after successful OID switch
-				if err := checkAIAgentPermission(ctx, oidParam); err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+				// Skip the check for tools marked with SkipsAIAgentPermission
+				if !shouldSkipAIAgentPermission(reg) {
+					if err := checkAIAgentPermission(ctx, oidParam); err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
 				}
 			}
 		} else if requiresOID && !isUIDMode {
 			// Normal mode (single-org) - check permission against pre-configured OID
 			// This ensures organizations can block AI agent access even in single-org deployments
-			authCtx, err := auth.FromContext(ctx)
-			if err == nil && authCtx.OID != "" {
-				if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
-					return mcp.NewToolResultError(err.Error()), nil
+			// Skip the check for tools marked with SkipsAIAgentPermission
+			if !shouldSkipAIAgentPermission(reg) {
+				authCtx, err := auth.FromContext(ctx)
+				if err == nil && authCtx.OID != "" {
+					if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
 				}
 			}
 		}
@@ -570,6 +577,15 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 		// If type assertion fails, return original
 		return result, nil
 	}
+}
+
+// shouldSkipAIAgentPermission returns true if the tool should bypass the ai_agent.operate check.
+// It checks both interface-based tools and legacy struct-based tools.
+func shouldSkipAIAgentPermission(reg *ToolRegistration) bool {
+	if reg.Tool != nil {
+		return reg.Tool.SkipsAIAgentPermission()
+	}
+	return reg.SkipsAIAgentPermission
 }
 
 // checkAIAgentPermission verifies that the current credentials have the ai_agent.operate
@@ -791,16 +807,22 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 			}
 
 			// Check ai_agent.operate permission after successful OID switch
-			if err := checkAIAgentPermission(ctx, oidParam); err != nil {
-				return ErrorResultf("%v", err), nil
+			// Skip the check for tools marked with SkipsAIAgentPermission
+			if !shouldSkipAIAgentPermission(reg) {
+				if err := checkAIAgentPermission(ctx, oidParam); err != nil {
+					return ErrorResultf("%v", err), nil
+				}
 			}
 		} else {
 			// No OID param provided - check if we're in Normal mode with pre-configured OID
 			// This handles the case where CallTool is used in single-org deployments
-			authCtx, err := auth.FromContext(ctx)
-			if err == nil && authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
-				if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
-					return ErrorResultf("%v", err), nil
+			// Skip the check for tools marked with SkipsAIAgentPermission
+			if !shouldSkipAIAgentPermission(reg) {
+				authCtx, err := auth.FromContext(ctx)
+				if err == nil && authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
+					if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
+						return ErrorResultf("%v", err), nil
+					}
 				}
 			}
 		}

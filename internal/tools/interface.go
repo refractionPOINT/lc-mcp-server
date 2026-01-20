@@ -66,6 +66,10 @@ type Tool interface {
 	// in UID mode. Tools that operate on organization-specific data should return true.
 	RequiresOID() bool
 
+	// SkipsAIAgentPermission returns whether this tool should bypass the ai_agent.operate
+	// permission check. Used for AI generation tools that don't modify organization data.
+	SkipsAIAgentPermission() bool
+
 	// Schema returns the MCP tool schema defining the tool's input parameters
 	Schema() mcp.Tool
 
@@ -89,11 +93,12 @@ type Tool interface {
 //	    // Your implementation here
 //	}
 type BaseTool struct {
-	name        string
-	description string
-	profile     string
-	requiresOID bool
-	schema      mcp.Tool
+	name                   string
+	description            string
+	profile                string
+	requiresOID            bool
+	skipsAIAgentPermission bool
+	schema                 mcp.Tool
 }
 
 // Name returns the tool's unique identifier
@@ -114,6 +119,11 @@ func (t *BaseTool) Profile() string {
 // RequiresOID returns whether this tool requires organization context
 func (t *BaseTool) RequiresOID() bool {
 	return t.requiresOID
+}
+
+// SkipsAIAgentPermission returns whether this tool bypasses the ai_agent.operate check
+func (t *BaseTool) SkipsAIAgentPermission() bool {
+	return t.skipsAIAgentPermission
 }
 
 // Schema returns the MCP tool schema

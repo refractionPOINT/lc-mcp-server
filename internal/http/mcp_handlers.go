@@ -232,9 +232,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 			}
 
 			// Check ai_agent.operate permission after successful OID switch
-			if err := s.checkAIAgentPermission(ctx, oidParam); err != nil {
-				s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
-				return
+			// Skip the check for tools marked with SkipsAIAgentPermission
+			if !tool.SkipsAIAgentPermission {
+				if err := s.checkAIAgentPermission(ctx, oidParam); err != nil {
+					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+					return
+				}
 			}
 		} else if isJWTPassthrough {
 			// JWT passthrough mode requires OID in tool arguments
@@ -244,9 +247,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		} else if authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
 			// Normal mode (single-org) - check permission against pre-configured OID
 			// This ensures organizations can block AI agent access even in single-org deployments
-			if err := s.checkAIAgentPermission(ctx, authCtx.OID); err != nil {
-				s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
-				return
+			// Skip the check for tools marked with SkipsAIAgentPermission
+			if !tool.SkipsAIAgentPermission {
+				if err := s.checkAIAgentPermission(ctx, authCtx.OID); err != nil {
+					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+					return
+				}
 			}
 		}
 	}
