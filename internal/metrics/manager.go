@@ -11,6 +11,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	monitoring "cloud.google.com/go/monitoring/apiv3/v2"
 	"cloud.google.com/go/monitoring/apiv3/v2/monitoringpb"
+	"github.com/google/uuid"
 	"google.golang.org/genproto/googleapis/api/metric"
 	"google.golang.org/genproto/googleapis/api/monitoredres"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -266,21 +267,27 @@ func detectProjectID() string {
 	return ""
 }
 
-// getInstanceID returns a unique instance identifier for metric labels
+// getInstanceID returns a unique instance identifier for metric labels.
+// Each container instance gets a unique ID by appending a UUID suffix.
+// This prevents CUMULATIVE metric conflicts when multiple Cloud Run instances
+// of the same revision write to the same time series with different reset times.
 func getInstanceID() string {
-	// Try Cloud Run revision
+	// Generate a short unique suffix for this specific container instance
+	suffix := uuid.New().String()[:8]
+
+	// Combine with Cloud Run revision if available for debugging
 	if rev := os.Getenv("K_REVISION"); rev != "" {
-		return rev
+		return fmt.Sprintf("%s-%s", rev, suffix)
 	}
 	// Try container instance ID
 	if instance := os.Getenv("INSTANCE_ID"); instance != "" {
-		return instance
+		return fmt.Sprintf("%s-%s", instance, suffix)
 	}
-	// Fall back to hostname
+	// Fall back to hostname with suffix
 	if hostname, err := os.Hostname(); err == nil {
-		return hostname
+		return fmt.Sprintf("%s-%s", hostname, suffix)
 	}
-	return "unknown"
+	return fmt.Sprintf("unknown-%s", suffix)
 }
 
 // extractProjectID extracts the project ID from a project path
