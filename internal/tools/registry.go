@@ -525,6 +525,15 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 			}
+		} else if requiresOID && !isUIDMode {
+			// Normal mode (single-org) - check permission against pre-configured OID
+			// This ensures organizations can block AI agent access even in single-org deployments
+			authCtx, err := auth.FromContext(ctx)
+			if err == nil && authCtx.OID != "" {
+				if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+			}
 		}
 
 		// Call the appropriate handler (interface or legacy)
@@ -784,6 +793,15 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 			// Check ai_agent.operate permission after successful OID switch
 			if err := checkAIAgentPermission(ctx, oidParam); err != nil {
 				return ErrorResultf("%v", err), nil
+			}
+		} else {
+			// No OID param provided - check if we're in Normal mode with pre-configured OID
+			// This handles the case where CallTool is used in single-org deployments
+			authCtx, err := auth.FromContext(ctx)
+			if err == nil && authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
+				if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
+					return ErrorResultf("%v", err), nil
+				}
 			}
 		}
 	}

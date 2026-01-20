@@ -241,6 +241,13 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 			s.writeJSONRPCError(w, id, -32602, "Missing parameter",
 				fmt.Sprintf("'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
 			return
+		} else if authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
+			// Normal mode (single-org) - check permission against pre-configured OID
+			// This ensures organizations can block AI agent access even in single-org deployments
+			if err := s.checkAIAgentPermission(ctx, authCtx.OID); err != nil {
+				s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+				return
+			}
 		}
 	}
 
