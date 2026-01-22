@@ -39,9 +39,11 @@ type TLSConfig struct {
 
 // FeatureConfig holds optional feature flags
 type FeatureConfig struct {
-	EnableAudit bool
-	AuditLevel  string
-	SDKCacheTTL time.Duration
+	EnableAudit            bool
+	AuditLevel             string
+	SDKCacheTTL            time.Duration
+	EnforceAIAgentOperate  bool          // Enable ai_agent.operate permission check (default: true)
+	PermissionCacheTTL     time.Duration // Cache TTL for permission checks (default: 30s)
 }
 
 // Config holds all configuration for the MCP server
@@ -82,9 +84,11 @@ func Load() (*Config, error) {
 			Key:    getEnv("TLS_KEY_FILE", ""),
 		},
 		Features: FeatureConfig{
-			EnableAudit: getBoolEnv("AUDIT_LOG_ENABLED", false),
-			AuditLevel:  getEnv("AUDIT_LOG_LEVEL", "MEDIUM"),
-			SDKCacheTTL: getDurationEnv("SDK_CACHE_TTL", 5*time.Minute),
+			EnableAudit:           getBoolEnv("AUDIT_LOG_ENABLED", false),
+			AuditLevel:            getEnv("AUDIT_LOG_LEVEL", "MEDIUM"),
+			SDKCacheTTL:           getDurationEnv("SDK_CACHE_TTL", 5*time.Minute),
+			EnforceAIAgentOperate: getBoolEnv("ENFORCE_AI_AGENT_OPERATE", true),
+			PermissionCacheTTL:    getDurationEnv("PERMISSION_CACHE_TTL", 30*time.Second),
 		},
 	}
 

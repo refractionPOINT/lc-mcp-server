@@ -15,12 +15,13 @@ import (
 
 // STDIOServer handles STDIO mode MCP server
 type STDIOServer struct {
-	mcpServer      *server.MCPServer
-	config         *config.Config
-	sdkCache       *auth.SDKCache
-	gcsManager     *gcs.Manager
-	metricsManager *metrics.Manager
-	logger         *slog.Logger
+	mcpServer       *server.MCPServer
+	config          *config.Config
+	sdkCache        *auth.SDKCache
+	gcsManager      *gcs.Manager
+	metricsManager  *metrics.Manager
+	permissionCache *auth.PermissionCache
+	logger          *slog.Logger
 }
 
 // NewSTDIOServer creates a new STDIO mode server
@@ -51,6 +52,16 @@ func NewSTDIOServer(cfg *config.Config, logger *slog.Logger) (*STDIOServer, erro
 		metricsManager = nil
 	}
 
+	// Initialize permission cache for ai_agent.operate checks
+	var permissionCache *auth.PermissionCache
+	if cfg.Features.EnforceAIAgentOperate {
+		permissionCache = auth.NewPermissionCache(cfg.Features.PermissionCacheTTL, logger)
+		logger.Info("Permission cache initialized for ai_agent.operate enforcement",
+			"cache_ttl", cfg.Features.PermissionCacheTTL)
+	} else {
+		logger.Info("ai_agent.operate permission enforcement disabled")
+	}
+
 	// For STDIO mode, profile must come from config (no URLs)
 	// Default to "all" if not explicitly set
 	if cfg.Server.Profile == "" {
@@ -67,12 +78,13 @@ func NewSTDIOServer(cfg *config.Config, logger *slog.Logger) (*STDIOServer, erro
 	)
 
 	s := &STDIOServer{
-		mcpServer:      mcpServer,
-		config:         cfg,
-		sdkCache:       sdkCache,
-		gcsManager:     gcsManager,
-		metricsManager: metricsManager,
-		logger:         logger,
+		mcpServer:       mcpServer,
+		config:          cfg,
+		sdkCache:        sdkCache,
+		gcsManager:      gcsManager,
+		metricsManager:  metricsManager,
+		permissionCache: permissionCache,
+		logger:          logger,
 	}
 
 	// Register tools for the selected profile
@@ -123,6 +135,14 @@ func (s *STDIOServer) Serve(ctx context.Context) error {
 			reqCtx = metrics.WithManager(reqCtx, s.metricsManager)
 		}
 
+		// Add permission cache for ai_agent.operate checks
+		if s.permissionCache != nil {
+			reqCtx = auth.WithPermissionCache(reqCtx, s.permissionCache)
+		}
+
+		// Set permission enforcement based on config
+		reqCtx = auth.WithPermissionEnforcement(reqCtx, s.config.Features.EnforceAIAgentOperate)
+
 		return reqCtx
 	}
 
@@ -150,6 +170,11 @@ func (s *STDIOServer) Close() error {
 		if err := s.metricsManager.Close(); err != nil {
 			s.logger.Warn("Failed to close metrics manager", "error", err)
 		}
+	}
+
+	// Close permission cache
+	if s.permissionCache != nil {
+		s.permissionCache.Close()
 	}
 
 	s.logger.Info("STDIO server shutdown complete")

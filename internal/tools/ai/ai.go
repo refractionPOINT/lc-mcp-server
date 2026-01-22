@@ -26,10 +26,11 @@ func init() {
 // RegisterGenerateLCQLQuery registers the generate_lcql_query tool
 func RegisterGenerateLCQLQuery() {
 	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "generate_lcql_query",
-		Description: "Generate an LCQL query from natural language description using AI",
-		Profile:     "ai_powered",
-		RequiresOID: true,
+		Name:                   "generate_lcql_query",
+		Description:            "Generate an LCQL query from natural language description using AI",
+		Profile:                "ai_powered",
+		RequiresOID:            true,
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_lcql_query",
 			mcp.WithDescription("Generate a LimaCharlie Query Language (LCQL) query from a natural language description using Google Gemini AI"),
 			mcp.WithString("query",
@@ -138,10 +139,11 @@ func RegisterGenerateLCQLQuery() {
 // RegisterGenerateDRRuleDetection registers the generate_dr_rule_detection tool
 func RegisterGenerateDRRuleDetection() {
 	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "generate_dr_rule_detection",
-		Description: "Generate a D&R rule detection component from natural language using AI",
-		Profile:     "ai_powered",
-		RequiresOID: true,
+		Name:                   "generate_dr_rule_detection",
+		Description:            "Generate a D&R rule detection component from natural language using AI",
+		Profile:                "ai_powered",
+		RequiresOID:            true,
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_dr_rule_detection",
 			mcp.WithDescription("Generate a Detection & Response rule's detection component based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
@@ -273,10 +275,11 @@ func RegisterGenerateDRRuleDetection() {
 // RegisterGenerateDRRuleRespond registers the generate_dr_rule_respond tool
 func RegisterGenerateDRRuleRespond() {
 	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "generate_dr_rule_respond",
-		Description: "Generate a D&R rule respond component from natural language using AI",
-		Profile:     "ai_powered",
-		RequiresOID: true,
+		Name:                   "generate_dr_rule_respond",
+		Description:            "Generate a D&R rule respond component from natural language using AI",
+		Profile:                "ai_powered",
+		RequiresOID:            true,
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_dr_rule_respond",
 			mcp.WithDescription("Generate a Detection & Response rule's respond component based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
@@ -407,10 +410,11 @@ func RegisterGenerateDRRuleRespond() {
 // RegisterGenerateSensorSelector registers the generate_sensor_selector tool
 func RegisterGenerateSensorSelector() {
 	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "generate_sensor_selector",
-		Description: "Generate a sensor selector expression from natural language using AI",
-		Profile:     "ai_powered",
-		RequiresOID: true, // Require authentication to prevent unauthenticated access to Gemini API
+		Name:                   "generate_sensor_selector",
+		Description:            "Generate a sensor selector expression from natural language using AI",
+		Profile:                "ai_powered",
+		RequiresOID:            true,                    // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true,                    // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_sensor_selector",
 			mcp.WithDescription("Generate a sensor selector expression based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
@@ -469,10 +473,11 @@ func RegisterGenerateSensorSelector() {
 // RegisterGeneratePythonPlaybook registers the generate_python_playbook tool
 func RegisterGeneratePythonPlaybook() {
 	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "generate_python_playbook",
-		Description: "Generate a Python playbook script from natural language using AI",
-		Profile:     "ai_powered",
-		RequiresOID: true, // Require authentication to prevent unauthenticated access to Gemini API
+		Name:                   "generate_python_playbook",
+		Description:            "Generate a Python playbook script from natural language using AI",
+		Profile:                "ai_powered",
+		RequiresOID:            true,                     // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true,                     // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_python_playbook",
 			mcp.WithDescription("Generate a Python playbook script based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
@@ -528,10 +533,11 @@ func RegisterGeneratePythonPlaybook() {
 // RegisterGenerateDetectionSummary registers the generate_detection_summary tool
 func RegisterGenerateDetectionSummary() {
 	tools.RegisterTool(&tools.ToolRegistration{
-		Name:        "generate_detection_summary",
-		Description: "Generate a summary of detections using AI",
-		Profile:     "ai_powered",
-		RequiresOID: true, // Require authentication to prevent unauthenticated access to Gemini API
+		Name:                   "generate_detection_summary",
+		Description:            "Generate a summary of detections using AI",
+		Profile:                "ai_powered",
+		RequiresOID:            true,                      // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true,                      // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_detection_summary",
 			mcp.WithDescription("Generate a human-readable summary of detection data using Google Gemini AI"),
 			mcp.WithString("query",

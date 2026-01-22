@@ -13,6 +13,8 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
+// Note: tools.GetOrganization is used for permission checking
+
 func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
@@ -195,6 +197,14 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		ctx = gcs.WithGCSManager(ctx, s.gcsManager)
 	}
 
+	// Add permission cache for ai_agent.operate checks
+	if s.permissionCache != nil {
+		ctx = auth.WithPermissionCache(ctx, s.permissionCache)
+	}
+
+	// Set permission enforcement based on config
+	ctx = auth.WithPermissionEnforcement(ctx, s.config.Features.EnforceAIAgentOperate)
+
 	// Add meta-tool filter to context if headers are provided
 	allowList := parseToolList(lcAllowMetaTools)
 	denyList := parseToolList(lcDenyMetaTools)
@@ -220,11 +230,30 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 				s.writeJSONRPCError(w, id, -32000, "Invalid OID", fmt.Sprintf("Failed to switch OID: %v", err))
 				return
 			}
+
+			// Check ai_agent.operate permission after successful OID switch
+			// Skip the check for tools marked with SkipsAIAgentPermission
+			if !tool.SkipsAIAgentPermission {
+				if err := s.checkAIAgentPermission(ctx, oidParam); err != nil {
+					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+					return
+				}
+			}
 		} else if isJWTPassthrough {
 			// JWT passthrough mode requires OID in tool arguments
 			s.writeJSONRPCError(w, id, -32602, "Missing parameter",
 				fmt.Sprintf("'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
 			return
+		} else if authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
+			// Normal mode (single-org) - check permission against pre-configured OID
+			// This ensures organizations can block AI agent access even in single-org deployments
+			// Skip the check for tools marked with SkipsAIAgentPermission
+			if !tool.SkipsAIAgentPermission {
+				if err := s.checkAIAgentPermission(ctx, authCtx.OID); err != nil {
+					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+					return
+				}
+			}
 		}
 	}
 
@@ -376,4 +405,38 @@ func parseToolList(header string) []string {
 		return nil
 	}
 	return result
+}
+
+// checkAIAgentPermission verifies that the current credentials have the ai_agent.operate
+// permission for the specified organization.
+func (s *Server) checkAIAgentPermission(ctx context.Context, oid string) error {
+	// Check if permission enforcement is enabled
+	if !auth.IsPermissionEnforcementEnabled(ctx) {
+		return nil
+	}
+
+	// Get permission cache from context
+	permCache := auth.GetPermissionCache(ctx)
+	if permCache == nil {
+		// Permission checking not configured - allow by default
+		return nil
+	}
+
+	// Get organization to call WhoAmI
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+
+	// Check for ai_agent.operate permission
+	hasPermission, err := permCache.CheckPermission(ctx, org, oid, "ai_agent.operate")
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+
+	if !hasPermission {
+		return fmt.Errorf("access denied: missing 'ai_agent.operate' permission for organization %s", oid)
+	}
+
+	return nil
 }

@@ -44,6 +44,7 @@ type Server struct {
 	sdkCache         *auth.SDKCache
 	gcsManager       *gcs.Manager
 	metricsManager   *metrics.Manager
+	permissionCache  *auth.PermissionCache
 	profile          string
 	rateLimiter      *ratelimit.Limiter
 	serverAuthCtx    *auth.AuthContext // Server-wide credentials (nil = OAuth only)
@@ -70,6 +71,15 @@ func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsMa
 			"auth_mode", cfg.Auth.Mode.String(),
 			"uid", cfg.Auth.UID,
 			"oid", cfg.Auth.OID)
+	}
+
+	// Initialize permission cache for ai_agent.operate checks
+	if cfg.Features.EnforceAIAgentOperate {
+		s.permissionCache = auth.NewPermissionCache(cfg.Features.PermissionCacheTTL, logger)
+		logger.Info("Permission cache initialized for ai_agent.operate enforcement",
+			"cache_ttl", cfg.Features.PermissionCacheTTL)
+	} else {
+		logger.Info("ai_agent.operate permission enforcement disabled")
 	}
 
 	// Initialize OAuth components if encryption key is available
@@ -352,6 +362,11 @@ func (s *Server) Close() error {
 			s.logger.Error("Failed to close Redis client", "error", err)
 			return fmt.Errorf("failed to close Redis client: %w", err)
 		}
+	}
+
+	// Close permission cache
+	if s.permissionCache != nil {
+		s.permissionCache.Close()
 	}
 
 	s.logger.Info("HTTP server resources closed")

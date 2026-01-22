@@ -15,10 +15,12 @@ import (
 type contextKey string
 
 const (
-	authContextKey    contextKey = "lc_auth_context"
-	sdkCacheKey       contextKey = "lc_sdk_cache"
-	requestIDKey      contextKey = "lc_request_id"
-	metaToolFilterKey contextKey = "lc_meta_tool_filter"
+	authContextKey       contextKey = "lc_auth_context"
+	sdkCacheKey          contextKey = "lc_sdk_cache"
+	requestIDKey         contextKey = "lc_request_id"
+	metaToolFilterKey    contextKey = "lc_meta_tool_filter"
+	permissionCacheKey   contextKey = "lc_permission_cache"
+	permissionEnforceKey contextKey = "lc_permission_enforce"
 )
 
 // AuthMode represents the authentication mode
@@ -303,4 +305,31 @@ func IsToolAllowed(filter *MetaToolFilter, toolName string) bool {
 		}
 	}
 	return true // Both empty or tool not in DenyList
+}
+
+// WithPermissionCache adds a PermissionCache to the context
+func WithPermissionCache(ctx context.Context, cache *PermissionCache) context.Context {
+	return context.WithValue(ctx, permissionCacheKey, cache)
+}
+
+// GetPermissionCache retrieves the PermissionCache from the context
+// Returns nil if no cache is set (permission checking disabled)
+func GetPermissionCache(ctx context.Context) *PermissionCache {
+	cache, _ := ctx.Value(permissionCacheKey).(*PermissionCache)
+	return cache
+}
+
+// WithPermissionEnforcement sets whether ai_agent.operate permission should be enforced
+func WithPermissionEnforcement(ctx context.Context, enforce bool) context.Context {
+	return context.WithValue(ctx, permissionEnforceKey, enforce)
+}
+
+// IsPermissionEnforcementEnabled checks if permission enforcement is enabled
+// Returns true by default if not explicitly set
+func IsPermissionEnforcementEnabled(ctx context.Context) bool {
+	enforce, ok := ctx.Value(permissionEnforceKey).(bool)
+	if !ok {
+		return true // Default to enabled
+	}
+	return enforce
 }
