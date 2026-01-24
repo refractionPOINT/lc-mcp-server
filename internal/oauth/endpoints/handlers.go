@@ -232,10 +232,23 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Check for MFA required
 	if mfaErr, ok := err.(*firebase.MFARequiredError); ok {
-		// Store MFA session
-		mfaSessionID, _ := h.stateManager.GenerateMFASessionID()
+		// Generate MFA session ID with proper error handling
+		mfaSessionID, err := h.stateManager.GenerateMFASessionID()
+		if err != nil || mfaSessionID == "" {
+			h.logger.Error("Failed to generate MFA session ID", "error", err, "provider", oauthState.Provider)
+			WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
+			return
+		}
+
+		// Store MFA session with proper error handling
 		mfaSession := state.NewMFASession(mfaErr.MFAPendingCredential, mfaErr.MFAEnrollmentID, oauthStateParam, mfaErr.DisplayName, mfaErr.LocalID, mfaErr.Email, &mfaErr.PendingToken)
-		h.stateManager.StoreMFASession(r.Context(), mfaSessionID, mfaSession)
+		if err := h.stateManager.StoreMFASession(r.Context(), mfaSessionID, mfaSession); err != nil {
+			h.logger.Error("Failed to store MFA session", "error", err, "session_id", mfaSessionID, "provider", oauthState.Provider)
+			WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
+			return
+		}
+
+		h.logger.Info("MFA session created", "session_id", mfaSessionID, "email", mfaErr.Email, "provider", oauthState.Provider)
 
 		// Redirect to MFA challenge page
 		mfaURL := h.metadataProvider.GetServerURL() + "/oauth/mfa-challenge?session=" + mfaSessionID

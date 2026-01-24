@@ -292,18 +292,65 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Explicitly parse form data to ensure proper handling of both
+	// application/x-www-form-urlencoded and multipart/form-data
+	contentType := r.Header.Get("Content-Type")
+	var parseErr error
+	if contentType != "" && len(contentType) > 19 && contentType[:19] == "multipart/form-data" {
+		parseErr = r.ParseMultipartForm(10 << 20) // 10 MB max
+	} else {
+		parseErr = r.ParseForm()
+	}
+
+	if parseErr != nil {
+		s.logger.Error("Failed to parse MFA verify form data",
+			"error", parseErr,
+			"content_type", contentType,
+			"content_length", r.ContentLength)
+		s.writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error":             "invalid_request",
+			"error_description": "Failed to parse form data",
+		})
+		return
+	}
+
 	// Extract parameters
 	sessionID := r.FormValue("session")
 	code := r.FormValue("verification_code")
 
+	// Log detailed information about missing parameters for debugging
 	if sessionID == "" || code == "" {
+		s.logger.Warn("MFA verify missing parameters",
+			"has_session", sessionID != "",
+			"has_code", code != "",
+			"content_type", contentType,
+			"content_length", r.ContentLength,
+			"form_keys", getFormKeys(r.Form),
+			"post_form_keys", getFormKeys(r.PostForm))
+
+		missingParam := "session and verification_code"
+		if sessionID == "" && code != "" {
+			missingParam = "session"
+		} else if sessionID != "" && code == "" {
+			missingParam = "verification_code"
+		}
+
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "invalid_request",
-			"error_description": "Missing session or code parameter",
+			"error_description": "Missing " + missingParam + " parameter",
 		})
 		return
 	}
 
 	// Delegate to OAuth handler
 	s.oauthHandlers.HandleMFAVerify(w, r, sessionID, code)
+}
+
+// getFormKeys returns a slice of all keys in a url.Values map for logging
+func getFormKeys(values url.Values) []string {
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	return keys
 }
