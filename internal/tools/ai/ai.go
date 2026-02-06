@@ -416,8 +416,8 @@ func RegisterGenerateSensorSelector() {
 		Name:                   "generate_sensor_selector",
 		Description:            "Generate a sensor selector expression from natural language using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true,                    // Require authentication to prevent unauthenticated access to Gemini API
-		SkipsAIAgentPermission: true,                    // AI generation tools bypass ai_agent.operate permission check
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_sensor_selector",
 			mcp.WithDescription("Generate a sensor selector expression based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
@@ -480,8 +480,8 @@ func RegisterGeneratePythonPlaybook() {
 		Name:                   "generate_python_playbook",
 		Description:            "Generate a Python playbook script from natural language using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true,                     // Require authentication to prevent unauthenticated access to Gemini API
-		SkipsAIAgentPermission: true,                     // AI generation tools bypass ai_agent.operate permission check
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_python_playbook",
 			mcp.WithDescription("Generate a Python playbook script based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
@@ -541,8 +541,8 @@ func RegisterGenerateDetectionSummary() {
 		Name:                   "generate_detection_summary",
 		Description:            "Generate a summary of detections using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true,                      // Require authentication to prevent unauthenticated access to Gemini API
-		SkipsAIAgentPermission: true,                      // AI generation tools bypass ai_agent.operate permission check
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_detection_summary",
 			mcp.WithDescription("Generate a human-readable summary of detection data using Google Gemini AI"),
 			mcp.WithString("query",

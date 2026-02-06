@@ -39,11 +39,11 @@ type TLSConfig struct {
 
 // FeatureConfig holds optional feature flags
 type FeatureConfig struct {
-	EnableAudit            bool
-	AuditLevel             string
-	SDKCacheTTL            time.Duration
-	EnforceAIAgentOperate  bool          // Enable ai_agent.operate permission check (default: true)
-	PermissionCacheTTL     time.Duration // Cache TTL for permission checks (default: 30s)
+	EnableAudit           bool
+	AuditLevel            string
+	SDKCacheTTL           time.Duration
+	EnforceAIAgentOperate bool          // Enable ai_agent.operate permission check (default: true)
+	PermissionCacheTTL    time.Duration // Cache TTL for permission checks (default: 30s)
 }
 
 // Config holds all configuration for the MCP server
