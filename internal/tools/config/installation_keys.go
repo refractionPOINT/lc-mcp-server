@@ -25,6 +25,7 @@ func RegisterListInstallationKeys() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_installation_keys",
 			mcp.WithDescription("List all installation keys in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -63,6 +64,7 @@ func RegisterCreateInstallationKey() {
 				mcp.Description("Description of the installation key")),
 			mcp.WithNumber("quota",
 				mcp.Description("Optional maximum number of sensors that can use this key")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			tagsRaw, ok := args["tags"].([]interface{})
@@ -124,6 +126,7 @@ func RegisterDeleteInstallationKey() {
 			mcp.WithString("iid",
 				mcp.Required(),
 				mcp.Description("Installation key ID to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			iid, ok := args["iid"].(string)

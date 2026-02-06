@@ -26,6 +26,7 @@ func RegisterListCloudSensors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_cloud_sensors",
 			mcp.WithDescription("List all cloud sensor configurations"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -77,6 +78,7 @@ func RegisterGetCloudSensor() {
 			mcp.WithString("sensor_name",
 				mcp.Required(),
 				mcp.Description("Name of the cloud sensor to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sensorName, ok := args["sensor_name"].(string)
@@ -137,6 +139,8 @@ func RegisterSetCloudSensor() {
 			mcp.WithObject("sensor_config",
 				mcp.Required(),
 				mcp.Description("Cloud sensor configuration data")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sensorName, ok := args["sensor_name"].(string)
@@ -190,6 +194,7 @@ func RegisterDeleteCloudSensor() {
 			mcp.WithString("sensor_name",
 				mcp.Required(),
 				mcp.Description("Name of the cloud sensor to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sensorName, ok := args["sensor_name"].(string)

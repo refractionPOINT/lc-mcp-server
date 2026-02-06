@@ -25,6 +25,7 @@ func RegisterListVelociraptorArtifacts() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_velociraptor_artifacts",
 			mcp.WithDescription("List available Velociraptor artifacts (built-in and external)"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -55,6 +56,7 @@ func RegisterShowVelociraptorArtifact() {
 			mcp.WithString("artifact_name",
 				mcp.Required(),
 				mcp.Description("Name of the artifact (e.g., 'Windows.System.Drivers')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			artifactName, ok := args["artifact_name"].(string)
@@ -107,6 +109,7 @@ func RegisterCollectVelociraptorArtifact() {
 				mcp.Description("Days to retain collected artifacts (default: 7)")),
 			mcp.WithBoolean("ignore_cert",
 				mcp.Description("Ignore SSL certificate errors during collection")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)

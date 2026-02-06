@@ -28,6 +28,7 @@ func RegisterListYaraRules() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_yara_rules",
 			mcp.WithDescription("List all YARA rules in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -61,6 +62,7 @@ func RegisterGetYaraRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the YARA rule to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -104,6 +106,8 @@ func RegisterSetYaraRule() {
 			mcp.WithString("rule_content",
 				mcp.Required(),
 				mcp.Description("YARA rule content (the actual YARA syntax)")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -155,6 +159,7 @@ func RegisterDeleteYaraRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the YARA rule to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -193,6 +198,7 @@ func RegisterValidateYaraRule() {
 			mcp.WithString("rule_content",
 				mcp.Required(),
 				mcp.Description("YARA rule content to validate")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleContent, ok := args["rule_content"].(string)

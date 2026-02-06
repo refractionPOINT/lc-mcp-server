@@ -136,6 +136,7 @@ func RegisterGetProcessModules() {
 			mcp.WithNumber("pid",
 				mcp.Required(),
 				mcp.Description("Process ID")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -175,6 +176,7 @@ func RegisterGetProcessStrings() {
 			mcp.WithNumber("pid",
 				mcp.Required(),
 				mcp.Description("Process ID")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -214,6 +216,7 @@ func RegisterFindStrings() {
 			mcp.WithString("strings",
 				mcp.Required(),
 				mcp.Description("Comma-separated list of strings to find")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -250,6 +253,7 @@ func RegisterGetPackages() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -279,6 +283,7 @@ func RegisterGetServices() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -308,6 +313,7 @@ func RegisterGetAutoruns() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -337,6 +343,7 @@ func RegisterGetDrivers() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -366,6 +373,7 @@ func RegisterGetUsers() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -403,6 +411,7 @@ func RegisterDirList() {
 				mcp.Description("File name expression supporting wildcards (* and ?)")),
 			mcp.WithNumber("depth",
 				mcp.Description("Maximum depth of listing (default: 1 for single level)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -467,6 +476,7 @@ func RegisterDirFindHash() {
 				mcp.Description("Array of SHA256 hashes to search for (64 hexadecimal characters each)")),
 			mcp.WithNumber("depth",
 				mcp.Description("Maximum depth of search (default: 1 for single level)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -557,6 +567,7 @@ func RegisterGetRegistryKeys() {
 			mcp.WithString("path",
 				mcp.Required(),
 				mcp.Description("Registry path to query")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -603,6 +614,7 @@ func RegisterGetHistoricEvents() {
 				mcp.Description("Maximum number of events to return (default: 1000)")),
 			mcp.WithString("event_type",
 				mcp.Description("Filter by event type")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)

@@ -39,6 +39,7 @@ func RegisterTestDRRuleEvents() {
 				mcp.Description("Array of event objects to test against. Each event should have 'routing' and 'event' keys")),
 			mcp.WithBoolean("trace",
 				mcp.Description("Enable trace output for debugging rule evaluation (default: false)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Get organization (supports mock injection for testing)
@@ -108,6 +109,7 @@ func RegisterReplayDRRule() {
 				mcp.Description("Estimate cost only without processing (default: false)")),
 			mcp.WithString("stream",
 				mcp.Description("Data stream: 'event', 'audit', or 'detect' (default: 'event')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Get organization (supports mock injection for testing)

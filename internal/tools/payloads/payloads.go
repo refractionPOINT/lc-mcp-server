@@ -66,6 +66,7 @@ func RegisterListPayloads() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_payloads",
 			mcp.WithDescription("List all payloads (executables/scripts) available for deployment to sensors. Returns payload names, sizes, creators, and creation timestamps."),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -102,6 +103,7 @@ func RegisterCreatePayload() {
 				mcp.Description("Absolute path to the file on disk to upload (mutually exclusive with file_content)")),
 			mcp.WithString("file_content",
 				mcp.Description("Base64-encoded file content to upload (mutually exclusive with file_path)")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
@@ -190,6 +192,7 @@ func RegisterGetPayload() {
 			mcp.WithString("file_path",
 				mcp.Required(),
 				mcp.Description("Absolute path where to save the payload")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
@@ -251,6 +254,7 @@ func RegisterDeletePayload() {
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name of the payload to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)

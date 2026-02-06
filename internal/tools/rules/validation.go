@@ -32,6 +32,7 @@ func RegisterValidateDRRuleComponents() {
 				mcp.Description("Detection component (YAML/JSON structure). Required if rule_name not provided")),
 			mcp.WithObject("respond",
 				mcp.Description("Response component (array of actions). Optional")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Get organization

@@ -28,6 +28,7 @@ func RegisterListLookups() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_lookups",
 			mcp.WithDescription("List all lookup tables in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -79,6 +80,7 @@ func RegisterGetLookup() {
 			mcp.WithString("lookup_name",
 				mcp.Required(),
 				mcp.Description("Name of the lookup table to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
@@ -139,6 +141,8 @@ func RegisterSetLookup() {
 			mcp.WithObject("lookup_data",
 				mcp.Required(),
 				mcp.Description("Lookup table data (dict of strings -> dict, string is the key, dict value is the item metadata)")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
@@ -192,6 +196,7 @@ func RegisterDeleteLookup() {
 			mcp.WithString("lookup_name",
 				mcp.Required(),
 				mcp.Description("Name of the lookup table to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)
@@ -240,6 +245,7 @@ func RegisterQueryLookup() {
 			mcp.WithString("key",
 				mcp.Required(),
 				mcp.Description("Key to look up in the table")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			lookupName, ok := args["lookup_name"].(string)

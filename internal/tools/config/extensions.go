@@ -31,6 +31,7 @@ func RegisterSubscribeToExtension() {
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension to subscribe to")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)
@@ -69,6 +70,7 @@ func RegisterUnsubscribeFromExtension() {
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension to unsubscribe from")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)
@@ -104,6 +106,7 @@ func RegisterListExtensionSubscriptions() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_extension_subscriptions",
 			mcp.WithDescription("List all extension subscriptions for the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -135,6 +138,7 @@ func RegisterGetExtensionSchema() {
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension to get the schema for")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)

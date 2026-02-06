@@ -33,6 +33,7 @@ func RegisterListGroups() {
 		RequiresOID: false, // User-level operation
 		Schema: mcp.NewTool("list_groups",
 			mcp.WithDescription("List all groups accessible to the current user. Returns group IDs and names."),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			client, err := tools.GetClient(ctx)
@@ -62,6 +63,7 @@ func RegisterListGroupsDetailed() {
 		RequiresOID: false, // User-level operation
 		Schema: mcp.NewTool("list_groups_detailed",
 			mcp.WithDescription("List all groups with detailed information including members, owners, orgs, and permissions."),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			client, err := tools.GetClient(ctx)
@@ -94,6 +96,7 @@ func RegisterCreateGroup() {
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name for the new group")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
@@ -132,6 +135,7 @@ func RegisterGetGroupInfo() {
 			mcp.WithString("gid",
 				mcp.Required(),
 				mcp.Description("Group ID")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -174,6 +178,7 @@ func RegisterDeleteGroup() {
 			mcp.WithString("gid",
 				mcp.Required(),
 				mcp.Description("Group ID to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -216,6 +221,7 @@ func RegisterAddGroupMember() {
 				mcp.Description("Email address of the user to add as member")),
 			mcp.WithBoolean("invite_missing",
 				mcp.Description("If true, send an invite to users who don't have a LimaCharlie account (default: false)")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -268,6 +274,7 @@ func RegisterRemoveGroupMember() {
 			mcp.WithString("email",
 				mcp.Required(),
 				mcp.Description("Email address of the member to remove")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -317,6 +324,7 @@ func RegisterAddGroupOwner() {
 				mcp.Description("Email address of the user to add as owner")),
 			mcp.WithBoolean("invite_missing",
 				mcp.Description("If true, send an invite to users who don't have a LimaCharlie account (default: false)")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -369,6 +377,7 @@ func RegisterRemoveGroupOwner() {
 			mcp.WithString("email",
 				mcp.Required(),
 				mcp.Description("Email address of the owner to remove")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -416,6 +425,7 @@ func RegisterSetGroupPermissions() {
 			mcp.WithArray("permissions",
 				mcp.Required(),
 				mcp.Description("List of permissions to set for the group")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -471,6 +481,7 @@ func RegisterAddOrgToGroup() {
 			mcp.WithString("oid",
 				mcp.Required(),
 				mcp.Description("Organization ID to add to the group")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)
@@ -518,6 +529,7 @@ func RegisterRemoveOrgFromGroup() {
 			mcp.WithString("oid",
 				mcp.Required(),
 				mcp.Description("Organization ID to remove from the group")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			gid, ok := args["gid"].(string)

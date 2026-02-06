@@ -30,6 +30,7 @@ func RegisterListRules() {
 			mcp.WithString("hive_name",
 				mcp.Required(),
 				mcp.Description("Name of the hive (e.g., 'dr-general', 'dr-managed', 'fp')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
@@ -89,6 +90,7 @@ func RegisterGetRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
@@ -159,6 +161,8 @@ func RegisterSetRule() {
 				mcp.Description("Rule content (detection and response for D&R rules)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)
@@ -235,6 +239,7 @@ func RegisterDeleteRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			hiveName, ok := args["hive_name"].(string)

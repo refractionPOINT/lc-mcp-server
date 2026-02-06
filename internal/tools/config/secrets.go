@@ -26,6 +26,7 @@ func RegisterListSecrets() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_secrets",
 			mcp.WithDescription("List all secret names (not values) in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -71,6 +72,7 @@ func RegisterGetSecret() {
 			mcp.WithString("secret_name",
 				mcp.Required(),
 				mcp.Description("Name of the secret to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			secretName, ok := args["secret_name"].(string)
@@ -127,6 +129,8 @@ func RegisterSetSecret() {
 			mcp.WithString("secret_value",
 				mcp.Required(),
 				mcp.Description("The secret value to store")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			secretName, ok := args["secret_name"].(string)
@@ -182,6 +186,7 @@ func RegisterDeleteSecret() {
 			mcp.WithString("secret_name",
 				mcp.Required(),
 				mcp.Description("Name of the secret to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			secretName, ok := args["secret_name"].(string)

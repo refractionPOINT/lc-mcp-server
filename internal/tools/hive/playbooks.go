@@ -26,6 +26,7 @@ func RegisterListPlaybooks() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_playbooks",
 			mcp.WithDescription("List all playbooks in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -77,6 +78,7 @@ func RegisterGetPlaybook() {
 			mcp.WithString("playbook_name",
 				mcp.Required(),
 				mcp.Description("Name of the playbook to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			playbookName, ok := args["playbook_name"].(string)
@@ -137,6 +139,8 @@ func RegisterSetPlaybook() {
 			mcp.WithObject("playbook_data",
 				mcp.Required(),
 				mcp.Description("Playbook definition (steps, conditions, actions)")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			playbookName, ok := args["playbook_name"].(string)
@@ -190,6 +194,7 @@ func RegisterDeletePlaybook() {
 			mcp.WithString("playbook_name",
 				mcp.Required(),
 				mcp.Description("Name of the playbook to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			playbookName, ok := args["playbook_name"].(string)

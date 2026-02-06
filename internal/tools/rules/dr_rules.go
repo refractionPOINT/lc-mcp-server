@@ -32,6 +32,7 @@ func RegisterListDRGeneralRules() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_dr_general_rules",
 			mcp.WithDescription("List all general Detection & Response rules"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -65,6 +66,7 @@ func RegisterGetDRGeneralRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -113,6 +115,8 @@ func RegisterSetDRGeneralRule() {
 				mcp.Description("Rule content (detection and response)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -200,6 +204,7 @@ func RegisterDeleteDRGeneralRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -235,6 +240,7 @@ func RegisterListDRManagedRules() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_dr_managed_rules",
 			mcp.WithDescription("List all managed Detection & Response rules"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -268,6 +274,7 @@ func RegisterGetDRManagedRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -316,6 +323,8 @@ func RegisterSetDRManagedRule() {
 				mcp.Description("Rule content (detection and response)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -402,6 +411,7 @@ func RegisterDeleteDRManagedRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the rule to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -437,6 +447,7 @@ func RegisterGetDetectionRules() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_detection_rules",
 			mcp.WithDescription("Get all Detection & Response rules from all namespaces"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)

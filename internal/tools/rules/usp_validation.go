@@ -42,6 +42,7 @@ func RegisterValidateUSPMapping() {
 				mcp.Description("Pre-parsed JSON input array (mutually exclusive with text_input)")),
 			mcp.WithString("hostname",
 				mcp.Description("Default hostname for sensors (defaults to 'validation-test')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract platform (required)

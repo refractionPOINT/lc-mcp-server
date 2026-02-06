@@ -33,6 +33,7 @@ func RegisterLCCallTool() {
 			mcp.WithObject("parameters",
 				mcp.Required(),
 				mcp.Description("Parameters to pass to the tool as a dictionary")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: handleLCCallTool,
 	})

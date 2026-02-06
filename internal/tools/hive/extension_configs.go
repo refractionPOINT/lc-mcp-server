@@ -26,6 +26,7 @@ func RegisterListExtensionConfigs() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_extension_configs",
 			mcp.WithDescription("List all extension configurations"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -77,6 +78,7 @@ func RegisterGetExtensionConfig() {
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension to retrieve config for")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)
@@ -137,6 +139,8 @@ func RegisterSetExtensionConfig() {
 			mcp.WithObject("config_data",
 				mcp.Required(),
 				mcp.Description("Extension configuration data")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)
@@ -190,6 +194,7 @@ func RegisterDeleteExtensionConfig() {
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension config to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			extensionName, ok := args["extension_name"].(string)

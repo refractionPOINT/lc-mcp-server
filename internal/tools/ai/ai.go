@@ -36,6 +36,7 @@ func RegisterGenerateLCQLQuery() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to query")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -149,6 +150,7 @@ func RegisterGenerateDRRuleDetection() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to detect")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -285,6 +287,7 @@ func RegisterGenerateDRRuleRespond() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of how to respond")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -420,6 +423,7 @@ func RegisterGenerateSensorSelector() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of which sensors to select")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -483,6 +487,7 @@ func RegisterGeneratePythonPlaybook() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of the playbook automation")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -543,6 +548,7 @@ func RegisterGenerateDetectionSummary() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("JSON string of detection data to summarize")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)

@@ -28,6 +28,7 @@ func RegisterTestTool() {
 		Profile:     "core",
 		Schema: mcp.NewTool("test_tool",
 			mcp.WithDescription("Test tool to verify MCP server connectivity"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			result := map[string]interface{}{
@@ -51,6 +52,7 @@ func RegisterGetSensorInfo() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
@@ -126,6 +128,7 @@ func RegisterListSensors() {
 				mcp.Description("Sensor selector expression using bexpr syntax. Examples: 'plat == `windows`', '`test` in tags', 'hostname matches `^web-`', 'int_ip == `10.0.0.1`'. Available fields: sid, oid, plat, arch, hostname, int_ip, ext_ip, alive, tags, etc.")),
 			mcp.WithBoolean("online_only",
 				mcp.Description("When true, return only online sensors. When false or omitted, return all sensors (no online/offline filtering). This is server-side filtering.")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
@@ -183,6 +186,7 @@ func RegisterGetOnlineSensors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_online_sensors",
 			mcp.WithDescription("List all currently online sensors in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
@@ -240,6 +244,7 @@ func RegisterIsOnline() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
@@ -288,6 +293,7 @@ func RegisterSearchHosts() {
 			mcp.WithString("hostname_expr",
 				mcp.Required(),
 				mcp.Description("Hostname expression to search for")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract hostname expression
@@ -358,6 +364,7 @@ func RegisterListSensorTags() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_sensor_tags",
 			mcp.WithDescription("List all tags currently in use by sensors in the organization. Returns a list of unique tag names."),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Get organization

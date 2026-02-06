@@ -20,6 +20,7 @@ func RegisterGetOrgURLs() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_org_urls",
 			mcp.WithDescription("Get organization URLs including geo-dependent domains for webhooks, DNS, and API endpoints"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)

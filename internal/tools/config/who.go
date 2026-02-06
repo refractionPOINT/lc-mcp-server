@@ -20,6 +20,7 @@ func RegisterWhoAmI() {
 		RequiresOID: true, // Need an org context to get the client
 		Schema: mcp.NewTool("who_am_i",
 			mcp.WithDescription("Get the current API identity and permissions for the authenticated user or API key"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
