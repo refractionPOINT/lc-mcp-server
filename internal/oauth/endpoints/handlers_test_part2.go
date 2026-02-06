@@ -20,7 +20,7 @@ import (
 // ===== HandleRegister Tests (Dynamic Client Registration - RFC 7591) =====
 
 func TestHandleRegister_Success(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	requestBody := map[string]interface{}{
@@ -57,7 +57,7 @@ func TestHandleRegister_Success(t *testing.T) {
 }
 
 func TestHandleRegister_MethodNotAllowed(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/register", nil)
 	w := httptest.NewRecorder()
@@ -68,7 +68,7 @@ func TestHandleRegister_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleRegister_InvalidJSON(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader([]byte("invalid json")))
 	req.Header.Set("Content-Type", "application/json")
@@ -84,7 +84,7 @@ func TestHandleRegister_InvalidJSON(t *testing.T) {
 }
 
 func TestHandleRegister_MissingClientName(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	requestBody := map[string]interface{}{
 		"redirect_uris": []string{"https://app.example.com/callback"},
@@ -106,7 +106,7 @@ func TestHandleRegister_MissingClientName(t *testing.T) {
 }
 
 func TestHandleRegister_MissingRedirectURIs(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	requestBody := map[string]interface{}{
 		"client_name": "Test App",
@@ -128,7 +128,7 @@ func TestHandleRegister_MissingRedirectURIs(t *testing.T) {
 }
 
 func TestHandleRegister_InvalidRedirectURI(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	tests := []struct {
 		name string
@@ -165,7 +165,7 @@ func TestHandleRegister_InvalidRedirectURI(t *testing.T) {
 }
 
 func TestHandleRegister_ValidHTTPSAndLocalhost(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	requestBody := map[string]interface{}{
@@ -197,7 +197,7 @@ func TestHandleRegister_ValidHTTPSAndLocalhost(t *testing.T) {
 // ===== isValidRedirectURI Tests =====
 
 func TestIsValidRedirectURI_ExactMatch(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	tests := []struct {
@@ -222,7 +222,7 @@ func TestIsValidRedirectURI_ExactMatch(t *testing.T) {
 }
 
 func TestIsValidRedirectURI_RegisteredClient(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Register a client with specific URIs
@@ -277,7 +277,7 @@ func TestIsValidRedirectURI_RegisteredClient(t *testing.T) {
 }
 
 func TestIsValidRedirectURI_MalformedURI(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	malformedURIs := []string{
@@ -296,7 +296,7 @@ func TestIsValidRedirectURI_MalformedURI(t *testing.T) {
 }
 
 func TestIsValidRedirectURI_MissingHost(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	urisWithoutHost := []string{
@@ -314,7 +314,7 @@ func TestIsValidRedirectURI_MissingHost(t *testing.T) {
 }
 
 func TestIsValidRedirectURI_LocalhostVariations(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// These should be allowed because whitelist contains localhost entries
@@ -340,7 +340,7 @@ func TestIsValidRedirectURI_LocalhostVariations(t *testing.T) {
 // ===== validatePKCE Tests =====
 
 func TestValidatePKCE_ValidS256(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	verifier := "test-verifier-123456789012345678901234567890"
 	challenge := generatePKCEChallenge(verifier)
@@ -350,7 +350,7 @@ func TestValidatePKCE_ValidS256(t *testing.T) {
 }
 
 func TestValidatePKCE_InvalidVerifier(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	correctVerifier := "correct-verifier-12345678901234567890"
 	challenge := generatePKCEChallenge(correctVerifier)
@@ -362,7 +362,7 @@ func TestValidatePKCE_InvalidVerifier(t *testing.T) {
 }
 
 func TestValidatePKCE_EmptyVerifier(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	challenge := "some-challenge"
 
@@ -371,7 +371,7 @@ func TestValidatePKCE_EmptyVerifier(t *testing.T) {
 }
 
 func TestValidatePKCE_EmptyChallenge(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	verifier := "some-verifier"
 
@@ -382,7 +382,7 @@ func TestValidatePKCE_EmptyChallenge(t *testing.T) {
 // ===== MFA Flow Tests =====
 
 func TestHandleMFAVerify_Success(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup: Store OAuth state
@@ -450,7 +450,7 @@ func TestHandleMFAVerify_Success(t *testing.T) {
 }
 
 func TestHandleMFAVerify_InvalidCode(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup OAuth state
@@ -503,7 +503,7 @@ func TestHandleMFAVerify_InvalidCode(t *testing.T) {
 }
 
 func TestHandleMFAVerify_BruteForceProtection(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup OAuth state
@@ -571,7 +571,7 @@ func TestHandleMFAVerify_BruteForceProtection(t *testing.T) {
 }
 
 func TestHandleMFAVerify_SessionNotFound(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w := httptest.NewRecorder()
@@ -587,7 +587,7 @@ func TestHandleMFAVerify_SessionNotFound(t *testing.T) {
 }
 
 func TestHandleMFAVerify_UIDValidation(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup OAuth state
@@ -643,7 +643,7 @@ func TestHandleMFAVerify_UIDValidation(t *testing.T) {
 // ===== HandleCallback with MFA Tests =====
 
 func TestHandleCallback_MFARequired(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup OAuth state
@@ -707,7 +707,7 @@ func TestHandleCallback_MFARequired(t *testing.T) {
 // ===== Metadata Endpoint Tests =====
 
 func TestHandleProtectedResourceMetadata(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
 	w := httptest.NewRecorder()
@@ -724,7 +724,7 @@ func TestHandleProtectedResourceMetadata(t *testing.T) {
 }
 
 func TestHandleAuthorizationServerMetadata(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
 	w := httptest.NewRecorder()
@@ -747,7 +747,7 @@ func TestHandleAuthorizationServerMetadata(t *testing.T) {
 // ===== Provider Normalization Tests =====
 
 func TestNormalizeProvider(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	tests := []struct {
 		input    string
@@ -772,7 +772,7 @@ func TestNormalizeProvider(t *testing.T) {
 // ===== Concurrent Access Tests (Security) =====
 
 func TestHandleAuthorize_ConcurrentRequests(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	const numRequests = 50
@@ -834,7 +834,7 @@ func TestHandleAuthorize_ConcurrentRequests(t *testing.T) {
 }
 
 func TestHandleToken_ConcurrentCodeExchange(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	verifier := "test-verifier-123456789012345678901234567890"
@@ -890,4 +890,170 @@ func TestHandleToken_ConcurrentCodeExchange(t *testing.T) {
 
 	// Only ONE should succeed (single-use code)
 	assert.Equal(t, 1, successCount, "Only one concurrent exchange should succeed")
+}
+
+// ===== Redis Failure Tests =====
+
+func TestHandleCallback_StoreAuthCodeRedisFailure(t *testing.T) {
+	handlers, stateManager, mockFB, mr := testHandlers(t)
+	ctx := context.Background()
+
+	// Setup OAuth state
+	oauthState := state.NewOAuthState(
+		"oauth-redis-fail",
+		"challenge",
+		"S256",
+		"https://app.example.com/callback",
+		"test-client",
+		"openid",
+		"",
+		"google.com",
+	)
+	stateManager.StoreOAuthState(ctx, oauthState)
+
+	// Store state mappings
+	fbState := "fb-state-redis-fail"
+	sessionID := "session-redis-fail"
+	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-redis-fail", map[string]string{"firebase_state": fbState})
+	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-redis-fail"})
+	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+
+	// Inject Redis error from the signInWithIdp mock (after all state reads succeed)
+	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {
+		// Set Redis error AFTER state reads have succeeded but BEFORE store operations
+		mr.SetError("READONLY simulated Redis failure")
+		return &firebase.SignInWithIdpResponse{
+			LocalID:      "test-uid-123",
+			IDToken:      "test-id-token",
+			RefreshToken: "test-refresh-token",
+			ExpiresIn:    "3600",
+		}, nil
+	}
+
+	callbackURL := "/oauth/callback?state=" + fbState + "&code=test"
+	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
+	w := httptest.NewRecorder()
+
+	handlers.HandleCallback(w, req)
+
+	// Redis error should cause ConsumeOAuthState to fail (it does a Redis DELETE),
+	// resulting in an error redirect
+	assert.Equal(t, http.StatusFound, w.Code)
+	location := w.Header().Get("Location")
+	assert.Contains(t, location, "error=")
+
+	// Clean up Redis error for test cleanup
+	mr.SetError("")
+}
+
+func TestHandleMFAVerify_StoreAuthCodeRedisFailure(t *testing.T) {
+	handlers, stateManager, mockFB, mr := testHandlers(t)
+	ctx := context.Background()
+
+	// Setup OAuth state
+	oauthState := state.NewOAuthState(
+		"oauth-mfa-redis-fail",
+		"challenge",
+		"S256",
+		"https://app.example.com/callback",
+		"test-client",
+		"openid",
+		"",
+		"google.com",
+	)
+	stateManager.StoreOAuthState(ctx, oauthState)
+
+	// Setup MFA session
+	mfaSession := state.NewMFASession(
+		"mfa-pending-cred",
+		"mfa-enrollment-id",
+		"oauth-mfa-redis-fail",
+		"Test User",
+		"test-uid-123",
+		"user@example.com",
+		nil,
+	)
+	sessionID, _ := stateManager.GenerateMFASessionID()
+	stateManager.StoreMFASession(ctx, sessionID, mfaSession)
+
+	// Inject Redis error from the finalizeMFASignIn mock
+	mockFB.finalizeMFASignInFunc = func(ctx context.Context, pending, enrollment, code string) (*firebase.FinalizeMFAResponse, error) {
+		// Set Redis error AFTER MFA verification succeeds but BEFORE store operations
+		mr.SetError("READONLY simulated Redis failure")
+		return &firebase.FinalizeMFAResponse{
+			LocalID:      "test-uid-123",
+			IDToken:      "mfa-id-token",
+			RefreshToken: "mfa-refresh-token",
+			ExpiresIn:    "3600",
+		}, nil
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)
+	w := httptest.NewRecorder()
+
+	handlers.HandleMFAVerify(w, req, sessionID, "123456")
+
+	// Redis error should cause ConsumeOAuthState to fail,
+	// resulting in an error JSON response
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp map[string]interface{}
+	json.NewDecoder(w.Body).Decode(&resp)
+	assert.Equal(t, false, resp["success"])
+
+	// Clean up Redis error for test cleanup
+	mr.SetError("")
+}
+
+func TestHandleCallback_MFASessionStoreFailure(t *testing.T) {
+	handlers, stateManager, mockFB, mr := testHandlers(t)
+	ctx := context.Background()
+
+	// Setup OAuth state
+	oauthState := state.NewOAuthState(
+		"oauth-mfa-store-fail",
+		"challenge",
+		"S256",
+		"https://app.example.com/callback",
+		"test-client",
+		"openid",
+		"",
+		"google.com",
+	)
+	stateManager.StoreOAuthState(ctx, oauthState)
+
+	// Store state mappings
+	fbState := "fb-mfa-store-fail"
+	sessionID := "session-mfa-store-fail"
+	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-mfa-store-fail", map[string]string{"firebase_state": fbState})
+	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-mfa-store-fail"})
+	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+
+	// Mock Firebase requiring MFA, and inject Redis error so StoreMFASession fails
+	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {
+		// Set Redis error so StoreMFASession will fail
+		mr.SetError("READONLY simulated Redis failure")
+		return nil, &firebase.MFARequiredError{
+			MFAPendingCredential: "mfa-pending-cred",
+			MFAEnrollmentID:      "mfa-enrollment-id",
+			DisplayName:          "Test User",
+			LocalID:              "test-uid",
+			Email:                "user@example.com",
+			PendingToken:         "pending-token",
+		}
+	}
+
+	callbackURL := "/oauth/callback?state=" + fbState + "&code=test"
+	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
+	w := httptest.NewRecorder()
+
+	handlers.HandleCallback(w, req)
+
+	// StoreMFASession should fail due to Redis error, resulting in error redirect
+	assert.Equal(t, http.StatusFound, w.Code)
+	location := w.Header().Get("Location")
+	assert.Contains(t, location, "error=")
+
+	// Clean up Redis error for test cleanup
+	mr.SetError("")
 }

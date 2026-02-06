@@ -155,7 +155,7 @@ func (m *mockFirebaseClient) FinalizeMFASignIn(ctx context.Context, mfaPendingCr
 }
 
 // testHandlers creates handlers for testing with mocked dependencies
-func testHandlers(t *testing.T) (*Handlers, *state.Manager, *mockFirebaseClient) {
+func testHandlers(t *testing.T) (*Handlers, *state.Manager, *mockFirebaseClient, *miniredis.Miniredis) {
 	t.Helper()
 
 	// Setup test environment
@@ -165,7 +165,7 @@ func testHandlers(t *testing.T) (*Handlers, *state.Manager, *mockFirebaseClient)
 	})
 
 	// Setup state manager with Redis and encryption
-	stateManager, _ := setupTestStateManager(t)
+	stateManager, mr := setupTestStateManager(t)
 
 	// Create mock Firebase client
 	mockFB := newMockFirebaseClient()
@@ -195,7 +195,7 @@ func testHandlers(t *testing.T) (*Handlers, *state.Manager, *mockFirebaseClient)
 		allowedRedirectURIs: allowedRedirectURIs,
 	}
 
-	return handlers, stateManager, mockFB
+	return handlers, stateManager, mockFB, mr
 }
 
 // generatePKCEChallenge generates a PKCE challenge from verifier

@@ -19,7 +19,7 @@ import (
 // ===== HandleAuthorize Tests =====
 
 func TestHandleAuthorize_ValidRequest(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Track if CreateAuthURI was called
@@ -68,7 +68,7 @@ func TestHandleAuthorize_ValidRequest(t *testing.T) {
 }
 
 func TestHandleAuthorize_MethodNotAllowed(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/authorize", nil)
 	w := httptest.NewRecorder()
@@ -83,7 +83,7 @@ func TestHandleAuthorize_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleAuthorize_InvalidResponseType(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	params := url.Values{}
 	params.Set("response_type", "token") // Not supported
@@ -104,7 +104,7 @@ func TestHandleAuthorize_InvalidResponseType(t *testing.T) {
 }
 
 func TestHandleAuthorize_MissingRequiredParameters(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	tests := []struct {
 		name   string
@@ -164,7 +164,7 @@ func TestHandleAuthorize_MissingRequiredParameters(t *testing.T) {
 }
 
 func TestHandleAuthorize_PKCERequired(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	tests := []struct {
 		name                string
@@ -209,7 +209,7 @@ func TestHandleAuthorize_PKCERequired(t *testing.T) {
 
 // SECURITY TEST: Open redirect attack prevention
 func TestHandleAuthorize_RedirectURIWhitelist(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	verifier := "test-verifier-123456789012345678901234567890"
 	challenge := generatePKCEChallenge(verifier)
@@ -260,7 +260,7 @@ func TestHandleAuthorize_RedirectURIWhitelist(t *testing.T) {
 }
 
 func TestHandleAuthorize_UnsupportedProvider(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	verifier := "test-verifier-123456789012345678901234567890"
 	challenge := generatePKCEChallenge(verifier)
@@ -288,7 +288,7 @@ func TestHandleAuthorize_UnsupportedProvider(t *testing.T) {
 }
 
 func TestHandleAuthorize_ProviderNormalization(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	verifier := "test-verifier-123456789012345678901234567890"
@@ -334,7 +334,7 @@ func TestHandleAuthorize_ProviderNormalization(t *testing.T) {
 // ===== HandleCallback Tests =====
 
 func TestHandleCallback_ValidCallback(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup: Store OAuth state
@@ -405,7 +405,7 @@ func TestHandleCallback_ValidCallback(t *testing.T) {
 }
 
 func TestHandleCallback_MissingFirebaseState(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test", nil)
 	w := httptest.NewRecorder()
@@ -417,7 +417,7 @@ func TestHandleCallback_MissingFirebaseState(t *testing.T) {
 }
 
 func TestHandleCallback_InvalidState(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	// State that doesn't exist
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?state=non-existent-state&code=test", nil)
@@ -431,7 +431,7 @@ func TestHandleCallback_InvalidState(t *testing.T) {
 
 // SECURITY TEST: State reuse attack (TOCTOU)
 func TestHandleCallback_StateReuseAttack(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup OAuth state
@@ -471,7 +471,7 @@ func TestHandleCallback_StateReuseAttack(t *testing.T) {
 }
 
 func TestHandleCallback_FirebaseSignInFailure(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup OAuth state
@@ -516,7 +516,7 @@ func TestHandleCallback_FirebaseSignInFailure(t *testing.T) {
 // ===== HandleToken Tests =====
 
 func TestHandleToken_AuthorizationCodeGrant_Success(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Setup: Store authorization code
@@ -570,7 +570,7 @@ func TestHandleToken_AuthorizationCodeGrant_Success(t *testing.T) {
 }
 
 func TestHandleToken_MethodNotAllowed(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/token", nil)
 	w := httptest.NewRecorder()
@@ -585,7 +585,7 @@ func TestHandleToken_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleToken_UnsupportedGrantType(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	form := url.Values{}
 	form.Set("grant_type", "password") // Not supported
@@ -604,7 +604,7 @@ func TestHandleToken_UnsupportedGrantType(t *testing.T) {
 }
 
 func TestHandleToken_MissingParameters(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	tests := []struct {
 		name   string
@@ -671,7 +671,7 @@ func TestHandleToken_MissingParameters(t *testing.T) {
 }
 
 func TestHandleToken_InvalidAuthorizationCode(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
@@ -695,7 +695,7 @@ func TestHandleToken_InvalidAuthorizationCode(t *testing.T) {
 
 // SECURITY TEST: Client ID mismatch (authorization code theft)
 func TestHandleToken_ClientIDMismatch(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	verifier := "test-verifier-123456789012345678901234567890"
@@ -741,7 +741,7 @@ func TestHandleToken_ClientIDMismatch(t *testing.T) {
 
 // SECURITY TEST: Redirect URI mismatch
 func TestHandleToken_RedirectURIMismatch(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	verifier := "test-verifier-123456789012345678901234567890"
@@ -786,7 +786,7 @@ func TestHandleToken_RedirectURIMismatch(t *testing.T) {
 
 // SECURITY TEST: Invalid PKCE verifier
 func TestHandleToken_InvalidPKCEVerifier(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	verifier := "correct-verifier-123456789012345678901234"
@@ -831,7 +831,7 @@ func TestHandleToken_InvalidPKCEVerifier(t *testing.T) {
 
 // SECURITY TEST: Code reuse attack
 func TestHandleToken_CodeReuseAttack(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	verifier := "test-verifier-123456789012345678901234567890"
@@ -879,7 +879,7 @@ func TestHandleToken_CodeReuseAttack(t *testing.T) {
 }
 
 func TestHandleToken_RefreshTokenGrant_Success(t *testing.T) {
-	handlers, stateManager, mockFB := testHandlers(t)
+	handlers, stateManager, mockFB, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Store access and refresh tokens
@@ -928,7 +928,7 @@ func TestHandleToken_RefreshTokenGrant_Success(t *testing.T) {
 }
 
 func TestHandleToken_RefreshTokenGrant_InvalidToken(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
@@ -950,7 +950,7 @@ func TestHandleToken_RefreshTokenGrant_InvalidToken(t *testing.T) {
 // ===== HandleRevoke Tests =====
 
 func TestHandleRevoke_Success(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Store a token
@@ -984,7 +984,7 @@ func TestHandleRevoke_Success(t *testing.T) {
 }
 
 func TestHandleRevoke_MethodNotAllowed(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/revoke", nil)
 	w := httptest.NewRecorder()
@@ -995,7 +995,7 @@ func TestHandleRevoke_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleRevoke_MissingToken(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	form := url.Values{}
 	// No token parameter
@@ -1010,7 +1010,7 @@ func TestHandleRevoke_MissingToken(t *testing.T) {
 }
 
 func TestHandleRevoke_NonExistentToken(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	form := url.Values{}
 	form.Set("token", "non-existent-token")
@@ -1028,7 +1028,7 @@ func TestHandleRevoke_NonExistentToken(t *testing.T) {
 // ===== HandleIntrospect Tests =====
 
 func TestHandleIntrospect_ActiveToken(t *testing.T) {
-	handlers, stateManager, _ := testHandlers(t)
+	handlers, stateManager, _, _ := testHandlers(t)
 	ctx := context.Background()
 
 	// Store valid token
@@ -1062,7 +1062,7 @@ func TestHandleIntrospect_ActiveToken(t *testing.T) {
 }
 
 func TestHandleIntrospect_InactiveToken(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	form := url.Values{}
 	form.Set("token", "inactive-token")
@@ -1081,7 +1081,7 @@ func TestHandleIntrospect_InactiveToken(t *testing.T) {
 }
 
 func TestHandleIntrospect_MethodNotAllowed(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/introspect", nil)
 	w := httptest.NewRecorder()
@@ -1092,7 +1092,7 @@ func TestHandleIntrospect_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleIntrospect_MissingToken(t *testing.T) {
-	handlers, _, _ := testHandlers(t)
+	handlers, _, _, _ := testHandlers(t)
 
 	form := url.Values{}
 
