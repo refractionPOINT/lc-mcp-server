@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	// DefaultModel is the default Gemini model to use
-	DefaultModel = "gemini-2.5-flash"
-	// LiteModel is the lite version of Gemini
-	LiteModel = "gemini-2.5-flash-lite"
+	// DefaultModel is the default Gemini model to use for complex generation tasks
+	DefaultModel = "gemini-3-flash-preview"
+	// LiteModel is a smaller, faster Gemini model for simple classification tasks
+	LiteModel = "gemini-2.5-flash"
 	// DefaultRetryCount is the default number of retries for YAML parsing/validation
 	DefaultRetryCount = 10
 )
