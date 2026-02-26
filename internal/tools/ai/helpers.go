@@ -71,13 +71,22 @@ func ptr[T any](v T) *T {
 	return &v
 }
 
-// geminiResponse gets a response from Gemini API using the new official SDK
+// geminiResponse gets a response from Gemini API using the new official SDK.
+// Results are memoized: identical inputs return a cached response for up to 24 hours.
 func geminiResponse(ctx context.Context, messages []map[string]interface{}, systemPrompt string, modelName string, temperature float32) (string, error) {
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
 		slog.Debug("Gemini response time", "duration_ms", elapsed.Milliseconds())
 	}()
+
+	// Check the cache first.
+	cache := getCache()
+	cacheKey := buildCacheKey(messages, systemPrompt, modelName, temperature)
+	if cached, ok := cache.get(cacheKey); ok {
+		slog.Debug("AI cache hit", "key", cacheKey, "model", modelName)
+		return cached, nil
+	}
 
 	// Get API key from environment
 	apiKey := os.Getenv("GOOGLE_API_KEY")
@@ -192,7 +201,12 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 		slog.Info("DEBUG_AI: AI Response", "response", responseText)
 	}
 
-	return strings.TrimSpace(responseText), nil
+	result := strings.TrimSpace(responseText)
+
+	// Store in cache for future identical requests.
+	cache.set(cacheKey, result)
+
+	return result, nil
 }
 
 // validateLCQLQuery validates an LCQL query using the SDK
@@ -613,14 +627,15 @@ func convertElementsToInterface(elements []lc.SchemaElement) []interface{} {
 	return result
 }
 
-// getCurrentTimestampContext returns formatted timestamp context to inject into AI prompts
-// Includes Unix timestamp in seconds, milliseconds, and ISO 8601 format
+// getCurrentTimestampContext returns formatted timestamp context to inject into AI prompts.
+// The timestamp is rounded to the current UTC date so that identical queries on the
+// same day produce the same cache key while still giving the AI useful time context.
 func getCurrentTimestampContext() string {
 	now := time.Now().UTC()
-	return fmt.Sprintf("Current timestamp: %d seconds, %d milliseconds, %s ISO",
-		now.Unix(),
-		now.UnixMilli(),
-		now.Format(time.RFC3339))
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	return fmt.Sprintf("Current date: %s (unix %d)",
+		dayStart.Format("2006-01-02"),
+		dayStart.Unix())
 }
 
 // getSmartSchemaContext performs multi-stage context extraction for AI generation
