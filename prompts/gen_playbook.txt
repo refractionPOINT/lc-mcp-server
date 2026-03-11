@@ -187,7 +187,7 @@ Check against threat feeds or custom lookups:
 ```yaml
 op: lookup
 path: event/DOMAIN_NAME
-resource: lcr://lookup/malwaredomains
+resource: hive://lookup/malwaredomains
 case sensitive: false
 ```
 

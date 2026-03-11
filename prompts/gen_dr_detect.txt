@@ -80,7 +80,7 @@ rules:
 - **is public address**: Non-private IP address
 
 ### Advanced Operators
-- **lookup**: Match against threat feeds/lookups (use `resource:` parameter with `hive://lookups/NAME` or `lcr://lookup/NAME`)
+- **lookup**: Match against threat feeds/lookups (use `resource:` parameter with `hive://lookup/NAME`)
 - **scope**: Change path context for nested rules (resets `event/` root to specified path)
 - **is older than**: Time-based matching (use `seconds:` parameter, works with epoch timestamps)
 
@@ -431,7 +431,7 @@ rules:
 event: DNS_REQUEST
 op: lookup
 path: event/DOMAIN_NAME
-resource: lcr://lookup/malwaredomains
+resource: hive://lookup/malwaredomains
 case sensitive: false
 ```
 
