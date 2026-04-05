@@ -142,7 +142,7 @@ func TestAuthContext_Validate(t *testing.T) {
 				OID:  "test-org",
 			},
 			wantErr: true,
-			errMsg:  "API key is required",
+			errMsg:  "API key or JWT token is required",
 		},
 		{
 			name: "valid UID key mode",
