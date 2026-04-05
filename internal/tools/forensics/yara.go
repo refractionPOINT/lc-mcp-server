@@ -33,6 +33,7 @@ func RegisterYARAScanProcess() {
 			mcp.WithNumber("pid",
 				mcp.Required(),
 				mcp.Description("Process ID to scan")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -81,6 +82,7 @@ func RegisterYARAScanFile() {
 			mcp.WithString("file_path",
 				mcp.Required(),
 				mcp.Description("Path to file to scan")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -133,6 +135,7 @@ func RegisterYARAScanDirectory() {
 				mcp.Description("File pattern to match (e.g., '*.exe')")),
 			mcp.WithNumber("depth",
 				mcp.Description("Maximum recursion depth (default: 5)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -193,6 +196,7 @@ func RegisterYARAScanMemory() {
 			mcp.WithString("process_expression",
 				mcp.Required(),
 				mcp.Description("Process expression to match (e.g., 'name:chrome.exe')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)

@@ -28,6 +28,7 @@ func RegisterListSavedQueries() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_saved_queries",
 			mcp.WithDescription("List all saved LCQL queries"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -79,6 +80,7 @@ func RegisterGetSavedQuery() {
 			mcp.WithString("query_name",
 				mcp.Required(),
 				mcp.Description("Name of the saved query to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)
@@ -141,6 +143,8 @@ func RegisterSetSavedQuery() {
 				mcp.Description("The LCQL query string")),
 			mcp.WithString("description",
 				mcp.Description("Optional description of what the query does")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)
@@ -204,6 +208,7 @@ func RegisterDeleteSavedQuery() {
 			mcp.WithString("query_name",
 				mcp.Required(),
 				mcp.Description("Name of the saved query to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)
@@ -251,6 +256,7 @@ func RegisterRunSavedQuery() {
 				mcp.Description("Name of the saved query to run")),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			queryName, ok := args["query_name"].(string)

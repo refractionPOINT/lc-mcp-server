@@ -26,6 +26,7 @@ func RegisterListOutputs() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_outputs",
 			mcp.WithDescription("List all configured outputs in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -67,6 +68,7 @@ func RegisterAddOutput() {
 				mcp.Description("Type of output (e.g., 'event', 'detect', 'audit')")),
 			mcp.WithObject("config",
 				mcp.Description("Additional configuration parameters specific to the module")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
@@ -143,6 +145,7 @@ func RegisterDeleteOutput() {
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name of the output to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)

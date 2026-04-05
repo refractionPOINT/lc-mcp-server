@@ -26,6 +26,7 @@ func RegisterListExternalAdapters() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_external_adapters",
 			mcp.WithDescription("List all external adapter configurations"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -77,6 +78,7 @@ func RegisterGetExternalAdapter() {
 			mcp.WithString("adapter_name",
 				mcp.Required(),
 				mcp.Description("Name of the adapter to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			adapterName, ok := args["adapter_name"].(string)
@@ -137,6 +139,8 @@ func RegisterSetExternalAdapter() {
 			mcp.WithObject("adapter_config",
 				mcp.Required(),
 				mcp.Description("Adapter configuration data")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			adapterName, ok := args["adapter_name"].(string)
@@ -190,6 +194,7 @@ func RegisterDeleteExternalAdapter() {
 			mcp.WithString("adapter_name",
 				mcp.Required(),
 				mcp.Description("Name of the adapter to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			adapterName, ok := args["adapter_name"].(string)

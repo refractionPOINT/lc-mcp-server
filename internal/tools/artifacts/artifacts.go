@@ -35,6 +35,7 @@ func RegisterListArtifacts() {
 				mcp.Description("Start timestamp")),
 			mcp.WithNumber("end",
 				mcp.Description("End timestamp")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -87,6 +88,7 @@ func RegisterGetArtifact() {
 				mcp.Description("Artifact ID to retrieve")),
 			mcp.WithBoolean("get_url_only",
 				mcp.Description("If true, return signed URL instead of downloading (default: false)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			artifactID, ok := args["artifact_id"].(string)

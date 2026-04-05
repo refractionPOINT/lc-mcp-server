@@ -40,6 +40,7 @@ func RegisterGetOrgInfo() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_org_info",
 			mcp.WithDescription("Get detailed organization information and configuration"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 
@@ -71,6 +72,7 @@ func RegisterGetUsageStats() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_usage_stats",
 			mcp.WithDescription("Get organization usage statistics"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -99,6 +101,7 @@ func RegisterGetBillingDetails() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_billing_details",
 			mcp.WithDescription("Get billing information for the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -135,6 +138,7 @@ func RegisterGetOrgInvoiceURL() {
 				mcp.Description("Invoice month (1-12)")),
 			mcp.WithString("format",
 				mcp.Description("Optional format parameter for the invoice")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			year, ok := args["year"].(float64)
@@ -195,6 +199,7 @@ func RegisterCreateOrg() {
 				mcp.Description("Location for the organization (e.g., 'usa', 'europe', 'canada', 'india', 'uk')")),
 			mcp.WithString("template",
 				mcp.Description("Optional YAML Infrastructure-as-Code template to initialize the organization")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
@@ -255,6 +260,7 @@ func RegisterListUserOrgs() {
 				mcp.Description("Optional field to sort by")),
 			mcp.WithString("sort_order",
 				mcp.Description("Optional sort order ('asc' or 'desc')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			var filter, sortBy, sortOrder *string
@@ -341,6 +347,7 @@ func RegisterGetOrgErrors() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_org_errors",
 			mcp.WithDescription("Get error logs for the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -372,6 +379,7 @@ func RegisterDismissOrgError() {
 			mcp.WithString("component",
 				mcp.Required(),
 				mcp.Description("Component name of the error to dismiss")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			component, ok := args["component"].(string)
@@ -405,6 +413,7 @@ func RegisterListAPIKeys() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_api_keys",
 			mcp.WithDescription("List all API keys for the organization (does not return actual key values)"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -440,6 +449,7 @@ func RegisterCreateAPIKey() {
 				mcp.Description("Optional list of permissions for the key")),
 			mcp.WithString("allowed_ip_range",
 				mcp.Description("Optional CIDR notation IP range to restrict key usage (e.g., '192.168.1.0/24')")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			keyName, ok := args["key_name"].(string)
@@ -496,6 +506,7 @@ func RegisterDeleteAPIKey() {
 			mcp.WithString("key_hash",
 				mcp.Required(),
 				mcp.Description("Hash of the API key to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			keyHash, ok := args["key_hash"].(string)
@@ -529,6 +540,7 @@ func RegisterGetMITREReport() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_mitre_report",
 			mcp.WithDescription("Get MITRE ATT&CK coverage report showing detection rule coverage"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -560,6 +572,7 @@ func RegisterGetSKUDefinitions() {
 		RequiresOID: false, // This is a global query
 		Schema: mcp.NewTool("get_sku_definitions",
 			mcp.WithDescription("Get SKU definitions and pricing information"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -593,6 +606,7 @@ func RegisterUpgradeSensors() {
 				mcp.Description("If true, downgrade to the previous version of the sensor. Mutually exclusive with version and is_sleep.")),
 			mcp.WithBoolean("is_sleep",
 				mcp.Description("If true, move sensors to dormant mode. Mutually exclusive with version and is_fallback.")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Get parameters
@@ -674,6 +688,7 @@ func RegisterGetOrgOIDByName() {
 				mcp.Description("The organization name to look up")),
 			mcp.WithBoolean("exact_match",
 				mcp.Description("If true (default), match exact name; if false, case-insensitive match")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)

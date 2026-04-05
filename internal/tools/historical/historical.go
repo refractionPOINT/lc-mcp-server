@@ -213,6 +213,7 @@ func RegisterRunLCQLQuery() {
 				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
 			mcp.WithString("stream",
 				mcp.Description("Stream to query: 'event', 'detect', or 'audit' (default: 'event')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract query
@@ -329,6 +330,7 @@ func RegisterRunLCQLQueryFree() {
 				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
 			mcp.WithString("stream",
 				mcp.Description("Stream to query: 'event', 'detect', or 'audit' (default: 'event')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract query
@@ -448,6 +450,7 @@ func RegisterValidateLCQLQuery() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("The LCQL query to validate")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
 			// Extract query
@@ -492,6 +495,7 @@ func RegisterEstimateLCQLQuery() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("The LCQL query to estimate")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
 			// Extract query
@@ -546,6 +550,7 @@ func RegisterAnalyzeLCQLQuery() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("The LCQL query to analyze")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
 			// Extract query
@@ -606,6 +611,7 @@ func RegisterGetHistoricDetections() {
 				mcp.Description("Detection category to filter by")),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of results to return")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract start and end timestamps
@@ -700,6 +706,7 @@ func RegisterGetDetection() {
 			mcp.WithString("detection_id",
 				mcp.Required(),
 				mcp.Description("The detection ID (detect_id/atom) to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract detection_id parameter
@@ -748,6 +755,7 @@ func RegisterSearchIOCs() {
 				mcp.Description("Type of information to retrieve: 'summary' (occurrence counts) or 'locations' (specific sensor locations)")),
 			mcp.WithBoolean("case_sensitive",
 				mcp.Description("Whether the search should be case-sensitive (default: false, always false for location searches)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract parameters
@@ -930,6 +938,7 @@ func RegisterBatchSearchIOCs() {
 			mcp.WithString("info_type",
 				mcp.Required(),
 				mcp.Description("Type of information to retrieve: 'summary', 'locations', etc.")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract parameters
@@ -1029,6 +1038,7 @@ func RegisterGetTimeWhenSensorHasData() {
 			mcp.WithNumber("end",
 				mcp.Required(),
 				mcp.Description("End timestamp in Unix epoch seconds")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
@@ -1093,6 +1103,7 @@ func RegisterGetEventByAtom() {
 			mcp.WithString("atom",
 				mcp.Required(),
 				mcp.Description("The atom identifier of the event to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
@@ -1140,6 +1151,7 @@ func RegisterGetAtomChildren() {
 			mcp.WithString("atom",
 				mcp.Required(),
 				mcp.Description("The parent atom identifier to get children for")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID

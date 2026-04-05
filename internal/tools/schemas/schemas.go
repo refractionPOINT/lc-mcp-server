@@ -32,6 +32,7 @@ func RegisterGetEventSchema() {
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name of the event_type to get (e.g. 'DNS_REQUEST')")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)
@@ -72,6 +73,7 @@ func RegisterGetEventSchemasBatch() {
 			mcp.WithArray("event_names",
 				mcp.Required(),
 				mcp.Description("List of event_type names to get schemas for (e.g. ['DNS_REQUEST', 'PROCESS_START'])")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			eventNamesRaw, ok := args["event_names"].([]interface{})
@@ -162,6 +164,7 @@ func RegisterGetEventTypesWithSchemas() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_event_types_with_schemas",
 			mcp.WithDescription("Get all available event_type with schemas available for the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -195,6 +198,7 @@ func RegisterGetEventTypesWithSchemasForPlatform() {
 			mcp.WithString("platform",
 				mcp.Required(),
 				mcp.Description("The platform name to get event_types for (e.g. 'windows', 'linux', 'macos', as listed in the response from get_platform_names)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			platform, ok := args["platform"].(string)
@@ -231,6 +235,7 @@ func RegisterGetPlatformNames() {
 		RequiresOID: false, // /ontology endpoint does not require OID or authentication
 		Schema: mcp.NewTool("get_platform_names",
 			mcp.WithDescription("Get the platform names ontology from LimaCharlie (does not mean the tenant has sensors for these platforms)"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -264,6 +269,7 @@ func RegisterListWithPlatform() {
 			mcp.WithString("platform",
 				mcp.Required(),
 				mcp.Description("The platform name to list sensors for (e.g. 'windows', 'linux', 'macos', as listed in the response from get_platform_names)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			platform, ok := args["platform"].(string)

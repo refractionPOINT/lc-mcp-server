@@ -54,6 +54,7 @@ func RegisterListOrgUsers() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_org_users",
 			mcp.WithDescription("List all user emails with access to the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -91,6 +92,7 @@ func RegisterAddOrgUser() {
 				mcp.Description("Role to assign: Owner, Administrator, Operator, Viewer, or Basic")),
 			mcp.WithBoolean("invite_missing",
 				mcp.Description("If true, send an invite to users who don't have a LimaCharlie account (default: false)")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			email, ok := args["email"].(string)
@@ -144,6 +146,7 @@ func RegisterRemoveOrgUser() {
 			mcp.WithString("email",
 				mcp.Required(),
 				mcp.Description("Email address of the user to remove")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			email, ok := args["email"].(string)
@@ -177,6 +180,7 @@ func RegisterGetUsersPermissions() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_users_permissions",
 			mcp.WithDescription("Get detailed permission information for all users in the organization, including direct users, users from groups, and group info"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -214,6 +218,7 @@ func RegisterAddUserPermission() {
 			mcp.WithString("permission",
 				mcp.Required(),
 				mcp.Description("Permission to add")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			email, ok := args["email"].(string)
@@ -260,6 +265,7 @@ func RegisterRemoveUserPermission() {
 			mcp.WithString("permission",
 				mcp.Required(),
 				mcp.Description("Permission to remove")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			email, ok := args["email"].(string)
@@ -306,6 +312,7 @@ func RegisterSetUserRole() {
 			mcp.WithString("role",
 				mcp.Required(),
 				mcp.Description("Role to set: Owner, Administrator, Operator, Viewer, or Basic")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			email, ok := args["email"].(string)

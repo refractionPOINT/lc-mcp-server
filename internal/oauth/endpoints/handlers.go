@@ -232,10 +232,23 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Check for MFA required
 	if mfaErr, ok := err.(*firebase.MFARequiredError); ok {
-		// Store MFA session
-		mfaSessionID, _ := h.stateManager.GenerateMFASessionID()
+		// Generate MFA session ID with proper error handling
+		mfaSessionID, genErr := h.stateManager.GenerateMFASessionID()
+		if genErr != nil || mfaSessionID == "" {
+			h.logger.Error("Failed to generate MFA session ID", "error", genErr, "provider", oauthState.Provider)
+			WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
+			return
+		}
+
+		// Store MFA session with proper error handling
 		mfaSession := state.NewMFASession(mfaErr.MFAPendingCredential, mfaErr.MFAEnrollmentID, oauthStateParam, mfaErr.DisplayName, mfaErr.LocalID, mfaErr.Email, &mfaErr.PendingToken)
-		h.stateManager.StoreMFASession(r.Context(), mfaSessionID, mfaSession)
+		if storeErr := h.stateManager.StoreMFASession(r.Context(), mfaSessionID, mfaSession); storeErr != nil {
+			h.logger.Error("Failed to store MFA session", "error", storeErr, "provider", oauthState.Provider)
+			WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
+			return
+		}
+
+		h.logger.Info("MFA session created", "provider", oauthState.Provider)
 
 		// Redirect to MFA challenge page
 		mfaURL := h.metadataProvider.GetServerURL() + "/oauth/mfa-challenge?session=" + mfaSessionID
@@ -258,7 +271,12 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate authorization code
-	code, _ := h.stateManager.GenerateAuthorizationCode()
+	code, err := h.stateManager.GenerateAuthorizationCode()
+	if err != nil {
+		h.logger.Error("Failed to generate authorization code", "error", err)
+		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
+		return
+	}
 
 	// Parse expires_in and calculate absolute expiration time
 	expiresIn := int64(3600)
@@ -268,7 +286,11 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Unix() + expiresIn
 
 	authCode := state.NewAuthorizationCode(code, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
-	h.stateManager.StoreAuthorizationCode(r.Context(), authCode)
+	if err := h.stateManager.StoreAuthorizationCode(r.Context(), authCode); err != nil {
+		h.logger.Error("Failed to store authorization code", "error", err)
+		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
+		return
+	}
 
 	// Redirect to client with code
 	redirectURL := oauthState.RedirectURI + "?code=" + code + "&state=" + oauthState.State
@@ -589,7 +611,16 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	}
 
 	// Generate authorization code
-	authCode, _ := h.stateManager.GenerateAuthorizationCode()
+	authCode, err := h.stateManager.GenerateAuthorizationCode()
+	if err != nil {
+		h.logger.Error("Failed to generate authorization code", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success":           false,
+			"error":             "server_error",
+			"error_description": "Failed to complete authentication.",
+		})
+		return
+	}
 	expiresIn := int64(3600)
 	if resp.ExpiresIn != "" {
 		fmt.Sscanf(resp.ExpiresIn, "%d", &expiresIn)
@@ -676,7 +707,15 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 		"uid", uid,
 		"source", uidSource,
 		"session_id", sessionID)
-	h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData)
+	if err := h.stateManager.StoreAuthorizationCode(r.Context(), authCodeData); err != nil {
+		h.logger.Error("Failed to store authorization code after MFA", "error", err, "session_id", sessionID)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success":           false,
+			"error":             "server_error",
+			"error_description": "Failed to complete authentication.",
+		})
+		return
+	}
 
 	// SECURITY FIX: Consume MFA session on success to clean up session and attempt counter
 	h.stateManager.ConsumeMFASession(r.Context(), sessionID)

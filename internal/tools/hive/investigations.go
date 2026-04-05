@@ -26,6 +26,7 @@ func RegisterListInvestigations() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_investigations",
 			mcp.WithDescription("List all investigations in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -77,6 +78,7 @@ func RegisterGetInvestigation() {
 			mcp.WithString("investigation_name",
 				mcp.Required(),
 				mcp.Description("Name of the investigation to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			investigationName, ok := args["investigation_name"].(string)
@@ -137,6 +139,8 @@ func RegisterSetInvestigation() {
 			mcp.WithObject("investigation_data",
 				mcp.Required(),
 				mcp.Description("Investigation data (name, description, status, priority, events, detections, entities, notes, summary, conclusion)")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			investigationName, ok := args["investigation_name"].(string)
@@ -190,6 +194,7 @@ func RegisterDeleteInvestigation() {
 			mcp.WithString("investigation_name",
 				mcp.Required(),
 				mcp.Description("Name of the investigation to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			investigationName, ok := args["investigation_name"].(string)

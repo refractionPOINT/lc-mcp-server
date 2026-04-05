@@ -27,6 +27,7 @@ func RegisterGetFPRules() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_fp_rules",
 			mcp.WithDescription("Get all false positive rules for the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -60,6 +61,7 @@ func RegisterGetFPRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the FP rule to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -112,6 +114,8 @@ func RegisterSetFPRule() {
 				mcp.Description("FP rule content (detection filter)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)
@@ -194,6 +198,7 @@ func RegisterDeleteFPRule() {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the FP rule to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			ruleName, ok := args["rule_name"].(string)

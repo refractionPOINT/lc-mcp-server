@@ -26,6 +26,7 @@ func RegisterExpandInvestigation() {
 				mcp.Description("Investigation object to expand (mutually exclusive with investigation_name)")),
 			mcp.WithString("investigation_name",
 				mcp.Description("Name of investigation stored in Hive to fetch and expand (mutually exclusive with investigation)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: handleExpandInvestigation,
 	})

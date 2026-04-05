@@ -292,11 +292,18 @@ func (s *Server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract parameters
+	// Extract parameters - FormValue handles form parsing automatically
 	sessionID := r.FormValue("session")
 	code := r.FormValue("verification_code")
 
 	if sessionID == "" || code == "" {
+		// Log for debugging - avoid logging actual values for security
+		s.logger.Warn("MFA verify missing parameters",
+			"has_session", sessionID != "",
+			"has_code", code != "",
+			"content_type", r.Header.Get("Content-Type"),
+			"content_length", r.ContentLength)
+
 		s.writeJSON(w, http.StatusBadRequest, map[string]string{
 			"error":             "invalid_request",
 			"error_description": "Missing session or code parameter",

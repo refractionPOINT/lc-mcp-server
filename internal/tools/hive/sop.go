@@ -26,6 +26,7 @@ func RegisterListSops() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_sops",
 			mcp.WithDescription("List all Standard Operating Procedures in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -77,6 +78,7 @@ func RegisterGetSop() {
 			mcp.WithString("sop_name",
 				mcp.Required(),
 				mcp.Description("Name of the SOP to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sopName, ok := args["sop_name"].(string)
@@ -139,6 +141,8 @@ func RegisterSetSop() {
 				mcp.Description("The text content of the SOP")),
 			mcp.WithString("description",
 				mcp.Description("Optional description for the SOP")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sopName, ok := args["sop_name"].(string)
@@ -202,6 +206,7 @@ func RegisterDeleteSop() {
 			mcp.WithString("sop_name",
 				mcp.Required(),
 				mcp.Description("Name of the SOP to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sopName, ok := args["sop_name"].(string)

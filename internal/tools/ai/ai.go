@@ -36,6 +36,7 @@ func RegisterGenerateLCQLQuery() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to query")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -149,6 +150,7 @@ func RegisterGenerateDRRuleDetection() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to detect")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -285,6 +287,7 @@ func RegisterGenerateDRRuleRespond() {
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of how to respond")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -413,13 +416,14 @@ func RegisterGenerateSensorSelector() {
 		Name:                   "generate_sensor_selector",
 		Description:            "Generate a sensor selector expression from natural language using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true,                    // Require authentication to prevent unauthenticated access to Gemini API
-		SkipsAIAgentPermission: true,                    // AI generation tools bypass ai_agent.operate permission check
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_sensor_selector",
 			mcp.WithDescription("Generate a sensor selector expression based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of which sensors to select")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -476,13 +480,14 @@ func RegisterGeneratePythonPlaybook() {
 		Name:                   "generate_python_playbook",
 		Description:            "Generate a Python playbook script from natural language using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true,                     // Require authentication to prevent unauthenticated access to Gemini API
-		SkipsAIAgentPermission: true,                     // AI generation tools bypass ai_agent.operate permission check
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_python_playbook",
 			mcp.WithDescription("Generate a Python playbook script based on natural language description using Google Gemini AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of the playbook automation")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
@@ -536,13 +541,14 @@ func RegisterGenerateDetectionSummary() {
 		Name:                   "generate_detection_summary",
 		Description:            "Generate a summary of detections using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true,                      // Require authentication to prevent unauthenticated access to Gemini API
-		SkipsAIAgentPermission: true,                      // AI generation tools bypass ai_agent.operate permission check
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_detection_summary",
 			mcp.WithDescription("Generate a human-readable summary of detection data using Google Gemini AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("JSON string of detection data to summarize")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)

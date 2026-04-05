@@ -26,6 +26,7 @@ func RegisterListOrgNotes() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_org_notes",
 			mcp.WithDescription("List all organization notes"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := getOrganization(ctx)
@@ -77,6 +78,7 @@ func RegisterGetOrgNote() {
 			mcp.WithString("note_name",
 				mcp.Required(),
 				mcp.Description("Name of the org note to retrieve")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			noteName, ok := args["note_name"].(string)
@@ -139,6 +141,8 @@ func RegisterSetOrgNote() {
 				mcp.Description("The text content of the note")),
 			mcp.WithString("description",
 				mcp.Description("Optional description for the note")),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			noteName, ok := args["note_name"].(string)
@@ -202,6 +206,7 @@ func RegisterDeleteOrgNote() {
 			mcp.WithString("note_name",
 				mcp.Required(),
 				mcp.Description("Name of the org note to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			noteName, ok := args["note_name"].(string)

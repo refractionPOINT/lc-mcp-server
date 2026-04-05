@@ -30,6 +30,7 @@ func RegisterIsolateNetwork() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
@@ -77,6 +78,7 @@ func RegisterRejoinNetwork() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
@@ -124,6 +126,7 @@ func RegisterIsIsolated() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract and validate SID
@@ -179,6 +182,7 @@ func RegisterAddTag() {
 			mcp.WithNumber("ttl",
 				mcp.Required(),
 				mcp.Description("Time to live in seconds (0 for permanent)")),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract SID
@@ -243,6 +247,7 @@ func RegisterRemoveTag() {
 			mcp.WithString("tag",
 				mcp.Required(),
 				mcp.Description("Tag to remove")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Extract SID

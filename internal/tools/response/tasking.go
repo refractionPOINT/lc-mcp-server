@@ -38,6 +38,7 @@ func RegisterReliableTasking() {
 				mcp.Description("Context identifier reflected in investigation_id of response events. Useful for D&R rule matching.")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds - how long to keep trying to deliver the task (default: 604800 = 1 week)")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			task, ok := args["task"].(string)
@@ -88,6 +89,7 @@ func RegisterListReliableTasks() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_reliable_tasks",
 			mcp.WithDescription("List pending reliable tasks in the organization"),
+			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -122,6 +124,7 @@ func RegisterDeleteReliableTask() {
 				mcp.Description("Sensor selector expression to target tasks for specific sensors")),
 			mcp.WithString("sid",
 				mcp.Description("Specific sensor ID to delete tasks for")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			org, err := tools.GetOrganization(ctx)
@@ -167,6 +170,7 @@ func RegisterDeleteSensor() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID) to delete")),
+			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			sid, ok := args["sid"].(string)
