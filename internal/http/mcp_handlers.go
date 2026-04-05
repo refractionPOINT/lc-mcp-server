@@ -142,17 +142,30 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		}
 		s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
 
-		// Create auth context from Bearer token
-		authCtx = &auth.AuthContext{
-			Mode:            auth.AuthModeUIDOAuth,
-			UID:             uid,
-			JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
-			FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
-		}
-
 		// JWT passthrough mode detection: no Firebase token means direct JWT
 		isJWTPassthrough = firebaseIDToken == ""
-		s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
+
+		// Create auth context from Bearer token
+		if uid == "" && isJWTPassthrough && lcOID != "" {
+			// Org API key JWT passthrough: no UID in token, use OID from header.
+			// Clear isJWTPassthrough since the OID is already pinned — passthrough
+			// semantics (requiring OID in every tool call) don't apply here.
+			isJWTPassthrough = false
+			authCtx = &auth.AuthContext{
+				Mode:     auth.AuthModeNormal,
+				OID:      lcOID,
+				JWTToken: limaCharlieJWT,
+			}
+			s.logger.Debug("Authenticated via org JWT passthrough", "request_id", requestID, "oid", lcOID)
+		} else {
+			authCtx = &auth.AuthContext{
+				Mode:            auth.AuthModeUIDOAuth,
+				UID:             uid,
+				JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
+				FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
+			}
+			s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
+		}
 	} else if lcUID != "" && lcAPIKey != "" {
 		// Header-based user credentials (X-LC-UID + X-LC-API-KEY)
 		// If X-LC-OID is also provided, pin to that org

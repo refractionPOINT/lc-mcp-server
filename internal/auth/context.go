@@ -81,7 +81,7 @@ func (a *AuthContext) HasCredentials() bool {
 	}
 	switch a.Mode {
 	case AuthModeNormal:
-		return a.OID != "" && a.APIKey != ""
+		return a.OID != "" && (a.APIKey != "" || a.JWTToken != "")
 	case AuthModeUIDKey:
 		return a.UID != "" && a.APIKey != ""
 	case AuthModeUIDOAuth:
@@ -116,8 +116,8 @@ func (a *AuthContext) Validate() error {
 		if a.OID == "" {
 			return errors.New("OID is required for normal mode")
 		}
-		if a.APIKey == "" {
-			return errors.New("API key is required for normal mode")
+		if a.APIKey == "" && a.JWTToken == "" {
+			return errors.New("API key or JWT token is required for normal mode")
 		}
 	case AuthModeUIDKey:
 		if a.UID == "" {
