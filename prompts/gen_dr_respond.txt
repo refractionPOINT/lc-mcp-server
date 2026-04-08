@@ -224,7 +224,7 @@ Interface with external systems and tools for alerting, enrichment, and orchestr
 - action: extension request
   extension name: pagerduty
   extension action: create_incident
-  request:
+  extension request:
     severity: "{{ \"critical\" }}"
     summary: "Critical security event on {{ .routing.hostname }}"
     component: "{{ \"endpoint-security\" }}"
@@ -243,7 +243,7 @@ Interface with external systems and tools for alerting, enrichment, and orchestr
   extension name: slack
   extension action: send_message
   based on report: true  # Use report context instead of event context
-  request:
+  extension request:
     channel: "{{ \"#security-alerts\" }}"
     message: "Detection: {{ .cat }} on {{ .routing.hostname }}"
 ```
@@ -251,7 +251,7 @@ Interface with external systems and tools for alerting, enrichment, and orchestr
 **Key Parameters:**
 - `extension name`: Name of the subscribed extension
 - `extension action`: Action to invoke (varies by extension)
-- `request`: Extension-specific parameters (supports templating)
+- `extension request`: Extension-specific parameters (supports templating)
 - `based on report`: When `true`, template context is the latest `report` action's data (must have prior `report` action)
 
 **Common Extension Use Cases:**
@@ -920,7 +920,7 @@ keys:
 - action: extension request
   extension name: slack
   based on report: true  # ERROR - no prior report
-  request:
+  extension request:
     message: "{{ .cat }}"
 ```
 
@@ -931,7 +931,7 @@ keys:
 - action: extension request
   extension name: slack
   based on report: true  # Now works
-  request:
+  extension request:
     message: "Detection: {{ .cat }}"
 ```
 
