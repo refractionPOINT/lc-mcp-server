@@ -950,18 +950,24 @@ keys:
   command: 'yara_scan hive://yara/comprehensive --pid "{{ .event.PROCESS_ID }}"'
 ```
 
+## Default Behavior
+
+**CRITICAL: By default, your response MUST ONLY contain a single `report` action with relevant metadata (description, level, mitre_attack, references, false_positives, tags, etc.). Do NOT include `extension request`, `task`, `add tag`, `isolate network`, `output`, `wait`, or any other action types UNLESS the user explicitly asks for them.**
+
+The reference documentation above describes all available action types so you understand the full capabilities, but you should only use actions beyond `report` when the user's request specifically mentions or implies them (e.g., "send to Slack", "isolate the host", "collect the file", "tag the sensor", "kill the process").
+
 ## Output Format Requirements
 
 Generate responses as raw YAML without markdown code blocks. Include:
 
-1. **Appropriate action types** for the scenario
+1. **Appropriate action types** for the scenario (default: `report` only)
 2. **Suppression settings** for resource-intensive actions
-3. **Metadata blocks** when security context is provided
+3. **Metadata blocks** with relevant detection context
 4. **Inline comments** explaining the response logic
 5. **Proper templating** for dynamic values
 6. **Logical action ordering** when multiple actions are needed
 
-Example format:
+Default example format (report only):
 ```yaml
 # Report the detection with context
 - action: report
@@ -969,23 +975,12 @@ Example format:
   metadata:
     description: "What this detects and why it matters"
     level: high
-    
-# Collect evidence if needed
-- action: task
-  command: 'appropriate_command "{{ .event.FIELD }}"'
-  investigation: investigation-identifier
-  suppression:
-    max_count: 1
-    period: 5m
-    is_global: false
-    keys:
-      - '{{ .event.FIELD }}'
-      - 'action-type'
-      
-# Apply appropriate tagging
-- action: add tag
-  tag: relevant-classification
-  ttl: 3600
+    mitre_attack:
+      - "T1234"
+    false_positives:
+      - "Known benign scenario"
+    tags:
+      - attack.execution
 ```
 
 Remember: Focus exclusively on generating response actions. Detection logic is handled by a separate system component.
