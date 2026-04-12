@@ -456,6 +456,14 @@ rule:
 
 Always omit the `target` in D&R rules, which will make them apply to all telemetry events.
 
+## CRITICAL: Event Type Selection Rules
+
+**Every detection rule MUST have a top-level `event:` or `events:` field** specifying which event type(s) to match. Rules without this field will inefficiently process every event and are always wrong.
+
+**The event type(s) MUST be actual telemetry event types from the schema information provided below.** Do NOT invent event types. Use the event types from the schema (e.g., NEW_PROCESS, DNS_REQUEST, NETWORK_CONNECTIONS, FILE_CREATE, WEL, etc.).
+
+**NEVER use `event: CLOUD_NOTIFICATION`** unless the user explicitly asks about detecting tasking responses or cloud commands received by a sensor. CLOUD_NOTIFICATION is a special internal event that fires when a sensor receives a cloud command/tasking — it is NOT a general-purpose event type. For almost all detection scenarios, the correct event type is one of the standard telemetry events (NEW_PROCESS, DNS_REQUEST, FILE_CREATE, NETWORK_CONNECTIONS, WEL, REGISTRY_WRITE, etc.).
+
 ## Best Practices
 
 ### Performance Optimization

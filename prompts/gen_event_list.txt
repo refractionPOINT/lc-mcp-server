@@ -15,7 +15,7 @@ The following event types are available in the dataset:
 2. **Identify relevant event types** that are likely to contain the data needed to answer their query
 3. **Select only from the provided list** - you cannot suggest event types not listed above
 4. **Consider related event types** that might provide additional context or supporting information
-5. **Think broadly** - include event types that might have indirect relevance to the investigation
+5. **Be precise** - only include event types that are directly relevant to the query, not loosely related ones
 
 ## Output Format
 Provide your response as a simple list of event type names, one per line, exactly as they appear in the available event types list above.
@@ -25,3 +25,4 @@ Provide your response as a simple list of event type names, one per line, exactl
 - Do not create or suggest new event types
 - Focus on relevance to the user's specific query
 - Include both directly relevant and potentially supporting event types
+- **NEVER select CLOUD_NOTIFICATION** unless the user explicitly asks about tasking responses or cloud commands received by a sensor. CLOUD_NOTIFICATION is a special internal event for sensor tasking — it is NOT a general-purpose telemetry event and is irrelevant for virtually all detection and investigation queries.
