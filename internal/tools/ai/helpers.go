@@ -13,7 +13,6 @@ import (
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -106,10 +105,14 @@ func claudeResponse(ctx context.Context, messages []map[string]interface{}, syst
 		Messages:    anthropicMessages,
 	}
 
-	// Set system prompt if provided
+	// Set system prompt if provided, with prompt caching to reduce cost
+	// on retry iterations that resend the same large system prompt.
 	if systemPrompt != "" {
 		params.System = []anthropic.TextBlockParam{
-			{Text: systemPrompt},
+			{
+				Text:         systemPrompt,
+				CacheControl: anthropic.NewCacheControlEphemeralParam(),
+			},
 		}
 	}
 
@@ -213,18 +216,6 @@ func validateLCQLQuery(org *lc.Organization, query string) (bool, string) {
 	}
 
 	return true, ""
-}
-
-// validateDRRule validates a D&R rule using the SDK
-func validateDRRule(org *lc.Organization, ruleYAML string) (bool, string) {
-	// Parse the YAML to a Dict
-	var rule lc.Dict
-	if err := yaml.Unmarshal([]byte(ruleYAML), &rule); err != nil {
-		return false, fmt.Sprintf("invalid YAML: %v", err)
-	}
-
-	// Use the dict-based validation
-	return validateDRRuleDict(org, rule)
 }
 
 // validateDRRuleDict validates a D&R rule dict using the SDK
