@@ -10,18 +10,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
-	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	// DefaultModel is the default Gemini model to use for complex generation tasks
-	DefaultModel = "gemini-3-flash-preview"
-	// LiteModel is a smaller, faster Gemini model for simple classification tasks
-	LiteModel = "gemini-2.5-flash"
+	// DefaultModel is the Claude model used for complex generation tasks
+	DefaultModel = anthropic.ModelClaudeSonnet4_5
+	// LiteModel is a smaller, faster Claude model for simple classification tasks
+	LiteModel = anthropic.ModelClaudeHaiku4_5
 	// DefaultRetryCount is the default number of retries for YAML parsing/validation
 	DefaultRetryCount = 10
+	// defaultMaxTokens is the maximum number of tokens for Claude responses
+	defaultMaxTokens int64 = 8192
 )
 
 // isDebugAIEnabled checks if DEBUG_AI environment variable is set
@@ -66,18 +69,13 @@ func getPromptTemplate(promptName string) (string, error) {
 	return strings.TrimSpace(string(content)), nil
 }
 
-// ptr is a helper function to create a pointer to a value
-func ptr[T any](v T) *T {
-	return &v
-}
-
-// geminiResponse gets a response from Gemini API using the new official SDK.
+// claudeResponse gets a response from the Anthropic Claude API.
 // Results are memoized: identical inputs return a cached response for up to 24 hours.
-func geminiResponse(ctx context.Context, messages []map[string]interface{}, systemPrompt string, modelName string, temperature float32) (string, error) {
+func claudeResponse(ctx context.Context, messages []map[string]interface{}, systemPrompt string, modelName string, temperature float32) (string, error) {
 	startTime := time.Now()
 	defer func() {
 		elapsed := time.Since(startTime)
-		slog.Debug("Gemini response time", "duration_ms", elapsed.Milliseconds())
+		slog.Debug("Claude response time", "duration_ms", elapsed.Milliseconds())
 	}()
 
 	// Check the cache first.
@@ -89,111 +87,57 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 	}
 
 	// Get API key from environment
-	apiKey := os.Getenv("GOOGLE_API_KEY")
+	apiKey := os.Getenv("ANTHROPIC_KEY")
 	if apiKey == "" {
-		return "", fmt.Errorf("GOOGLE_API_KEY environment variable not set")
+		return "", fmt.Errorf("ANTHROPIC_KEY environment variable not set")
 	}
 
-	// Create client with new SDK
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{
-		APIKey:  apiKey,
-		Backend: genai.BackendGeminiAPI,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to create Gemini client: %w", err)
+	// Create Anthropic client
+	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+
+	// Convert generic message format to Anthropic MessageParam slice
+	anthropicMessages := convertToAnthropicMessages(messages)
+
+	// Build request parameters
+	params := anthropic.MessageNewParams{
+		Model:       modelName,
+		MaxTokens:   defaultMaxTokens,
+		Temperature: anthropic.Float(float64(temperature)),
+		Messages:    anthropicMessages,
 	}
 
-	// Build chat history for the new SDK
-	var history []*genai.Content
-	for i := 0; i < len(messages)-1; i++ {
-		msg := messages[i]
-		role, ok := msg["role"].(string)
-		if !ok {
-			continue
-		}
-
-		parts, ok := msg["parts"].([]interface{})
-		if !ok {
-			continue
-		}
-
-		var genaiParts []*genai.Part
-		for _, part := range parts {
-			if partMap, ok := part.(map[string]interface{}); ok {
-				if text, ok := partMap["text"].(string); ok {
-					genaiParts = append(genaiParts, &genai.Part{Text: text})
-				}
-			}
-		}
-
-		if len(genaiParts) == 0 {
-			continue
-		}
-
-		// Map role to Gemini role
-		genaiRole := "user"
-		if role == "model" {
-			genaiRole = "model"
-		}
-
-		history = append(history, &genai.Content{
-			Parts: genaiParts,
-			Role:  genaiRole,
-		})
-	}
-
-	// Prepare generation config
-	config := &genai.GenerateContentConfig{
-		Temperature: ptr(temperature),
-	}
-
-	// Set system instruction if provided
+	// Set system prompt if provided
 	if systemPrompt != "" {
-		config.SystemInstruction = &genai.Content{
-			Parts: []*genai.Part{{Text: systemPrompt}},
-		}
-	}
-
-	// Create chat with history and config
-	chat, err := client.Chats.Create(ctx, modelName, config, history)
-	if err != nil {
-		return "", fmt.Errorf("failed to create chat: %w", err)
-	}
-
-	// Get the last message (the current prompt)
-	lastMsg := messages[len(messages)-1]
-	parts, ok := lastMsg["parts"].([]interface{})
-	if !ok || len(parts) == 0 {
-		return "", fmt.Errorf("invalid message format")
-	}
-
-	var genaiParts []*genai.Part
-	for _, part := range parts {
-		if partMap, ok := part.(map[string]interface{}); ok {
-			if text, ok := partMap["text"].(string); ok {
-				genaiParts = append(genaiParts, &genai.Part{Text: text})
-			}
+		params.System = []anthropic.TextBlockParam{
+			{Text: systemPrompt},
 		}
 	}
 
 	// Debug logging for AI prompts
 	if isDebugAIEnabled() {
 		slog.Info("DEBUG_AI: System Prompt", "prompt", systemPrompt)
-		for i, part := range genaiParts {
-			slog.Info("DEBUG_AI: User Message", "part_index", i, "text", part.Text)
+		for i, msg := range messages {
+			slog.Info("DEBUG_AI: Message", "index", i, "role", msg["role"], "parts", msg["parts"])
 		}
 	}
 
 	// Send message and get response
-	resp, err := chat.Send(ctx, genaiParts...)
+	resp, err := client.Messages.New(ctx, params)
 	if err != nil {
-		return "", fmt.Errorf("failed to get Gemini response: %w", err)
+		return "", fmt.Errorf("failed to get Claude response: %w", err)
 	}
 
-	// Extract text from response using the Text() method
-	responseText := resp.Text()
+	// Extract text from response content blocks
+	var textParts []string
+	for _, block := range resp.Content {
+		if block.Type == "text" {
+			textParts = append(textParts, block.Text)
+		}
+	}
+
+	responseText := strings.Join(textParts, "")
 	if responseText == "" {
-		return "", fmt.Errorf("empty response from Gemini")
+		return "", fmt.Errorf("empty response from Claude")
 	}
 
 	// Debug logging for AI response
@@ -207,6 +151,48 @@ func geminiResponse(ctx context.Context, messages []map[string]interface{}, syst
 	cache.set(cacheKey, result)
 
 	return result, nil
+}
+
+// convertToAnthropicMessages converts the generic message format used throughout
+// the codebase into Anthropic SDK MessageParam types.
+func convertToAnthropicMessages(messages []map[string]interface{}) []anthropic.MessageParam {
+	var result []anthropic.MessageParam
+
+	for _, msg := range messages {
+		role, ok := msg["role"].(string)
+		if !ok {
+			continue
+		}
+
+		parts, ok := msg["parts"].([]interface{})
+		if !ok {
+			continue
+		}
+
+		// Extract text from parts
+		var textBlocks []anthropic.ContentBlockParamUnion
+		for _, part := range parts {
+			if partMap, ok := part.(map[string]interface{}); ok {
+				if text, ok := partMap["text"].(string); ok {
+					textBlocks = append(textBlocks, anthropic.NewTextBlock(text))
+				}
+			}
+		}
+
+		if len(textBlocks) == 0 {
+			continue
+		}
+
+		// Map role: Gemini used "model" for assistant, Anthropic uses "assistant"
+		switch role {
+		case "user":
+			result = append(result, anthropic.NewUserMessage(textBlocks...))
+		case "model", "assistant":
+			result = append(result, anthropic.NewAssistantMessage(textBlocks...))
+		}
+	}
+
+	return result
 }
 
 // validateLCQLQuery validates an LCQL query using the SDK
@@ -406,7 +392,7 @@ func detectPlatform(ctx context.Context, org *lc.Organization, userQuery string)
 	}
 	prompt := strings.Replace(promptTemplate, "{platforms}", markdownPlatforms.String(), -1)
 
-	// Call Gemini with LiteModel for fast, cheap inference
+	// Call Claude with LiteModel for fast, cheap inference
 	messages := []map[string]interface{}{
 		{
 			"role": "user",
@@ -416,7 +402,7 @@ func detectPlatform(ctx context.Context, org *lc.Organization, userQuery string)
 		},
 	}
 
-	response, err := geminiResponse(ctx, messages, prompt, LiteModel, 0.0)
+	response, err := claudeResponse(ctx, messages, prompt, LiteModel, 0.0)
 	if err != nil {
 		slog.Warn("Failed to detect platform", "error", err)
 		return ""
@@ -490,7 +476,7 @@ func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery s
 	// Replace the events placeholder
 	prompt := strings.Replace(promptTemplate, "{events}", strings.Join(eventNames, "\n"), -1)
 
-	// Call Gemini with LiteModel for fast, cheap inference
+	// Call Claude with LiteModel for fast, cheap inference
 	messages := []map[string]interface{}{
 		{
 			"role": "user",
@@ -500,7 +486,7 @@ func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery s
 		},
 	}
 
-	response, err := geminiResponse(ctx, messages, prompt, LiteModel, 0.0)
+	response, err := claudeResponse(ctx, messages, prompt, LiteModel, 0.0)
 	if err != nil {
 		slog.Warn("Failed to select relevant events", "error", err)
 		return nil

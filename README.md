@@ -188,8 +188,8 @@ export LOG_LEVEL="info"  # debug, info, warn, error
 # SDK Caching
 export SDK_CACHE_TTL="5m"  # Cache TTL (e.g., "5m", "1h", "30s")
 
-# AI-Powered Tools (requires Google Gemini)
-export GOOGLE_API_KEY="your-google-api-key"
+# AI-Powered Tools (requires Anthropic Claude)
+export ANTHROPIC_KEY="your-anthropic-api-key"
 export LLM_YAML_RETRY_COUNT="10"  # Validation retry count
 ```
 
@@ -633,12 +633,12 @@ export SDK_CACHE_TTL="1m"  # Reduce from default 5m
 
 **Error**: `AI tool failed: API key not set`
 
-**Solution**: Set Google API key:
+**Solution**: Set Anthropic API key:
 ```bash
-export GOOGLE_API_KEY="your-google-api-key"
+export ANTHROPIC_KEY="your-anthropic-api-key"
 ```
 
-Get a key from: https://makersuite.google.com/app/apikey
+Get a key from: https://console.anthropic.com/settings/keys
 
 ## Performance
 
