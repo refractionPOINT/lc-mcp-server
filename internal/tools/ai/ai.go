@@ -32,7 +32,7 @@ func RegisterGenerateLCQLQuery() {
 		RequiresOID:            true,
 		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_lcql_query",
-			mcp.WithDescription("Generate a LimaCharlie Query Language (LCQL) query from a natural language description using Google Gemini AI"),
+			mcp.WithDescription("Generate a LimaCharlie Query Language (LCQL) query from a natural language description using Anthropic Claude AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to query")),
@@ -81,9 +81,9 @@ func RegisterGenerateLCQLQuery() {
 				slog.Debug("LCQL generation attempt", "iteration", iteration+1, "max", maxIterations)
 
 				// Get the generated query
-				response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
+				response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 				if err != nil {
-					return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
+					return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 				}
 
 				// Parse response (format: query on first line, then explanation)
@@ -146,7 +146,7 @@ func RegisterGenerateDRRuleDetection() {
 		RequiresOID:            true,
 		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_dr_rule_detection",
-			mcp.WithDescription("Generate a Detection & Response rule's detection component based on natural language description using Google Gemini AI"),
+			mcp.WithDescription("Generate a Detection & Response rule's detection component based on natural language description using Anthropic Claude AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of what to detect")),
@@ -195,9 +195,9 @@ func RegisterGenerateDRRuleDetection() {
 				slog.Debug("D&R detection generation attempt", "iteration", iteration+1, "max", maxIterations)
 
 				// Get the generated detection
-				response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
+				response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 				if err != nil {
-					return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
+					return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 				}
 
 				// Clean markdown formatting from response
@@ -283,7 +283,7 @@ func RegisterGenerateDRRuleRespond() {
 		RequiresOID:            true,
 		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_dr_rule_respond",
-			mcp.WithDescription("Generate a Detection & Response rule's respond component based on natural language description using Google Gemini AI"),
+			mcp.WithDescription("Generate a Detection & Response rule's respond component based on natural language description using Anthropic Claude AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of how to respond")),
@@ -328,9 +328,9 @@ func RegisterGenerateDRRuleRespond() {
 				slog.Debug("D&R respond generation attempt", "iteration", iteration+1, "max", maxIterations)
 
 				// Get the generated respond
-				response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
+				response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 				if err != nil {
-					return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
+					return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 				}
 
 				// Clean markdown formatting from response
@@ -416,10 +416,10 @@ func RegisterGenerateSensorSelector() {
 		Name:                   "generate_sensor_selector",
 		Description:            "Generate a sensor selector expression from natural language using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Claude API
 		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_sensor_selector",
-			mcp.WithDescription("Generate a sensor selector expression based on natural language description using Google Gemini AI"),
+			mcp.WithDescription("Generate a sensor selector expression based on natural language description using Anthropic Claude AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of which sensors to select")),
@@ -440,7 +440,7 @@ func RegisterGenerateSensorSelector() {
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
-			// Single call to Gemini for sensor selector
+			// Single call to Claude for sensor selector
 			messages := []map[string]interface{}{
 				{
 					"role": "user",
@@ -450,9 +450,9 @@ func RegisterGenerateSensorSelector() {
 				},
 			}
 
-			response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
+			response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 			if err != nil {
-				return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
+				return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 			}
 
 			// Parse response (format: selector on first line, then explanation)
@@ -480,10 +480,10 @@ func RegisterGeneratePythonPlaybook() {
 		Name:                   "generate_python_playbook",
 		Description:            "Generate a Python playbook script from natural language using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Claude API
 		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_python_playbook",
-			mcp.WithDescription("Generate a Python playbook script based on natural language description using Google Gemini AI"),
+			mcp.WithDescription("Generate a Python playbook script based on natural language description using Anthropic Claude AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("Natural language description of the playbook automation")),
@@ -504,7 +504,7 @@ func RegisterGeneratePythonPlaybook() {
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
-			// Single call to Gemini for playbook
+			// Single call to Claude for playbook
 			messages := []map[string]interface{}{
 				{
 					"role": "user",
@@ -514,9 +514,9 @@ func RegisterGeneratePythonPlaybook() {
 				},
 			}
 
-			response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
+			response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 			if err != nil {
-				return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
+				return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 			}
 
 			// Remove markdown code fences if present
@@ -541,10 +541,10 @@ func RegisterGenerateDetectionSummary() {
 		Name:                   "generate_detection_summary",
 		Description:            "Generate a summary of detections using AI",
 		Profile:                "ai_powered",
-		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Gemini API
+		RequiresOID:            true, // Require authentication to prevent unauthenticated access to Claude API
 		SkipsAIAgentPermission: true, // AI generation tools bypass ai_agent.operate permission check
 		Schema: mcp.NewTool("generate_detection_summary",
-			mcp.WithDescription("Generate a human-readable summary of detection data using Google Gemini AI"),
+			mcp.WithDescription("Generate a human-readable summary of detection data using Anthropic Claude AI"),
 			mcp.WithString("query",
 				mcp.Required(),
 				mcp.Description("JSON string of detection data to summarize")),
@@ -565,7 +565,7 @@ func RegisterGenerateDetectionSummary() {
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
-			// Single call to Gemini for summary
+			// Single call to Claude for summary
 			messages := []map[string]interface{}{
 				{
 					"role": "user",
@@ -575,9 +575,9 @@ func RegisterGenerateDetectionSummary() {
 				},
 			}
 
-			response, err := geminiResponse(ctx, messages, prompt, DefaultModel, 0.0)
+			response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 			if err != nil {
-				return tools.ErrorResultf("failed to get Gemini response: %v", err), nil
+				return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 			}
 
 			elapsed := time.Since(startTime)

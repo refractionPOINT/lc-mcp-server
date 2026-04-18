@@ -84,7 +84,7 @@ func (c *aiCache) evictExpired() {
 	}
 }
 
-// buildCacheKey creates a SHA256 hex string from all geminiResponse inputs.
+// buildCacheKey creates a SHA256 hex string from all claudeResponse inputs.
 // Null bytes separate fields to prevent collisions between different inputs
 // (e.g. systemPrompt="ab",model="cd" vs systemPrompt="abc",model="d").
 func buildCacheKey(messages []map[string]interface{}, systemPrompt string, modelName string, temperature float32) string {
