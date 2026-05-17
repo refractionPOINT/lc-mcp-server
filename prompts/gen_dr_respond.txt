@@ -317,6 +317,97 @@ Manage rule metadata and tagging for operational intelligence.
 
 **Best Practice:** Always use suppression to prevent excessive hive modifications
 
+#### start ai agent
+Spawns a fully-managed Claude AI session to perform automated investigation, triage, analysis, or response. The agent can investigate events, query data via MCP servers, and generate reports.
+
+The action keyword is literally `start ai agent` (NOT "start ai session"). It supports two mutually exclusive modes:
+
+**Inline Mode** — all configuration lives in the rule:
+
+```yaml
+- action: start ai agent
+  prompt: |
+    A Mimikatz-related process was detected.
+    Investigate the process tree, check for credential dumping
+    activity, and provide a detailed incident report.
+  anthropic_secret: hive://secret/anthropic-key
+  lc_api_key_secret: hive://secret/lc-api-key
+  idempotent_key: "{{ .routing.event_id }}"
+  data:
+    hostname: "{{ .routing.hostname }}"
+    process: "{{ .event.FILE_PATH }}"
+    command_line: "{{ .event.COMMAND_LINE }}"
+  profile:
+    allowed_tools:
+      - Bash
+      - Read
+      - Grep
+    model: claude-sonnet-4-20250514
+    max_turns: 50
+    max_budget_usd: 5.0
+    one_shot: true
+    mcp_servers:
+      limacharlie:
+        type: http
+        url: https://mcp.limacharlie.io
+        headers:
+          Authorization: hive://secret/lc-mcp-token
+```
+
+**Definition Mode** — references a pre-configured AI agent in the Hive:
+
+```yaml
+- action: start ai agent
+  definition: hive://ai_agent/l1-triage-bot
+  debounce_key: "triage-{{ .routing.sid }}"
+```
+
+**Required Parameters (Inline Mode):**
+- `prompt`: Instructions for Claude. Supports templating.
+- `anthropic_secret`: Anthropic API key, typically a `hive://secret/<name>` reference.
+
+**Required Parameters (Definition Mode):**
+- `definition`: Reference to a pre-configured AI agent: `hive://ai_agent/<name>`.
+
+**Optional Parameters:**
+- `name`: Session name (inline mode only, supports templating).
+- `lc_api_key_secret`: LimaCharlie API key for org-level API access, e.g. `hive://secret/<name>` (inline mode only).
+- `lc_uid_secret`: LimaCharlie User ID, required when `lc_api_key_secret` is a user API key (inline mode only).
+- `idempotent_key`: Unique key to prevent duplicate sessions (inline mode only, supports templating).
+- `debounce_key`: Serializes sessions so only one is active per key; new requests queue and re-fire when the active one ends (both modes, supports templating).
+- `data`: Map of event fields to extract and include in the prompt as JSON (inline mode only).
+- `profile`: Inline session configuration (inline mode only). Common keys: `allowed_tools`/`denied_tools` (lists), `model`, `max_turns`, `max_budget_usd`, `one_shot` (defaults to `true` for D&R sessions), `mcp_servers`.
+- `profile_name`: Reference a saved profile by name instead of an inline `profile` (inline mode only; mutually exclusive with `profile`).
+
+**Best Practices:**
+- Use `idempotent_key` to ensure the same event never creates more than one session, or `debounce_key` to process every event but serialize sessions one at a time per key (queued, not dropped).
+- Set `max_turns` and `max_budget_usd` in the `profile` to bound cost and prevent runaway sessions.
+- Reference secrets via `hive://secret/<name>` — never hardcode API keys in the rule.
+- Be specific in the `prompt`: state exactly what to investigate, the output format expected, and any actions Claude must NOT take.
+
+**Example - Detection with AI investigation:**
+```yaml
+- action: report
+  name: "Mimikatz detected on {{ .routing.hostname }}"
+  metadata:
+    description: "Credential dumping tooling observed"
+    level: critical
+    mitre_attack:
+      - "T1003.001"
+
+- action: start ai agent
+  prompt: |
+    A Mimikatz-related process was detected. Investigate the
+    process tree, check for credential dumping activity, and
+    produce an incident report with remediation guidance.
+  anthropic_secret: hive://secret/anthropic-key
+  lc_api_key_secret: hive://secret/lc-api-key
+  idempotent_key: "{{ .routing.event_id }}"
+  data:
+    hostname: "{{ .routing.hostname }}"
+    process: "{{ .event.FILE_PATH }}"
+```
+
 ## Suppression Strategies
 
 ### Frequency Limiting
@@ -952,9 +1043,11 @@ keys:
 
 ## Default Behavior
 
-**CRITICAL: By default, your response MUST ONLY contain a single `report` action with relevant metadata (description, level, mitre_attack, references, false_positives, tags, etc.). Do NOT include `extension request`, `task`, `add tag`, `isolate network`, `output`, `wait`, or any other action types UNLESS the user explicitly asks for them.**
+**CRITICAL: By default, your response MUST ONLY contain a single `report` action with relevant metadata (description, level, mitre_attack, references, false_positives, tags, etc.). Do NOT include `extension request`, `task`, `add tag`, `isolate network`, `start ai agent`, `output`, `wait`, or any other action types UNLESS the user explicitly asks for them.**
 
-The reference documentation above describes all available action types so you understand the full capabilities, but you should only use actions beyond `report` when the user's request specifically mentions or implies them (e.g., "send to Slack", "isolate the host", "collect the file", "tag the sensor", "kill the process").
+The reference documentation above describes all available action types so you understand the full capabilities, but you should only use actions beyond `report` when the user's request specifically mentions or implies them (e.g., "send to Slack", "isolate the host", "collect the file", "tag the sensor", "kill the process", "start an AI investigation", "kick off an AI agent/session", "have Claude triage this").
+
+**When the user asks for an AI investigation, AI session, AI agent, or automated triage by Claude, you MUST emit a `start ai agent` action** (use the exact keyword `start ai agent`, never "start ai session"). `start ai agent` is self-contained and does NOT require a preceding `report` action. Use definition mode (`definition: hive://ai_agent/<name>`) if the user references a pre-configured agent; otherwise use inline mode with `prompt` and `anthropic_secret` (default the secret to `hive://secret/anthropic-key` if the user does not specify one).
 
 ## Output Format Requirements
 
