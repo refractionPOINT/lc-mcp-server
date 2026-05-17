@@ -380,9 +380,10 @@ The action keyword is literally `start ai agent` (NOT "start ai session"). It su
 - `profile_name`: Reference a saved profile by name instead of an inline `profile` (inline mode only; mutually exclusive with `profile`).
 
 **Best Practices:**
-- Always precede `start ai agent` with a `report` action so the detection is recorded before the investigation kicks off.
-- Use `idempotent_key` or `debounce_key` to prevent a flood of duplicate sessions from noisy detections.
-- Set `max_turns` and `max_budget_usd` in the `profile` to bound cost on unattended sessions.
+- Use `idempotent_key` to ensure the same event never creates more than one session, or `debounce_key` to process every event but serialize sessions one at a time per key (queued, not dropped).
+- Set `max_turns` and `max_budget_usd` in the `profile` to bound cost and prevent runaway sessions.
+- Reference secrets via `hive://secret/<name>` — never hardcode API keys in the rule.
+- Be specific in the `prompt`: state exactly what to investigate, the output format expected, and any actions Claude must NOT take.
 
 **Example - Detection with AI investigation:**
 ```yaml
@@ -1046,7 +1047,7 @@ keys:
 
 The reference documentation above describes all available action types so you understand the full capabilities, but you should only use actions beyond `report` when the user's request specifically mentions or implies them (e.g., "send to Slack", "isolate the host", "collect the file", "tag the sensor", "kill the process", "start an AI investigation", "kick off an AI agent/session", "have Claude triage this").
 
-**When the user asks for an AI investigation, AI session, AI agent, or automated triage by Claude, you MUST emit a `start ai agent` action** (use the exact keyword `start ai agent`, never "start ai session"). Precede it with a `report` action unless the user says otherwise. Use definition mode (`definition: hive://ai_agent/<name>`) if the user references a pre-configured agent; otherwise use inline mode with `prompt` and `anthropic_secret` (default the secret to `hive://secret/anthropic-key` if the user does not specify one).
+**When the user asks for an AI investigation, AI session, AI agent, or automated triage by Claude, you MUST emit a `start ai agent` action** (use the exact keyword `start ai agent`, never "start ai session"). `start ai agent` is self-contained and does NOT require a preceding `report` action. Use definition mode (`definition: hive://ai_agent/<name>`) if the user references a pre-configured agent; otherwise use inline mode with `prompt` and `anthropic_secret` (default the secret to `hive://secret/anthropic-key` if the user does not specify one).
 
 ## Output Format Requirements
 
