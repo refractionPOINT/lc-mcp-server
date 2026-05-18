@@ -30,8 +30,12 @@ Use the event type name **exactly as it appears in the Platform Schema**, whatev
 
 **CRITICAL — always select event types structurally; never filter on the event type in the Filter component.** Any time you want to restrict to one or more event types, put those names here in the Events component. Do NOT write `routing/event_type == "..."` (or `event_type contains ...`, etc.) in the Filter component to select an event type. The structural Events selector is far more efficient than an equivalent `routing/event_type` filter expression, and the two are otherwise equivalent in result. This holds for every event type, no matter how its name is spelled.
 
+**CRITICAL — never split an event-type selection across the Events component and the Filter.** Put the event type name in the Events component **once**, copied verbatim from the Platform Schema, and nowhere else. Do NOT also add a `routing/event_type` clause in the Filter. In particular, never put a guessed or generic name (e.g. `emails`, `email`, a platform name) in the Events component and the real schema name in a `routing/event_type` filter: an event has exactly one type, so an Events selector of one name combined with a `routing/event_type == "<different name>"` filter is a logical contradiction that matches **zero events**. If you only know the exact event type name (not a generic category), that exact name is what goes in the Events component.
+
 - ✅ CORRECT: `-24h | * | DNS_REQUEST | event/DOMAIN_NAME contains 'evil' | COUNT(event) as count`
-- ❌ WRONG: `-24h | * | * | routing/event_type == "DNS_REQUEST" and event/DOMAIN_NAME contains 'evil' | COUNT(event) as count`
+- ❌ WRONG (event type in the Filter): `-24h | * | * | routing/event_type == "DNS_REQUEST" and event/DOMAIN_NAME contains 'evil' | COUNT(event) as count`
+- ❌ WRONG (split/contradictory selection, matches nothing): `-720h | * | emails | routing/event_type == "office365_emails_email/restore_request/restore_requested" | COUNT(event) as count`
+- ✅ CORRECT (same intent, single structural selector): `-720h | * | office365_emails_email/restore_request/restore_requested | / exists | COUNT(event) as count`
 
 ### 4. Filter Component
 **REQUIRED - The filter component cannot be empty.** Use `/ exists` to match all events without filtering.
