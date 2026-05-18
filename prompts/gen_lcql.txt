@@ -21,10 +21,17 @@ Defines which sensors to query:
 - **Sensor selector**: `plat == windows`, `test in tags`, etc.
 
 ### 3. Events Component
-Specifies event types to include:
+Specifies event types to include. This is a **structural selector**: LimaCharlie indexes events by type, so restricting here is dramatically more efficient than filtering on the event type later.
 - **All events**: `*`
 - **Specific events**: `NEW_PROCESS DNS_REQUEST` (space-separated)
 - **Single event**: `NEW_PROCESS`, `DNS_REQUEST`, `WEL`, etc.
+
+Use the event type name **exactly as it appears in the Platform Schema**, whatever characters it contains. Event type names are not limited to short uppercase EDR identifiers — adapter/USP sources emit names that may contain lowercase letters, underscores, dots, or slashes. Regardless of the characters in the name, the event type always belongs in this Events component, placed here verbatim.
+
+**CRITICAL — always select event types structurally; never filter on the event type in the Filter component.** Any time you want to restrict to one or more event types, put those names here in the Events component. Do NOT write `routing/event_type == "..."` (or `event_type contains ...`, etc.) in the Filter component to select an event type. The structural Events selector is far more efficient than an equivalent `routing/event_type` filter expression, and the two are otherwise equivalent in result. This holds for every event type, no matter how its name is spelled.
+
+- ✅ CORRECT: `-24h | * | DNS_REQUEST | event/DOMAIN_NAME contains 'evil' | COUNT(event) as count`
+- ❌ WRONG: `-24h | * | * | routing/event_type == "DNS_REQUEST" and event/DOMAIN_NAME contains 'evil' | COUNT(event) as count`
 
 ### 4. Filter Component
 **REQUIRED - The filter component cannot be empty.** Use `/ exists` to match all events without filtering.
@@ -175,6 +182,19 @@ The `NETWORK_CONNECTIONS` event type contains an `event/NETWORK_ACTIVITY` array 
 -12h | plat == windows | WEL | event/EVENT/System/EventID == "7045" and event/EVENT/EventData/ImagePath contains "COMSPEC"
 ```
 
+### Adapter / USP Telemetry
+Adapter/USP event type names may use lowercase, dots, or other characters — they still go in the Events component, never in a `routing/event_type` filter.
+
+**Count Office365 email restore requests over the last 7 days (event type as structural selector, NOT a filter):**
+```
+-168h | * | office365_email_restore_requested | * | COUNT(event) as count
+```
+
+**Okta failed sign-ins by user:**
+```
+-24h | * | okta_user_session_start | event/outcome/result is "FAILURE" | event/actor/alternateId as user COUNT(event) as count GROUP BY(user)
+```
+
 ### Threat Hunting Examples
 **Overpass-the-Hash detection:**
 ```
@@ -250,7 +270,7 @@ All events in LimaCharlie include a `routing` object with metadata that is consi
 |-------|------|-------------|
 | `routing/oid` | string (UUID) | Organization ID |
 | `routing/sid` | string (UUID) | Sensor ID - uniquely identifies the endpoint |
-| `routing/event_type` | string | Type of event (e.g., NEW_PROCESS, DNS_REQUEST) |
+| `routing/event_type` | string | Type of event (e.g., NEW_PROCESS, DNS_REQUEST). Never filter on this to select an event type — always use the structural Events component (3rd) instead, which is far more efficient. |
 | `routing/event_time` | integer | Unix timestamp in milliseconds |
 | `routing/event_id` | string (UUID) | Unique identifier for this specific event |
 | `routing/hostname` | string | Hostname of the sensor |
@@ -284,6 +304,8 @@ All events in LimaCharlie include a `routing` object with metadata that is consi
 | `routing/tags` | array[string] | Sensor tags applied at event time |
 
 ## Event Types Reference
+
+The list below covers common EDR event types only and is NOT exhaustive. Adapter/USP sources (Office365, Okta, GitHub, etc.) have many additional event types. Always prefer the exact event type names provided in the Platform Schema below — whatever characters they contain — and place them in the structural Events component (3rd), never in the Filter.
 
 ### Core EDR Events
 - **`NEW_PROCESS`**: Process creation
