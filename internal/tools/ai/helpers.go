@@ -17,7 +17,7 @@ import (
 
 const (
 	// DefaultModel is the Claude model used for complex generation tasks
-	DefaultModel = anthropic.ModelClaudeSonnet4_5
+	DefaultModel = anthropic.ModelClaudeSonnet4_6
 	// LiteModel is a smaller, faster Claude model for simple classification tasks
 	LiteModel = anthropic.ModelClaudeHaiku4_5
 	// DefaultRetryCount is the default number of retries for YAML parsing/validation
