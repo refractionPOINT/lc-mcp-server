@@ -16,8 +16,10 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/ai"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/api"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/artifacts"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/cases"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/feedback"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/forensics"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/historical"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
@@ -27,6 +29,7 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/response"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/rules"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/schemas"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/vulnerability"
 )
 
 // skipPackages contains packages under internal/tools/ that should NOT be imported
