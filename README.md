@@ -21,7 +21,7 @@ This server bridges AI assistants and the LimaCharlie security platform through 
 
 ## Features
 
-- **287 MCP Tools** across 11 specialized profiles
+- **278 MCP Tools** across 11 specialized profiles
 - **Multi-Tenant Architecture** with strict credential isolation
 - **Dual Transport Modes**: STDIO (local) and HTTP (cloud with OAuth 2.1)
 - **AI-Powered Generation**: Automatic rule and query creation using Claude (default: Claude Sonnet 4.6)
@@ -130,12 +130,12 @@ The server organizes tools into profiles for different use cases:
 | **live_investigation** | 23 | Real-time endpoint inspection | Process lists, network connections, YARA scanning, artifacts |
 | **threat_response** | 14 | Incident response actions | Isolation, sensor tasking/tagging, memory dump, mass-tag |
 | **fleet_management** | 13 | Sensor deployment and lifecycle | Installation keys, cloud sensors, tag lookup, sensor export |
-| **detection_engineering** | 44 | Detection rule management | D&R/FP/YARA rules, integrity, exfil, MITRE ATT&CK |
-| **platform_admin** | 134 | Complete platform control | Outputs, integrations, lookups, secrets, billing, vulnerability, hive/adapter management |
+| **detection_engineering** | 41 | Detection rule management | D&R/FP/YARA rules, exfil, MITRE ATT&CK |
+| **platform_admin** | 128 | Complete platform control | Outputs, integrations, lookups, secrets, billing, vulnerability, hive/adapter management |
 | **ai_powered** | 18 | AI-assisted content generation | Auto-generate rules/queries; AI sessions, usage, memory |
 | **investigation_management** | 20 | Case management | Cases, notes, entities, detections, telemetry, artifacts |
 | **api_access** | 1 | Generic API escape-hatch | Raw LimaCharlie API calls |
-| **all** | 287 | All profiles combined | Full platform access |
+| **all** | 278 | All profiles combined | Full platform access |
 
 ## Configuration
 
@@ -269,7 +269,7 @@ Claude uses: add_tag
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │   Auth      │  │     Tools    │  │   SDK Cache  │     │
 │  │   Context   │  │   Registry   │  │   (Thread-   │     │
-│  │   Isolation │  │   (287)      │  │    Safe)     │     │
+│  │   Isolation │  │   (278)      │  │    Safe)     │     │
 │  └─────────────┘  └──────────────┘  └──────────────┘     │
 │                                                             │
 └────────────────────────┬────────────────────────────────────┘
@@ -326,19 +326,19 @@ lc-mcp-server/
 │   │   ├── state/           # OAuth state management
 │   │   └── token/           # Token encryption and storage
 │   │
-│   └── tools/               # MCP tool implementations (287 tools)
+│   └── tools/               # MCP tool implementations (278 tools)
 │       ├── registry.go      # Tool registration system
 │       ├── core/            # Core + fleet sensor ops (9 tools)
 │       ├── historical/      # Historical data & LCQL (13 tools)
 │       ├── investigation/   # Saved investigations (3 tools)
 │       ├── forensics/       # Live investigation & YARA scanning (16 tools)
 │       ├── response/        # Threat response & tasking (18 tools)
-│       ├── rules/           # D&R/FP/YARA/integrity/exfil (34 tools)
+│       ├── rules/           # D&R/FP/YARA/exfil (31 tools)
 │       ├── cases/           # Case management (15 tools)
 │       ├── vulnerability/   # Vulnerability management (14 tools)
 │       ├── feedback/        # Feedback requests & channels (6 tools)
 │       ├── hive/            # Hive config & adapters (48 tools)
-│       ├── config/          # Platform configuration (44 tools)
+│       ├── config/          # Platform configuration (38 tools)
 │       ├── schemas/         # Event schemas (7 tools)
 │       ├── ai/              # AI generation, sessions, memory (18 tools)
 │       └── admin/           # Users, groups, org admin (34 tools)

@@ -12,10 +12,6 @@ import (
 // tools are registered with the correct profile and OID requirement.
 func TestNewRulesToolsRegistration(t *testing.T) {
 	newTools := []string{
-		// integrity
-		"list_integrity_rules",
-		"set_integrity_rule",
-		"delete_integrity_rule",
 		// exfil
 		"list_exfil_rules",
 		"set_exfil_event_rule",

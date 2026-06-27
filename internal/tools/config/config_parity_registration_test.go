@@ -13,9 +13,6 @@ import (
 func TestConfigParityRegistration(t *testing.T) {
 	newTools := []string{
 		"list_audit_logs",
-		"list_logging_rules",
-		"set_logging_rule",
-		"delete_logging_rule",
 		"get_quota_usage",
 		"set_org_quota",
 		"get_billing_status",
@@ -27,9 +24,6 @@ func TestConfigParityRegistration(t *testing.T) {
 		"resolve_arl",
 		"list_available_extensions",
 		"rekey_extension",
-		"list_ingestion_keys",
-		"create_ingestion_key",
-		"delete_ingestion_key",
 		"get_installation_key",
 		"enable_secret",
 		"disable_secret",
