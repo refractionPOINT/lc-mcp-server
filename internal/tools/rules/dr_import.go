@@ -45,6 +45,8 @@ func RegisterImportDRRules() {
 				mcp.Description("D&R namespace: 'general' (default) or 'managed'")),
 			mcp.WithBoolean("dry_run",
 				mcp.Description("If true, validate and report what would change without writing")),
+			mcp.WithBoolean("enabled",
+				mcp.Description("Whether imported rules are enabled (default: true)")),
 			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -126,6 +128,9 @@ func RegisterImportDRRules() {
 			hive := lc.NewHiveClient(org)
 			batch := hive.NewBatchOperations()
 			enabled := true
+			if e, ok := args["enabled"].(bool); ok {
+				enabled = e
+			}
 			hiveID := lc.HiveID{
 				Name:      hiveName,
 				Partition: lc.PartitionID(org.GetOID()),

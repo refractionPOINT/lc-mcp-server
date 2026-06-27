@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
@@ -57,14 +58,18 @@ func RegisterTaskSensor() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResultf("sensor not found: %s", sid), nil
-			}
-
 			isSync, _ := args["is_sync"].(bool)
 
 			if isSync {
+				// Synchronous tasking needs interactive mode, which the SDK keys
+				// off an investigation ID (it spins up a Spout to await the reply).
+				// Use a fresh investigation context and tear it down afterwards so
+				// the websocket/Spout is not leaked.
+				org = org.WithInvestigationID(uuid.New().String())
+				defer org.Close()
+
+				sensor := org.GetSensor(sid)
+
 				timeout := 30 * time.Second
 				if t, ok := args["timeout_sec"].(float64); ok && t > 0 {
 					timeout = time.Duration(t) * time.Second
@@ -84,6 +89,7 @@ func RegisterTaskSensor() {
 				}), nil
 			}
 
+			sensor := org.GetSensor(sid)
 			if err := sensor.Task(task); err != nil {
 				return tools.ErrorResultf("failed to task sensor: %v", err), nil
 			}
@@ -163,16 +169,15 @@ func RegisterSealSensor() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp := lc.Dict{}
-			if err := org.GenericPOSTRequest(fmt.Sprintf("%s/seal", sid), nil, &resp); err != nil {
+			sensor := org.GetSensor(sid)
+			if err := sensor.Seal(); err != nil {
 				return tools.ErrorResultf("failed to seal sensor: %v", err), nil
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
-				"status":   "success",
-				"sid":      sid,
-				"message":  fmt.Sprintf("Sensor %s is now sealed", sid),
-				"response": resp,
+				"status":  "success",
+				"sid":     sid,
+				"message": fmt.Sprintf("Sensor %s is now sealed", sid),
 			}), nil
 		},
 	})
@@ -203,16 +208,15 @@ func RegisterUnsealSensor() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp := lc.Dict{}
-			if err := org.GenericDELETERequest(fmt.Sprintf("%s/seal", sid), &resp); err != nil {
+			sensor := org.GetSensor(sid)
+			if err := sensor.Unseal(); err != nil {
 				return tools.ErrorResultf("failed to unseal sensor: %v", err), nil
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
-				"status":   "success",
-				"sid":      sid,
-				"message":  fmt.Sprintf("Sensor %s seal removed", sid),
-				"response": resp,
+				"status":  "success",
+				"sid":     sid,
+				"message": fmt.Sprintf("Sensor %s seal removed", sid),
 			}), nil
 		},
 	})
