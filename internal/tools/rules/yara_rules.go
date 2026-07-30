@@ -247,8 +247,10 @@ func RegisterValidateYaraRule() {
 }
 
 // yaraConditionRe matches a condition section header. YARA allows whitespace
-// before the colon, so a plain "condition:" substring test misses legal rules.
-var yaraConditionRe = regexp.MustCompile(`(?m)^\s*condition\s*:`)
+// before the colon and does not require the section to start a line (a whole
+// rule can legally sit on one line), so neither a plain "condition:" substring
+// test nor a line-anchored match covers all legal rules.
+var yaraConditionRe = regexp.MustCompile(`(^|\s)condition\s*:`)
 
 // yaraSyntaxAdvisories reports what does not look like YARA about a source.
 //

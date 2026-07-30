@@ -33,10 +33,16 @@ func RegisterListInstallationKeys() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// List installation keys
-			keys, err := org.InstallationKeys()
-			if err != nil {
+			// Raw read: the SDK's InstallationKey struct drops quota_total /
+			// quota_remaining, which create_installation_key can set. The
+			// response envelope is {oid: {iid: key}}.
+			resp := map[string]map[string]lc.Dict{}
+			if err := org.GenericGETRequest(fmt.Sprintf("installationkeys/%s", org.GetOID()), nil, &resp); err != nil {
 				return tools.ErrorResultf("failed to list installation keys: %v", err), nil
+			}
+			keys := []lc.Dict{}
+			for _, k := range resp[org.GetOID()] {
+				keys = append(keys, k)
 			}
 
 			return tools.SuccessResult(map[string]interface{}{

@@ -31,6 +31,11 @@ func TestYaraSyntaxAdvisories(t *testing.T) {
 		assert.Empty(t, yaraSyntaxAdvisories(rule))
 	})
 
+	t.Run("a rule written on a single line is accepted", func(t *testing.T) {
+		rule := `rule Evil { strings: $a = "bad" condition : $a }`
+		assert.Empty(t, yaraSyntaxAdvisories(rule))
+	})
+
 	t.Run("a brace in a string literal is only an advisory", func(t *testing.T) {
 		rule := `rule Evil {
 	strings:

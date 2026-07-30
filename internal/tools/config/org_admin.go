@@ -18,6 +18,7 @@ func init() {
 	RegisterSetOrgValue()
 	RegisterRenameOrg()
 	RegisterSetOrgDescription()
+	RegisterGetOrgDeleteConfirmation()
 	RegisterDeleteOrg()
 	RegisterResolveARL()
 	RegisterListAvailableExtensions()
@@ -357,6 +358,36 @@ func RegisterSetOrgDescription() {
 	})
 }
 
+// RegisterGetOrgDeleteConfirmation registers the get_org_delete_confirmation tool
+func RegisterGetOrgDeleteConfirmation() {
+	tools.RegisterTool(&tools.ToolRegistration{
+		Name:        "get_org_delete_confirmation",
+		Description: "Mint the confirmation token required by delete_org",
+		Profile:     "platform_admin",
+		RequiresOID: true,
+		Schema: mcp.NewTool("get_org_delete_confirmation",
+			mcp.WithDescription("Mint the confirmation token delete_org requires. The token expires after 60 seconds and is only valid on the gateway region that minted it, so call delete_org immediately after — a token minted outside this MCP server (e.g. via the REST API from another machine) will NOT work."),
+			mcp.WithReadOnlyHintAnnotation(true),
+		),
+		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			org, err := getOrganization(ctx)
+			if err != nil {
+				return tools.ErrorResultf("failed to get organization: %v", err), nil
+			}
+
+			token, err := org.GetDeleteConfirmationToken()
+			if err != nil {
+				return tools.ErrorResultf("failed to get delete confirmation token: %v", err), nil
+			}
+
+			return tools.SuccessResult(map[string]interface{}{
+				"confirmation_token": token,
+				"expires_in_seconds": 60,
+			}), nil
+		},
+	})
+}
+
 // RegisterDeleteOrg registers the delete_org tool
 func RegisterDeleteOrg() {
 	tools.RegisterTool(&tools.ToolRegistration{
@@ -368,7 +399,7 @@ func RegisterDeleteOrg() {
 			mcp.WithDescription("Delete the organization (token flow)"),
 			mcp.WithString("confirmation_token",
 				mcp.Required(),
-				mcp.Description("Confirmation token obtained from the delete-confirmation flow")),
+				mcp.Description("Confirmation token from get_org_delete_confirmation, minted less than 60 seconds ago")),
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {

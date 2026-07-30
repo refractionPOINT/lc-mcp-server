@@ -362,6 +362,7 @@ var ProfileDefinitions = map[string][]string{
 		"set_org_value",
 		"rename_org",
 		"set_org_description",
+		"get_org_delete_confirmation",
 		"delete_org",
 		"resolve_arl",
 		"list_available_extensions",

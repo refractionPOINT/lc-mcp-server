@@ -2,6 +2,7 @@ package cloudsec
 
 import (
 	"context"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -90,7 +91,11 @@ func registerCAASM() {
 		},
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
-			addScalars(q, args, "type")
+			// Provider ids are lowercase on the backend; "GCP" would silently
+			// miss (same normalization as cloudsec_get_scan_status).
+			if v, ok := args["type"].(string); ok && v != "" {
+				q["type"] = strings.ToLower(strings.TrimSpace(v))
+			}
 			return readGET(ctx, "providers/manifest", q)
 		},
 	})
