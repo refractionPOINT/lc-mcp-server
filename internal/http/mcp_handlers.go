@@ -131,7 +131,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		}
 	}
 	if lcUID != "" {
-		if err := auth.ValidateUID(lcUID); err != nil {
+		if err := auth.ValidateUIDFormat(lcUID); err != nil {
 			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid X-LC-UID header: %v", err))
 			return
 		}
