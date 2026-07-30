@@ -249,6 +249,8 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	// Set permission enforcement based on config
 	ctx = auth.WithPermissionEnforcement(ctx, s.config.Features.EnforceAIAgentOperate)
+	// Carried so indirect dispatch applies the same "oid is required" rule.
+	ctx = auth.WithJWTPassthrough(ctx, isJWTPassthrough)
 
 	// Add meta-tool filter to context if headers are provided
 	allowList := parseToolList(lcAllowMetaTools)

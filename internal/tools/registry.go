@@ -1062,16 +1062,20 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 			effectiveOID = authCtx.OID
 		}
 
-		// An org-scoped tool with no resolvable OID would issue a malformed
-		// request and skip the permission check on the way. Refuse it here the
-		// same way the HTTP dispatcher does, so reaching a tool indirectly
-		// through lc_call_tool cannot dodge that guard.
-		if effectiveOID == "" {
-			return ErrorResultf("'oid' parameter is required for tool '%s': the credential in use is not scoped to an organization", toolName), nil
+		// Under raw-JWT passthrough no org is pinned, so an org-scoped tool must
+		// be given an explicit oid. The HTTP dispatcher refuses that case before
+		// dispatch; apply the same rule here so reaching a tool indirectly
+		// through lc_call_tool cannot dodge the guard (and with it the permission
+		// check). Outside passthrough an empty OID is left alone: some
+		// RequiresOID tools legitimately work without one (who_am_i resolves a
+		// client, not an org), and refusing them here would break callers.
+		if effectiveOID == "" && auth.IsJWTPassthrough(ctx) {
+			return ErrorResultf("'oid' parameter is required for tool '%s' when using JWT authentication", toolName), nil
 		}
 
-		// Skip the check for tools marked with SkipsAIAgentPermission.
-		if !reg.SkipsAIAgentPermissionCheck() {
+		// Skip the check for tools marked with SkipsAIAgentPermission, and for
+		// genuinely org-less contexts (the call fails downstream if it needs one).
+		if effectiveOID != "" && !reg.SkipsAIAgentPermissionCheck() {
 			if err := checkAIAgentPermission(ctx, effectiveOID); err != nil {
 				return ErrorResultf("%v", err), nil
 			}

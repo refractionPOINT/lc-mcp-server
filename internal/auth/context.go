@@ -22,6 +22,7 @@ const (
 	permissionCacheKey   contextKey = "lc_permission_cache"
 	permissionEnforceKey contextKey = "lc_permission_enforce"
 	allowedToolsKey      contextKey = "lc_allowed_tools"
+	jwtPassthroughKey    contextKey = "lc_jwt_passthrough"
 )
 
 // AuthMode represents the authentication mode
@@ -260,6 +261,20 @@ func GetRequestID(ctx context.Context) string {
 		return requestID
 	}
 	return ""
+}
+
+// WithJWTPassthrough records that the caller authenticated with a raw
+// LimaCharlie JWT and no organization is pinned, so an org-scoped tool must be
+// given an explicit oid. Indirect dispatch (lc_call_tool) reads this so it
+// applies the same rule the transport does.
+func WithJWTPassthrough(ctx context.Context, isPassthrough bool) context.Context {
+	return context.WithValue(ctx, jwtPassthroughKey, isPassthrough)
+}
+
+// IsJWTPassthrough reports whether this request is raw-JWT passthrough.
+func IsJWTPassthrough(ctx context.Context) bool {
+	isPassthrough, _ := ctx.Value(jwtPassthroughKey).(bool)
+	return isPassthrough
 }
 
 // WithAllowedTools records the set of tools this request may call — the active

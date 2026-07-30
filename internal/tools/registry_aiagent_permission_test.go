@@ -178,6 +178,8 @@ func TestCallToolEnforcesAIAgentPermission(t *testing.T) {
 		authCtx       *auth.AuthContext
 		args          map[string]interface{}
 		wantCheckRuns bool
+		// passthrough marks the request as raw-JWT passthrough (no org pinned).
+		passthrough bool
 		// wantRefused marks the cases CallTool rejects before dispatch, where
 		// neither the check nor the handler runs.
 		wantRefused bool
@@ -197,13 +199,22 @@ func TestCallToolEnforcesAIAgentPermission(t *testing.T) {
 			wantCheckRuns: true,
 		},
 		{
-			// An org-scoped tool with no resolvable OID is refused outright: it
-			// would otherwise issue a malformed org-less request AND skip the
-			// permission check on the way, which is the guard the HTTP dispatcher
-			// applies for JWT passthrough and lc_call_tool used to sidestep.
-			name:          "UID mode, no ambient OID, no oid argument is refused",
+			// No org is resolvable, but this is not passthrough: some RequiresOID
+			// tools work without one (who_am_i resolves a client, not an org), so
+			// the call proceeds unchecked exactly as it did before.
+			name:          "UID mode, no ambient OID, no oid argument",
 			authCtx:       &auth.AuthContext{Mode: auth.AuthModeUIDKey, UID: "user@example.com", APIKey: "key"},
 			args:          map[string]interface{}{},
+			wantCheckRuns: false,
+		},
+		{
+			// Under passthrough an org-scoped tool MUST carry an explicit oid.
+			// The HTTP dispatcher refuses this before dispatch; lc_call_tool used
+			// to sidestep that guard and silently skip the permission check too.
+			name:          "JWT passthrough, no OID anywhere, is refused",
+			authCtx:       &auth.AuthContext{Mode: auth.AuthModeUIDOAuth, UID: "user@example.com", JWTToken: "jwt"},
+			args:          map[string]interface{}{},
+			passthrough:   true,
 			wantCheckRuns: false,
 			wantRefused:   true,
 		},
@@ -221,7 +232,11 @@ func TestCallToolEnforcesAIAgentPermission(t *testing.T) {
 			const toolName = "test_calltool_permission_tool"
 			registerPermissionTestTool(t, toolName, true, false, &handlerRan)
 
-			result, err := CallTool(newPermissionTestContext(tt.authCtx), toolName, tt.args)
+			ctx := newPermissionTestContext(tt.authCtx)
+			if tt.passthrough {
+				ctx = auth.WithJWTPassthrough(ctx, true)
+			}
+			result, err := CallTool(ctx, toolName, tt.args)
 			if err != nil {
 				t.Fatalf("CallTool returned a Go error: %v", err)
 			}
