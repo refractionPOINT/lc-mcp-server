@@ -21,6 +21,7 @@ const (
 	metaToolFilterKey    contextKey = "lc_meta_tool_filter"
 	permissionCacheKey   contextKey = "lc_permission_cache"
 	permissionEnforceKey contextKey = "lc_permission_enforce"
+	allowedToolsKey      contextKey = "lc_allowed_tools"
 )
 
 // AuthMode represents the authentication mode
@@ -259,6 +260,38 @@ func GetRequestID(ctx context.Context) string {
 		return requestID
 	}
 	return ""
+}
+
+// WithAllowedTools records the set of tools this request may call — the active
+// profile, or the X-MCP-Tools allowlist. It bounds indirect dispatch (lc_call_tool)
+// to the same set the transport already enforced, so the meta-tool cannot be used
+// to escape a narrow endpoint.
+//
+// Absent (nil) means unbounded, which is the correct default for stdio, where the
+// profile is already a registration-time boundary.
+func WithAllowedTools(ctx context.Context, toolNames []string) context.Context {
+	return context.WithValue(ctx, allowedToolsKey, toolNames)
+}
+
+// GetAllowedTools returns the tools this request may call, or nil when unbounded.
+func GetAllowedTools(ctx context.Context) []string {
+	toolNames, _ := ctx.Value(allowedToolsKey).([]string)
+	return toolNames
+}
+
+// IsToolInAllowedSet reports whether a tool may be dispatched for this request.
+// An absent set means unbounded.
+func IsToolInAllowedSet(ctx context.Context, toolName string) bool {
+	allowed := GetAllowedTools(ctx)
+	if allowed == nil {
+		return true
+	}
+	for _, name := range allowed {
+		if name == toolName {
+			return true
+		}
+	}
+	return false
 }
 
 // MetaToolFilter defines allow/deny lists for the lc_call_tool meta-tool

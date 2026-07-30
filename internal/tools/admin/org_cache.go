@@ -28,15 +28,67 @@ type OrgCache struct {
 // DefaultOrgCacheTTL is the default time-to-live for cached org data
 const DefaultOrgCacheTTL = 5 * time.Minute
 
+// orgCacheCleanupInterval is how often expired entries are swept. Without a
+// sweep, entries are only ever shadowed (never deleted), and because the cache
+// key hashes the caller's JWT, every token rotation mints a new permanent entry
+// holding that credential's whole org inventory — unbounded growth in a
+// long-lived multi-tenant server.
+const orgCacheCleanupInterval = 1 * time.Minute
+
+// orgCacheMaxEntries bounds the cache as a backstop for the sweep.
+const orgCacheMaxEntries = 1000
+
 var (
 	globalOrgCache = NewOrgCache(DefaultOrgCacheTTL)
 )
 
-// NewOrgCache creates a new OrgCache with the specified TTL
+// NewOrgCache creates a new OrgCache with the specified TTL. The returned cache
+// sweeps expired entries in the background.
 func NewOrgCache(ttl time.Duration) *OrgCache {
-	return &OrgCache{
+	c := &OrgCache{
 		cache: make(map[string]*OrgCacheEntry),
 		ttl:   ttl,
+	}
+	go c.cleanupLoop()
+	return c
+}
+
+// cleanupLoop periodically deletes entries past their TTL so a credential's org
+// inventory does not stay resident after it has gone stale.
+func (c *OrgCache) cleanupLoop() {
+	ticker := time.NewTicker(orgCacheCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		c.evictExpired()
+	}
+}
+
+// evictExpired removes every entry past its TTL.
+func (c *OrgCache) evictExpired() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := time.Now()
+	for k, entry := range c.cache {
+		if now.Sub(entry.CreatedAt) > c.ttl {
+			delete(c.cache, k)
+		}
+	}
+}
+
+// evictOldestLocked drops the least recently created entry. Callers must hold
+// the write lock.
+func (c *OrgCache) evictOldestLocked() {
+	var oldestKey string
+	var oldest time.Time
+	for k, entry := range c.cache {
+		if oldestKey == "" || entry.CreatedAt.Before(oldest) {
+			oldestKey = k
+			oldest = entry.CreatedAt
+		}
+	}
+	if oldestKey != "" {
+		delete(c.cache, oldestKey)
 	}
 }
 
@@ -111,6 +163,11 @@ func (c *OrgCache) AddOrgs(cacheKey string, orgs []lc.UserOrgInfo, complete bool
 
 	// If entry doesn't exist or has expired, create new entry
 	if !exists || time.Since(entry.CreatedAt) > c.ttl {
+		// Backstop the sweep so a burst of new credentials cannot grow the map
+		// without bound between ticks.
+		if !exists && len(c.cache) >= orgCacheMaxEntries {
+			c.evictOldestLocked()
+		}
 		entry = &OrgCacheEntry{
 			NameToOID:      make(map[string]string),
 			NameLowerToOID: make(map[string]string),

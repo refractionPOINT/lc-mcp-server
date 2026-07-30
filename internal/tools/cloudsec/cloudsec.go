@@ -12,6 +12,7 @@ package cloudsec
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -104,6 +105,16 @@ func readGETOrg(org *lc.Organization, path string, query lc.Dict) (*mcp.CallTool
 		return tools.ErrorResultf("cloudsec request to %s failed: %s", path, describeErr(err)), nil
 	}
 	return tools.SuccessResult(resp), nil
+}
+
+// getJSON is readGETOrg for a caller that needs to post-process the payload
+// before returning it.
+func getJSON(ctx context.Context, org *lc.Organization, path string, query lc.Dict) (map[string]interface{}, error) {
+	resp := map[string]interface{}{}
+	if err := org.GenericGETRequest(path, query, &resp); err != nil {
+		return nil, fmt.Errorf("cloudsec request to %s failed: %w", path, err)
+	}
+	return resp, nil
 }
 
 // callPOST runs a JSON-body cloudsec call for the context's organization.

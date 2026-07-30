@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net/url"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -128,7 +129,7 @@ func RegisterGetArtifact() {
 				// That download is the entire point of get_url_only for a
 				// multi-gigabyte artifact.
 				metadata := lc.Dict{}
-				path := fmt.Sprintf("insight/%s/artifacts/originals/%s", org.GetOID(), artifactID)
+				path := fmt.Sprintf("insight/%s/artifacts/originals/%s", org.GetOID(), url.PathEscape(artifactID))
 				if err := org.GenericGETRequest(path, lc.Dict{}, &metadata); err != nil {
 					return tools.ErrorResultf("failed to get artifact URL: %v", err), nil
 				}

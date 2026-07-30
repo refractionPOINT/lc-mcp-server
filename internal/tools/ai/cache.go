@@ -87,6 +87,17 @@ func (c *aiCache) evictExpired() {
 // buildCacheKey creates a SHA256 hex string from all claudeResponse inputs.
 // Null bytes separate fields to prevent collisions between different inputs
 // (e.g. systemPrompt="ab",model="cd" vs systemPrompt="abc",model="d").
+// The key deliberately carries no OID/UID: it is content-addressed over the
+// COMPLETE set of inputs that determine the response, and org-specific material
+// (schemas, event types, validation errors) reaches the model only through
+// messages/systemPrompt, which are hashed here. Two tenants therefore share an
+// entry only when their full prompt is byte-identical, in which case the value
+// contains nothing the other did not also supply.
+//
+// If a future change makes the response depend on anything NOT hashed below — a
+// tool-use loop that reads org data mid-generation, a per-org prompt fragment
+// added after this call, per-org token limits — that input must be added to the
+// key or the cache becomes a cross-tenant leak.
 func buildCacheKey(messages []map[string]interface{}, systemPrompt string, modelName string, temperature float32) string {
 	h := sha256.New()
 	// Deterministic serialization: JSON encode messages then combine with other fields.

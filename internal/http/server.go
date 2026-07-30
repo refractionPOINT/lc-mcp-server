@@ -28,6 +28,11 @@ import (
 const (
 	// HeaderMCPTools is the HTTP header for specifying a CSV list of tools
 	HeaderMCPTools = "X-MCP-Tools"
+
+	// ProfileAPIAccess is the profile whose contract is registry-wide raw
+	// dispatch through the lc_call_tool meta-tool, rather than a bounded set of
+	// tools. It is therefore exempt from the indirect-dispatch bound.
+	ProfileAPIAccess = "api_access"
 )
 
 // Server represents the HTTP server for MCP OAuth mode

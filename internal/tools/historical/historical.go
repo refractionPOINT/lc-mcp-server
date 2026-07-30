@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -730,7 +731,7 @@ func RegisterGetDetection() {
 			}
 
 			// Make GET request to /insight/{oid}/detections/{detection_id}
-			path := fmt.Sprintf("insight/%s/detections/%s", org.GetOID(), detectionID)
+			path := fmt.Sprintf("insight/%s/detections/%s", org.GetOID(), url.PathEscape(detectionID))
 			var response lc.Dict
 			if err := org.GenericGETRequest(path, nil, &response); err != nil {
 				return tools.ErrorResultf("failed to get detection: %v", err), nil
@@ -860,7 +861,7 @@ func RegisterSearchIOCs() {
 				}
 				params["limit"] = int(limit)
 			}
-			endpoint := fmt.Sprintf("insight/%s/objects/%s", org.GetOID(), objectType)
+			endpoint := fmt.Sprintf("insight/%s/objects/%s", org.GetOID(), url.PathEscape(string(objectType)))
 
 			// Execute search based on info type
 			switch infoType {
@@ -1209,7 +1210,7 @@ func RegisterGetEventByAtom() {
 			}
 
 			// Make GET request to /insight/{oid}/{sid}/{atom}
-			path := fmt.Sprintf("insight/%s/%s/%s", org.GetOID(), sid, atom)
+			path := fmt.Sprintf("insight/%s/%s/%s", org.GetOID(), sid, url.PathEscape(atom))
 			var response lc.Dict
 			if err := org.GenericGETRequest(path, nil, &response); err != nil {
 				return tools.ErrorResultf("failed to get event: %v", err), nil
@@ -1257,7 +1258,7 @@ func RegisterGetAtomChildren() {
 			}
 
 			// Make GET request to /insight/{oid}/{sid}/{atom}/children
-			path := fmt.Sprintf("insight/%s/%s/%s/children", org.GetOID(), sid, atom)
+			path := fmt.Sprintf("insight/%s/%s/%s/children", org.GetOID(), sid, url.PathEscape(atom))
 			var response lc.Dict
 			if err := org.GenericGETRequest(path, nil, &response); err != nil {
 				return tools.ErrorResultf("failed to get atom children: %v", err), nil

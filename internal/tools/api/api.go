@@ -51,6 +51,14 @@ func handleLCCallTool(ctx context.Context, args map[string]interface{}) (*mcp.Ca
 		return tools.ErrorResult("cannot call lc_call_tool recursively"), nil
 	}
 
+	// Stay inside the request's allowed tool set (the active profile, or the
+	// X-MCP-Tools allowlist). Without this the meta-tool is a way around a
+	// narrow endpoint: the transport checked the caller may invoke
+	// lc_call_tool, not that it may invoke the target.
+	if !auth.IsToolInAllowedSet(ctx, toolName) {
+		return tools.ErrorResultf("tool %q is not available on this endpoint; it is outside the active profile's tool set", toolName), nil
+	}
+
 	// Check meta-tool filter (X-LC-ALLOW-META-TOOLS / X-LC-DENY-META-TOOLS headers)
 	if filter := auth.GetMetaToolFilter(ctx); filter != nil {
 		if !auth.IsToolAllowed(filter, toolName) {

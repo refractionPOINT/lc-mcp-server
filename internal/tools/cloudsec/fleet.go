@@ -6,8 +6,79 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
+
+// filterFleetByAIAgentPermission drops fleet rows for orgs whose ai_agent.operate
+// permission the caller lacks, mutating resp in place.
+//
+// This tool is the one org-data-bearing read with no {oid} in its path, so the
+// dispatcher — which keys its ai_agent.operate check off the effective OID —
+// never covers it. An org that revoked ai_agent.operate did so to keep agents
+// out of exactly this data, so the check is applied per row here instead.
+//
+// One WhoAmI backs every row: PermissionCache caches it against the caller's
+// credential, so N orgs cost one round trip. If the check cannot run (enforcement
+// off, no cache wired, WhoAmI failure) the payload is left untouched — this is a
+// policy filter, not the tenant boundary, which the gateway owns.
+func filterFleetByAIAgentPermission(ctx context.Context, org *lc.Organization, resp map[string]interface{}) {
+	if !auth.IsPermissionEnforcementEnabled(ctx) {
+		return
+	}
+	permCache := auth.GetPermissionCache(ctx)
+	if permCache == nil {
+		return
+	}
+
+	rows, ok := resp["orgs"].([]interface{})
+	if !ok || len(rows) == 0 {
+		return
+	}
+
+	kept := make([]interface{}, 0, len(rows))
+	denied := 0
+	for _, row := range rows {
+		oid := ""
+		if m, ok := row.(map[string]interface{}); ok {
+			oid, _ = m["oid"].(string)
+		}
+		if oid == "" {
+			// Cannot attribute the row to an org: keep it rather than silently
+			// dropping data on a shape we do not recognize.
+			kept = append(kept, row)
+			continue
+		}
+		allowed, err := permCache.CheckPermission(ctx, org, oid, "ai_agent.operate")
+		if err != nil {
+			// Fail open on an infrastructure error, as above.
+			kept = append(kept, row)
+			continue
+		}
+		if !allowed {
+			denied++
+			continue
+		}
+		kept = append(kept, row)
+	}
+
+	if denied == 0 {
+		return
+	}
+
+	resp["orgs"] = kept
+	// The rollups are computed gateway-side across the unfiltered set, so once a
+	// row is withheld they describe a population that includes it. Drop them
+	// rather than reporting aggregates over data this caller may not see.
+	delete(resp, "rollups")
+	skipped, ok := resp["skipped"].(map[string]interface{})
+	if !ok {
+		skipped = map[string]interface{}{}
+		resp["skipped"] = skipped
+	}
+	skipped["ai_agent_operate_denied"] = denied
+	resp["rollups_withheld"] = true
+}
 
 // registerFleet registers the free-tier standing read and the multi-org fleet board.
 func registerFleet() {
@@ -63,9 +134,19 @@ func registerFleet() {
 			addScalars(q, args, "group", "cursor")
 			addInt(q, args, "limit", maxFleetLimit)
 			addInt(q, args, "trend_days", 0)
-			// No {oid} in this path: the gateway is the sole authorizer and stamps
-			// the org list itself.
-			return readGETOrg(org, "cloudsec/fleet/overview", q)
+			// No {oid} in this path: the gateway authorizes the org set from the
+			// caller's token and stamps the list itself.
+			resp, err := getJSON(ctx, org, "cloudsec/fleet/overview", q)
+			if err != nil {
+				return tools.ErrorResult(describeErr(err)), nil
+			}
+			// The route carries no {oid}, so the dispatcher's ai_agent.operate
+			// check never runs for this tool — but every row is one org's posture
+			// data, and an org that revoked ai_agent.operate revoked exactly this.
+			// Drop those rows rather than erroring, matching how the gateway
+			// silently excludes orgs that fail its own filters.
+			filterFleetByAIAgentPermission(ctx, org, resp)
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

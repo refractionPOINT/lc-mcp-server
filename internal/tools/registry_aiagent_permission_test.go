@@ -72,6 +72,20 @@ func permissionCheckFired(result *mcp.CallToolResult) bool {
 	return false
 }
 
+// resultText flattens a result's text content for assertions.
+func resultText(result *mcp.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, content := range result.Content {
+		if text, ok := content.(mcp.TextContent); ok {
+			b.WriteString(text.Text)
+		}
+	}
+	return b.String()
+}
+
 func TestWrapHandlerEnforcesAIAgentPermission(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -164,6 +178,9 @@ func TestCallToolEnforcesAIAgentPermission(t *testing.T) {
 		authCtx       *auth.AuthContext
 		args          map[string]interface{}
 		wantCheckRuns bool
+		// wantRefused marks the cases CallTool rejects before dispatch, where
+		// neither the check nor the handler runs.
+		wantRefused bool
 	}{
 		{
 			// Same regression on the CallTool path, which lc_call_tool delegates to.
@@ -180,10 +197,15 @@ func TestCallToolEnforcesAIAgentPermission(t *testing.T) {
 			wantCheckRuns: true,
 		},
 		{
-			name:          "UID mode, no ambient OID, no oid argument",
+			// An org-scoped tool with no resolvable OID is refused outright: it
+			// would otherwise issue a malformed org-less request AND skip the
+			// permission check on the way, which is the guard the HTTP dispatcher
+			// applies for JWT passthrough and lc_call_tool used to sidestep.
+			name:          "UID mode, no ambient OID, no oid argument is refused",
 			authCtx:       &auth.AuthContext{Mode: auth.AuthModeUIDKey, UID: "user@example.com", APIKey: "key"},
 			args:          map[string]interface{}{},
 			wantCheckRuns: false,
+			wantRefused:   true,
 		},
 		{
 			name:          "normal mode, pinned OID",
@@ -207,8 +229,15 @@ func TestCallToolEnforcesAIAgentPermission(t *testing.T) {
 			if got := permissionCheckFired(result); got != tt.wantCheckRuns {
 				t.Errorf("ai_agent.operate check fired = %v, want %v (result: %+v)", got, tt.wantCheckRuns, result)
 			}
-			if handlerRan == tt.wantCheckRuns {
-				t.Errorf("handler ran = %v while check fired = %v; the check must gate the handler", handlerRan, tt.wantCheckRuns)
+
+			// The handler must run only when nothing stopped it: neither a fired
+			// permission check nor an up-front refusal.
+			wantHandlerRan := !tt.wantCheckRuns && !tt.wantRefused
+			if handlerRan != wantHandlerRan {
+				t.Errorf("handler ran = %v, want %v (check fired = %v, refused = %v)", handlerRan, wantHandlerRan, tt.wantCheckRuns, tt.wantRefused)
+			}
+			if tt.wantRefused && !strings.Contains(resultText(result), "'oid' parameter is required") {
+				t.Errorf("expected an oid-required refusal, got: %+v", result)
 			}
 		})
 	}

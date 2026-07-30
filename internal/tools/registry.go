@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -563,6 +564,15 @@ func RegisterTool(reg *ToolRegistration) {
 	registry[reg.Name] = reg
 }
 
+// UnregisterTool removes a tool from the registry.
+//
+// Registration happens in package init() and the registry is read-only once the
+// server is serving; this exists so a test in another package can clean up a
+// tool it registered.
+func UnregisterTool(name string) {
+	delete(registry, name)
+}
+
 // GetTool retrieves a tool from the registry
 func GetTool(name string) (*ToolRegistration, bool) {
 	tool, ok := registry[name]
@@ -603,7 +613,10 @@ func GetToolsForProfile(profile string) []string {
 	if !ok {
 		return []string{}
 	}
-	return tools
+	// Copy: ProfileDefinitions is process-global and shared by every tenant's
+	// request, so handing out its backing array would let any caller that
+	// appends to the result change the tool list every other tenant sees.
+	return slices.Clone(tools)
 }
 
 // ValidateToolNames checks if all provided tool names exist in the registry
@@ -1049,9 +1062,16 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 			effectiveOID = authCtx.OID
 		}
 
-		// Skip the check for tools marked with SkipsAIAgentPermission, and for
-		// genuinely org-less contexts (the call fails downstream anyway).
-		if effectiveOID != "" && !reg.SkipsAIAgentPermissionCheck() {
+		// An org-scoped tool with no resolvable OID would issue a malformed
+		// request and skip the permission check on the way. Refuse it here the
+		// same way the HTTP dispatcher does, so reaching a tool indirectly
+		// through lc_call_tool cannot dodge that guard.
+		if effectiveOID == "" {
+			return ErrorResultf("'oid' parameter is required for tool '%s': the credential in use is not scoped to an organization", toolName), nil
+		}
+
+		// Skip the check for tools marked with SkipsAIAgentPermission.
+		if !reg.SkipsAIAgentPermissionCheck() {
 			if err := checkAIAgentPermission(ctx, effectiveOID); err != nil {
 				return ErrorResultf("%v", err), nil
 			}
