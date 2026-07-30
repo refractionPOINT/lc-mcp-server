@@ -45,10 +45,11 @@ func RegisterIsolateNetwork() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Isolate sensor
@@ -93,10 +94,11 @@ func RegisterRejoinNetwork() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Rejoin network
@@ -122,7 +124,7 @@ func RegisterIsIsolated() {
 		Profile:     "threat_response",
 		RequiresOID: true,
 		Schema: mcp.NewTool("is_isolated",
-			mcp.WithDescription("Check if a sensor is isolated from the network"),
+			mcp.WithDescription("Check if a sensor is isolated from the network. Returns is_isolated (the isolation the sensor has actually applied) and should_isolate (the isolation requested for it), which differ while an isolate/rejoin request is still in flight."),
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
@@ -141,25 +143,20 @@ func RegisterIsIsolated() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor (returns *Sensor)
-			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			// Read the dedicated isolation endpoint rather than the sensor
+			// record: the platform renames the record's isolation field to
+			// is_isolated, which the SDK's Sensor.IsIsolated (json:"isolated")
+			// never picks up, so it always reads false.
+			isolation, err := tools.GetSensorIsolation(org, sid)
+			if err != nil {
+				return tools.ErrorResultf("failed to get isolation status: %v", err), nil
 			}
 
-			// Update sensor to get latest status
-			sensor = sensor.Update()
-			if sensor.LastError != nil {
-				return tools.ErrorResultf("failed to update sensor: %v", sensor.LastError), nil
-			}
-
-			// Check isolation status from sensor field
-			result := map[string]interface{}{
-				"sid":         sid,
-				"is_isolated": sensor.IsIsolated,
-			}
-
-			return tools.SuccessResult(result), nil
+			return tools.SuccessResult(map[string]interface{}{
+				"sid":            sid,
+				"is_isolated":    isolation.IsIsolated,
+				"should_isolate": isolation.ShouldIsolate,
+			}), nil
 		},
 	})
 }
@@ -210,10 +207,11 @@ func RegisterAddTag() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Add tag (SDK expects time.Duration)
@@ -268,10 +266,11 @@ func RegisterRemoveTag() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Remove tag

@@ -29,7 +29,7 @@ func RegisterYARAScanProcess() {
 				mcp.Description("Sensor ID (UUID)")),
 			mcp.WithString("rule",
 				mcp.Required(),
-				mcp.Description("YARA rule content or rule name")),
+				mcp.Description(`The rule to compile and run: a literal YARA rule, a LimaCharlie YARA resource reference like "lcr://service/yara/my-source", an "https://" URL, or a base64-encoded rule`)),
 			mcp.WithNumber("pid",
 				mcp.Required(),
 				mcp.Description("Process ID to scan")),
@@ -51,9 +51,9 @@ func RegisterYARAScanProcess() {
 				return tools.ErrorResult("pid parameter is required"), nil
 			}
 
-			resp, err := sendSensorCommand(ctx, sid, "yara_scan", map[string]interface{}{
-				"rule": rule,
-				"pid":  int(pid),
+			// yara_scan takes the rule as a required positional, not a flag.
+			resp, err := sendSensorCommandWithPositional(ctx, sid, "yara_scan", []string{rule}, map[string]interface{}{
+				"pid": int(pid),
 			})
 			if err != nil {
 				return tools.ErrorResultf("YARA scan failed: %v", err), nil
@@ -78,7 +78,7 @@ func RegisterYARAScanFile() {
 				mcp.Description("Sensor ID (UUID)")),
 			mcp.WithString("rule",
 				mcp.Required(),
-				mcp.Description("YARA rule content or rule name")),
+				mcp.Description(`The rule to compile and run: a literal YARA rule, a LimaCharlie YARA resource reference like "lcr://service/yara/my-source", an "https://" URL, or a base64-encoded rule`)),
 			mcp.WithString("file_path",
 				mcp.Required(),
 				mcp.Description("Path to file to scan")),
@@ -100,8 +100,8 @@ func RegisterYARAScanFile() {
 				return tools.ErrorResult("file_path parameter is required"), nil
 			}
 
-			resp, err := sendSensorCommand(ctx, sid, "yara_scan", map[string]interface{}{
-				"rule":     rule,
+			// yara_scan takes the rule as a required positional, not a flag.
+			resp, err := sendSensorCommandWithPositional(ctx, sid, "yara_scan", []string{rule}, map[string]interface{}{
 				"filePath": filePath,
 			})
 			if err != nil {
@@ -127,7 +127,7 @@ func RegisterYARAScanDirectory() {
 				mcp.Description("Sensor ID (UUID)")),
 			mcp.WithString("rule",
 				mcp.Required(),
-				mcp.Description("YARA rule content or rule name")),
+				mcp.Description(`The rule to compile and run: a literal YARA rule, a LimaCharlie YARA resource reference like "lcr://service/yara/my-source", an "https://" URL, or a base64-encoded rule`)),
 			mcp.WithString("directory",
 				mcp.Required(),
 				mcp.Description("Directory path to scan")),
@@ -154,12 +154,11 @@ func RegisterYARAScanDirectory() {
 			}
 
 			params := map[string]interface{}{
-				"rule":    rule,
-				"rootDir": directory,
+				"root-dir": directory,
 			}
 
-			if pattern, ok := args["file_pattern"].(string); ok {
-				params["fileExp"] = pattern
+			if pattern, ok := args["file_pattern"].(string); ok && pattern != "" {
+				params["file-exp"] = pattern
 			}
 
 			if depth, ok := args["depth"].(float64); ok {
@@ -168,7 +167,8 @@ func RegisterYARAScanDirectory() {
 				params["depth"] = 5
 			}
 
-			resp, err := sendSensorCommand(ctx, sid, "yara_scan", params)
+			// yara_scan takes the rule as a required positional, not a flag.
+			resp, err := sendSensorCommandWithPositional(ctx, sid, "yara_scan", []string{rule}, params)
 			if err != nil {
 				return tools.ErrorResultf("YARA scan failed: %v", err), nil
 			}
@@ -192,7 +192,7 @@ func RegisterYARAScanMemory() {
 				mcp.Description("Sensor ID (UUID)")),
 			mcp.WithString("rule",
 				mcp.Required(),
-				mcp.Description("YARA rule content or rule name")),
+				mcp.Description(`The rule to compile and run: a literal YARA rule, a LimaCharlie YARA resource reference like "lcr://service/yara/my-source", an "https://" URL, or a base64-encoded rule`)),
 			mcp.WithString("process_expression",
 				mcp.Required(),
 				mcp.Description("Process expression to match (e.g., 'name:chrome.exe')")),
@@ -214,8 +214,8 @@ func RegisterYARAScanMemory() {
 				return tools.ErrorResult("process_expression parameter is required"), nil
 			}
 
-			resp, err := sendSensorCommand(ctx, sid, "yara_scan", map[string]interface{}{
-				"rule":        rule,
+			// yara_scan takes the rule as a required positional, not a flag.
+			resp, err := sendSensorCommandWithPositional(ctx, sid, "yara_scan", []string{rule}, map[string]interface{}{
 				"processExpr": processExpr,
 			})
 			if err != nil {

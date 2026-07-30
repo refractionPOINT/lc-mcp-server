@@ -132,13 +132,14 @@ func RegisterSetExternalAdapter() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_external_adapter",
-			mcp.WithDescription("Create or update an external adapter configuration"),
+			mcp.WithDescription("Create or update an external adapter configuration. Updating an existing adapter preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given, so a deliberately disabled adapter stays disabled."),
 			mcp.WithString("adapter_name",
 				mcp.Required(),
 				mcp.Description("Name for the adapter")),
 			mcp.WithObject("adapter_config",
 				mcp.Required(),
 				mcp.Description("Adapter configuration data")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -153,31 +154,34 @@ func RegisterSetExternalAdapter() {
 				return tools.ErrorResult("adapter_config parameter is required and must be an object"), nil
 			}
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for external adapters
-			hive := lc.NewHiveClient(org)
-
-			// Set external adapter
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "external_adapter",
-				PartitionKey: org.GetOID(),
-				Key:          adapterName,
-				Data:         lc.Dict(adapterConfig),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "external_adapter",
+				Key:       adapterName,
+				Data:      lc.Dict(adapterConfig),
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set external adapter '%s': %v", adapterName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated external adapter '%s'", adapterName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

@@ -17,6 +17,7 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/api"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/artifacts"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/cases"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/cloudsec"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/feedback"

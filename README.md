@@ -21,7 +21,7 @@ This server bridges AI assistants and the LimaCharlie security platform through 
 
 ## Features
 
-- **278 MCP Tools** across 11 specialized profiles
+- **338 MCP Tools** across 13 specialized profiles
 - **Multi-Tenant Architecture** with strict credential isolation
 - **Dual Transport Modes**: STDIO (local) and HTTP (cloud with OAuth 2.1)
 - **AI-Powered Generation**: Automatic rule and query creation using Claude (default: Claude Sonnet 4.6)
@@ -125,17 +125,19 @@ The server organizes tools into profiles for different use cases:
 | Profile | Tools | Description | Use Cases |
 |---------|-------|-------------|-----------|
 | **core** | 8 | Essential sensor operations | Sensor inventory, status checks, host search |
-| **historical_data** | 22 | Telemetry analysis and queries | LCQL queries, event retrieval, IOC searches, detection history |
-| **historical_data_readonly** | 20 | Read-only telemetry access | Same as above, but safe for restricted users |
+| **historical_data** | 24 | Telemetry analysis and queries | LCQL queries, event retrieval, IOC searches, detection history |
+| **historical_data_readonly** | 22 | Read-only telemetry access | Same as above, but safe for restricted users |
 | **live_investigation** | 23 | Real-time endpoint inspection | Process lists, network connections, YARA scanning, artifacts |
-| **threat_response** | 14 | Incident response actions | Isolation, sensor tasking/tagging, memory dump, mass-tag |
-| **fleet_management** | 13 | Sensor deployment and lifecycle | Installation keys, cloud sensors, tag lookup, sensor export |
-| **detection_engineering** | 41 | Detection rule management | D&R/FP/YARA rules, exfil, MITRE ATT&CK |
-| **platform_admin** | 128 | Complete platform control | Outputs, integrations, lookups, secrets, billing, vulnerability, hive/adapter management |
+| **threat_response** | 15 | Incident response actions | Isolation, sensor tasking/tagging, memory dump, mass-tag |
+| **fleet_management** | 14 | Sensor deployment and lifecycle | Installation keys, cloud sensors, tag lookup, sensor export, upgrades |
+| **detection_engineering** | 44 | Detection rule management | D&R/FP/YARA rules, exfil, MITRE ATT&CK |
+| **platform_admin** | 135 | Complete platform control | Outputs, integrations, lookups, secrets, billing, vulnerability, hive/adapter management |
 | **ai_powered** | 18 | AI-assisted content generation | Auto-generate rules/queries; AI sessions, usage, memory |
 | **investigation_management** | 20 | Case management | Cases, notes, entities, detections, telemetry, artifacts |
 | **api_access** | 1 | Generic API escape-hatch | Raw LimaCharlie API calls |
-| **all** | 278 | All profiles combined | Full platform access |
+| **cloud_security** | 49 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes |
+| **cloud_security_readonly** | 40 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
+| **all** | 338 | All profiles combined | Full platform access |
 
 ## Configuration
 
@@ -269,7 +271,7 @@ Claude uses: add_tag
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │   Auth      │  │     Tools    │  │   SDK Cache  │     │
 │  │   Context   │  │   Registry   │  │   (Thread-   │     │
-│  │   Isolation │  │   (278)      │  │    Safe)     │     │
+│  │   Isolation │  │   (338)      │  │    Safe)     │     │
 │  └─────────────┘  └──────────────┘  └──────────────┘     │
 │                                                             │
 └────────────────────────┬────────────────────────────────────┘
@@ -326,7 +328,7 @@ lc-mcp-server/
 │   │   ├── state/           # OAuth state management
 │   │   └── token/           # Token encryption and storage
 │   │
-│   └── tools/               # MCP tool implementations (278 tools)
+│   └── tools/               # MCP tool implementations (338 tools)
 │       ├── registry.go      # Tool registration system
 │       ├── core/            # Core + fleet sensor ops (9 tools)
 │       ├── historical/      # Historical data & LCQL (13 tools)

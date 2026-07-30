@@ -20,11 +20,11 @@ func init() {
 func RegisterListYaraSources() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "list_yara_sources",
-		Description: "List all YARA sources",
+		Description: "List all YARA sources with their content",
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_yara_sources",
-			mcp.WithDescription("List all YARA sources"),
+			mcp.WithDescription("List all YARA sources as full records, including the content of literal sources. These names are what get_yara_rule, set_yara_rule and delete_yara_rule take. Use list_yara_rules for a lighter index that also covers deployed rule-sets."),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {

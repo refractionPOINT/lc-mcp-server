@@ -19,6 +19,27 @@ func init() {
 
 // Note: getOrganization is defined in response.go
 
+// addReliableTaskingTarget copies the sid/tag/selector target into data.
+//
+// Both the "task" and "untask" actions of ext-reliable-tasking declare
+// Requirements {{"sid","tag","selector"}} with no default, and the extension
+// manager enforces that one-of group before the extension is reached. Checking
+// it here turns a remote "missing one of sid, tag, selector" into an immediate,
+// actionable error.
+func addReliableTaskingTarget(args map[string]interface{}, data lc.Dict) error {
+	hasTarget := false
+	for _, key := range []string{"sid", "tag", "selector"} {
+		if v, ok := args[key].(string); ok && v != "" {
+			data[key] = v
+			hasTarget = true
+		}
+	}
+	if !hasTarget {
+		return fmt.Errorf("one of sid, tag or selector is required")
+	}
+	return nil
+}
+
 // RegisterReliableTasking registers the reliable_tasking tool
 // This tool sends persistent tasks to sensors via the ext-reliable-tasking extension
 func RegisterReliableTasking() {
@@ -28,12 +49,16 @@ func RegisterReliableTasking() {
 		Profile:     "threat_response",
 		RequiresOID: true,
 		Schema: mcp.NewTool("reliable_tasking",
-			mcp.WithDescription("Send a persistent task to sensors with retry. Tasks are queued and delivered when sensors come online."),
+			mcp.WithDescription("Send a persistent task to sensors with retry. Tasks are queued and delivered when sensors come online. Exactly one target is required: sid, tag or selector - the extension rejects a request that carries none. Use selector='*' to target the whole fleet."),
 			mcp.WithString("task",
 				mcp.Required(),
 				mcp.Description("Command to execute on sensors (e.g., 'os_version', 'mem_map --pid 4', 'run --shell-command whoami')")),
+			mcp.WithString("sid",
+				mcp.Description("Sensor ID (UUID) to target. One of sid, tag or selector is required.")),
+			mcp.WithString("tag",
+				mcp.Description("Target every sensor carrying this tag (e.g. 'linux'). One of sid, tag or selector is required.")),
 			mcp.WithString("selector",
-				mcp.Description("Sensor selector expression (e.g., 'plat==windows', 'production in tags'). If omitted, targets all sensors.")),
+				mcp.Description("Sensor selector expression (e.g., 'plat==windows', 'production in tags'), or '*' for all sensors. One of sid, tag or selector is required.")),
 			mcp.WithString("context",
 				mcp.Description("Context identifier reflected in investigation_id of response events. Useful for D&R rule matching.")),
 			mcp.WithNumber("ttl",
@@ -56,8 +81,8 @@ func RegisterReliableTasking() {
 				"task": task,
 			}
 
-			if selector, ok := args["selector"].(string); ok && selector != "" {
-				data["selector"] = selector
+			if err := addReliableTaskingTarget(args, data); err != nil {
+				return tools.ErrorResult(err.Error()), nil
 			}
 
 			if context, ok := args["context"].(string); ok && context != "" {
@@ -113,17 +138,19 @@ func RegisterListReliableTasks() {
 func RegisterDeleteReliableTask() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "delete_reliable_task",
-		Description: "Delete/abort pending reliable tasks. Can target specific tasks or all tasks matching criteria.",
+		Description: "Delete/abort pending reliable tasks for a sensor, tag or selector.",
 		Profile:     "threat_response",
 		RequiresOID: true,
 		Schema: mcp.NewTool("delete_reliable_task",
-			mcp.WithDescription("Delete/abort pending reliable tasks. Can target specific tasks or all tasks matching criteria."),
+			mcp.WithDescription("Delete/abort pending reliable tasks. Exactly one target is required: sid, tag or selector - the extension rejects a request that carries none, including a task_id-only call. Without task_id, ALL pending tasks for the target are deleted."),
 			mcp.WithString("task_id",
-				mcp.Description("Specific task ID to delete. If omitted, deletes all tasks matching other criteria.")),
-			mcp.WithString("selector",
-				mcp.Description("Sensor selector expression to target tasks for specific sensors")),
+				mcp.Description("Specific task ID to delete. If omitted, every pending task for the target is deleted.")),
 			mcp.WithString("sid",
-				mcp.Description("Specific sensor ID to delete tasks for")),
+				mcp.Description("Delete tasks for this sensor ID (UUID). One of sid, tag or selector is required.")),
+			mcp.WithString("tag",
+				mcp.Description("Delete tasks for every sensor carrying this tag. One of sid, tag or selector is required.")),
+			mcp.WithString("selector",
+				mcp.Description("Delete tasks for sensors matching this selector expression, or '*' for all sensors. One of sid, tag or selector is required.")),
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -135,16 +162,12 @@ func RegisterDeleteReliableTask() {
 			// Build extension request data
 			data := lc.Dict{}
 
+			if err := addReliableTaskingTarget(args, data); err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			if taskID, ok := args["task_id"].(string); ok && taskID != "" {
 				data["task_id"] = taskID
-			}
-
-			if selector, ok := args["selector"].(string); ok && selector != "" {
-				data["selector"] = selector
-			}
-
-			if sid, ok := args["sid"].(string); ok && sid != "" {
-				data["sid"] = sid
 			}
 
 			// Delete reliable tasks via extension request (action: untask)
@@ -173,9 +196,9 @@ func RegisterDeleteSensor() {
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			sid, ok := args["sid"].(string)
-			if !ok {
-				return tools.ErrorResult("sid parameter is required"), nil
+			sid, err := tools.ExtractAndValidateSID(args)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
 			}
 
 			org, err := tools.GetOrganization(ctx)
@@ -183,10 +206,11 @@ func RegisterDeleteSensor() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor and delete it
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResultf("sensor not found: %s", sid), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Delete the sensor using the SDK method
@@ -194,12 +218,9 @@ func RegisterDeleteSensor() {
 				return tools.ErrorResultf("failed to delete sensor: %v", err), nil
 			}
 
-			resp := map[string]interface{}{}
-
 			return tools.SuccessResult(map[string]interface{}{
 				"status":  "success",
 				"message": fmt.Sprintf("Sensor %s deleted successfully", sid),
-				"details": resp,
 			}), nil
 		},
 	})

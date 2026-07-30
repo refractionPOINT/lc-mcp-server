@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 )
 
 func init() {
@@ -35,10 +36,10 @@ func RegisterListSecrets() {
 			}
 
 			// Create hive client for secrets
-			hive := lc.NewHiveClient(org)
+			client := lc.NewHiveClient(org)
 
 			// List all secrets from the secret hive
-			secrets, err := hive.List(lc.HiveArgs{
+			secrets, err := client.List(lc.HiveArgs{
 				HiveName:     "secret",
 				PartitionKey: org.GetOID(),
 			})
@@ -86,10 +87,10 @@ func RegisterGetSecret() {
 			}
 
 			// Create hive client for secrets
-			hive := lc.NewHiveClient(org)
+			client := lc.NewHiveClient(org)
 
 			// Get secret value
-			secret, err := hive.Get(lc.HiveArgs{
+			secret, err := client.Get(lc.HiveArgs{
 				HiveName:     "secret",
 				PartitionKey: org.GetOID(),
 				Key:          secretName,
@@ -122,13 +123,14 @@ func RegisterSetSecret() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_secret",
-			mcp.WithDescription("Store a secret securely"),
+			mcp.WithDescription("Store a secret securely. Updating an existing secret preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("secret_name",
 				mcp.Required(),
 				mcp.Description("Name for the secret")),
 			mcp.WithString("secret_value",
 				mcp.Required(),
 				mcp.Description("The secret value to store")),
+			hive.WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -143,33 +145,36 @@ func RegisterSetSecret() {
 				return tools.ErrorResult("secret_value parameter is required"), nil
 			}
 
+			overrides, err := hive.ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for secrets
-			hive := lc.NewHiveClient(org)
-
-			// Set secret value
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "secret",
-				PartitionKey: org.GetOID(),
-				Key:          secretName,
+			warning, err := hive.SetRecord(org, hive.RecordWrite{
+				HiveName: "secret",
+				Key:      secretName,
 				Data: lc.Dict{
 					"secret": secretValue,
 				},
-				Enabled: &enabled,
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set secret '%s': %v", secretName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully stored secret '%s'", secretName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
@@ -200,10 +205,10 @@ func RegisterDeleteSecret() {
 			}
 
 			// Create hive client for secrets
-			hive := lc.NewHiveClient(org)
+			client := lc.NewHiveClient(org)
 
 			// Delete secret
-			_, err = hive.Remove(lc.HiveArgs{
+			_, err = client.Remove(lc.HiveArgs{
 				HiveName:     "secret",
 				PartitionKey: org.GetOID(),
 				Key:          secretName,

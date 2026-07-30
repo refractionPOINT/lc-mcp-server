@@ -23,18 +23,22 @@ func RegisterListArtifacts() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "list_artifacts",
 		Description: "List collected artifacts and logs",
-		Profile:     "historical_data",
+		Profile:     "live_investigation",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_artifacts",
-			mcp.WithDescription("List collected artifacts and logs"),
-			mcp.WithString("sid",
-				mcp.Description("Sensor ID to filter by")),
-			mcp.WithString("artifact_type",
-				mcp.Description("Artifact type to filter by")),
+			mcp.WithDescription("List collected artifacts and logs in a time range. Returns {logs, next_cursor}; pass next_cursor back as cursor to get the following page. The range is capped at 30 days server-side."),
+			mcp.WithString("source",
+				mcp.Description("Optional source (sensor ID or adapter ID) to filter the artifacts by")),
+			mcp.WithString("hint",
+				mcp.Description("Optional artifact type to filter by (the artifact's 'hint', e.g. 'wel', 'pcap', 'text')")),
 			mcp.WithNumber("start",
-				mcp.Description("Start timestamp")),
+				mcp.Required(),
+				mcp.Description("Start of the range in Unix epoch SECONDS (not milliseconds - millisecond values are rejected)")),
 			mcp.WithNumber("end",
-				mcp.Description("End timestamp")),
+				mcp.Required(),
+				mcp.Description("End of the range in Unix epoch SECONDS (not milliseconds - millisecond values are rejected). Must be within 30 days of start.")),
+			mcp.WithString("cursor",
+				mcp.Description("Pagination cursor: the next_cursor of a previous call")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -43,23 +47,34 @@ func RegisterListArtifacts() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Build query parameters
-			params := lc.Dict{}
-
-			if sid, ok := args["sid"].(string); ok {
-				params["sid"] = sid
+			// start/end are required: the handler rejects a call with either
+			// missing and no cursor ("start, end or cursor required parameter
+			// required").
+			start, ok := args["start"].(float64)
+			if !ok {
+				return tools.ErrorResult("start parameter is required (Unix epoch seconds)"), nil
+			}
+			end, ok := args["end"].(float64)
+			if !ok {
+				return tools.ErrorResult("end parameter is required (Unix epoch seconds)"), nil
 			}
 
-			if artifactType, ok := args["artifact_type"].(string); ok {
-				params["type"] = artifactType
+			params := lc.Dict{
+				"start": int64(start),
+				"end":   int64(end),
 			}
 
-			if start, ok := args["start"].(float64); ok {
-				params["start"] = int64(start)
+			// The filters are named source (sensor/adapter) and hint (type).
+			if source, ok := args["source"].(string); ok && source != "" {
+				params["source"] = source
 			}
 
-			if end, ok := args["end"].(float64); ok {
-				params["end"] = int64(end)
+			if hint, ok := args["hint"].(string); ok && hint != "" {
+				params["hint"] = hint
+			}
+
+			if cursor, ok := args["cursor"].(string); ok && cursor != "" {
+				params["cursor"] = cursor
 			}
 
 			// List artifacts via GenericGETRequest
@@ -79,15 +94,15 @@ func RegisterGetArtifact() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_artifact",
 		Description: "Download or get URL for a specific artifact",
-		Profile:     "historical_data",
+		Profile:     "live_investigation",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_artifact",
-			mcp.WithDescription("Download or get URL for a specific artifact"),
+			mcp.WithDescription("Download an artifact, or get a signed URL for it. Prefer get_url_only for large artifacts: downloading returns the whole body base64-encoded."),
 			mcp.WithString("artifact_id",
 				mcp.Required(),
 				mcp.Description("Artifact ID to retrieve")),
 			mcp.WithBoolean("get_url_only",
-				mcp.Description("If true, return signed URL instead of downloading (default: false)")),
+				mcp.Description("If true, return the signed URL ('export') and its expiry instead of downloading the body (default: false)")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -106,6 +121,33 @@ func RegisterGetArtifact() {
 				getURLOnly = val
 			}
 
+			if getURLOnly {
+				// The originals endpoint already returns the signed export URL
+				// alongside the size and path, so ExportArtifact - which
+				// downloads and buffers the whole body - must be skipped here.
+				// That download is the entire point of get_url_only for a
+				// multi-gigabyte artifact.
+				metadata := lc.Dict{}
+				path := fmt.Sprintf("insight/%s/artifacts/originals/%s", org.GetOID(), artifactID)
+				if err := org.GenericGETRequest(path, lc.Dict{}, &metadata); err != nil {
+					return tools.ErrorResultf("failed to get artifact URL: %v", err), nil
+				}
+
+				result := map[string]interface{}{
+					"artifact_id": artifactID,
+					"metadata":    metadata,
+				}
+				// Surface the fields a caller actually needs instead of leaving
+				// them buried in the metadata blob.
+				for _, key := range []string{"export", "expires", "size", "path", "type", "source", "ts"} {
+					if v, ok := metadata[key]; ok {
+						result[key] = v
+					}
+				}
+
+				return tools.SuccessResult(result), nil
+			}
+
 			// Export artifact using the SDK method
 			// Use a deadline 5 minutes from now
 			deadline := time.Now().Add(5 * time.Minute)
@@ -115,22 +157,6 @@ func RegisterGetArtifact() {
 				return tools.ErrorResultf("failed to export artifact: %v", err), nil
 			}
 			defer reader.Close()
-
-			if getURLOnly {
-				// For URL-only mode, we need to use a different approach
-				// The SDK returns a reader, but we want just the URL
-				// Use the correct API path for artifact metadata/originals
-				metadata := lc.Dict{}
-				path := fmt.Sprintf("insight/%s/artifacts/originals/%s", org.GetOID(), artifactID)
-				if err := org.GenericGETRequest(path, lc.Dict{}, &metadata); err != nil {
-					return tools.ErrorResultf("failed to get artifact URL: %v", err), nil
-				}
-
-				return tools.SuccessResult(map[string]interface{}{
-					"artifact_id": artifactID,
-					"metadata":    metadata,
-				}), nil
-			}
 
 			// Read the artifact data
 			data, err := io.ReadAll(reader)

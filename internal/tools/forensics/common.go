@@ -31,10 +31,12 @@ func getSensor(ctx context.Context, sensorID string) (*lc.Sensor, func(), error)
 	// Each request gets a unique ID to track responses through the WebSocket Spout
 	org = org.WithInvestigationID(uuid.New().String())
 
+	// GetSensor always returns a non-nil Sensor and fetches its record inline,
+	// recording a lookup failure (including an unknown SID) in LastError.
 	sensor := org.GetSensor(sensorID)
-	if sensor == nil {
+	if sensor.LastError != nil {
 		org.Close() // Clean up since we won't return a cleanup function
-		return nil, nil, fmt.Errorf("sensor not found: %s", sensorID)
+		return nil, nil, fmt.Errorf("failed to look up sensor %s: %w", sensorID, sensor.LastError)
 	}
 
 	// Return cleanup function that closes the org (and its Spout if created)

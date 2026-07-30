@@ -25,10 +25,13 @@ func RegisterListOrgNotes() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_org_notes",
-			mcp.WithDescription("List all organization notes"),
+			mcp.WithDescription("List all organization notes. The full listing carries every note body; use brief to get just the index."),
+			withBriefParam("the 'description' field"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			brief := briefArg(args)
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -49,8 +52,12 @@ func RegisterListOrgNotes() {
 			// Convert to response format
 			result := make(map[string]interface{})
 			for name, data := range orgNotes {
+				payload := data.Data
+				if brief {
+					payload = BriefData(payload, "description")
+				}
 				result[name] = map[string]interface{}{
-					"data":     data.Data,
+					"data":     payload,
 					"enabled":  data.UsrMtd.Enabled,
 					"tags":     data.UsrMtd.Tags,
 					"comment":  data.UsrMtd.Comment,
@@ -132,7 +139,7 @@ func RegisterSetOrgNote() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_org_note",
-			mcp.WithDescription("Create or update an organization note"),
+			mcp.WithDescription("Create or update an organization note. Updating an existing note preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("note_name",
 				mcp.Required(),
 				mcp.Description("Name for the org note")),
@@ -141,6 +148,7 @@ func RegisterSetOrgNote() {
 				mcp.Description("The text content of the note")),
 			mcp.WithString("description",
 				mcp.Description("Optional description for the note")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -157,39 +165,42 @@ func RegisterSetOrgNote() {
 
 			description, _ := args["description"].(string)
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for org notes
-			hive := lc.NewHiveClient(org)
-
 			// Build the data
-			noteData := map[string]interface{}{
+			noteData := lc.Dict{
 				"text": text,
 			}
 			if description != "" {
 				noteData["description"] = description
 			}
 
-			// Set org note
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "org_notes",
-				PartitionKey: org.GetOID(),
-				Key:          noteName,
-				Data:         lc.Dict(noteData),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "org_notes",
+				Key:       noteName,
+				Data:      noteData,
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set org note '%s': %v", noteName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated org note '%s'", noteName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

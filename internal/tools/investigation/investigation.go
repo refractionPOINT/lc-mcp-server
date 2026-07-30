@@ -48,10 +48,11 @@ func RegisterGetProcesses() {
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Use SimpleRequest to get synchronous response
@@ -98,10 +99,11 @@ func RegisterGetNetworkConnections() {
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Use SimpleRequest to get synchronous response
@@ -149,10 +151,11 @@ func RegisterGetOSVersion() {
 			// Set investigation ID for interactive mode
 			org = org.WithInvestigationID(uuid.New().String())
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Use SimpleRequest to get synchronous response

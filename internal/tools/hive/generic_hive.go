@@ -149,7 +149,7 @@ func RegisterSetRule() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_rule",
-			mcp.WithDescription("Create or update a rule in a hive"),
+			mcp.WithDescription("Create or update a rule in a hive. Updating an existing record preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("hive_name",
 				mcp.Required(),
 				mcp.Description("Name of the hive (e.g., 'dr-general', 'dr-managed', 'fp')")),
@@ -161,6 +161,7 @@ func RegisterSetRule() {
 				mcp.Description("Rule content (detection and response for D&R rules)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -180,30 +181,30 @@ func RegisterSetRule() {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
 			}
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Handle TTL parameter
+			// The hive stores usr_mtd.expiry as a millisecond epoch and
+			// rejects one in the past (legion_config_hive CondSetRecord).
 			var expiry *int64
 			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
-				exp := time.Now().Unix() + int64(ttl)
+				exp := time.Now().UnixMilli() + int64(ttl)*1000
 				expiry = &exp
+				overrides.Expiry = expiry
 			}
 
-			// Create hive client
-			hive := lc.NewHiveClient(org)
-
-			// Set rule
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     hiveName,
-				PartitionKey: org.GetOID(),
-				Key:          ruleName,
-				Data:         lc.Dict(ruleContent),
-				Enabled:      &enabled,
-				Expiry:       expiry,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  hiveName,
+				Key:       ruleName,
+				Data:      lc.Dict(ruleContent),
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set rule '%s' in hive '%s': %v", ruleName, hiveName, err), nil
@@ -217,6 +218,9 @@ func RegisterSetRule() {
 			// Note if TTL was set
 			if expiry != nil {
 				result["expiry"] = *expiry
+			}
+			if warning != "" {
+				result["warning"] = warning
 			}
 
 			return tools.SuccessResult(result), nil

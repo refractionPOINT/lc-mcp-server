@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
 // ServerConfig holds server-level configuration
@@ -284,23 +285,14 @@ func getSliceEnv(key string, defaultValue []string) []string {
 
 // Validate validates the configuration
 func (c *Config) Validate() error {
-	// Validate profile (empty string means "not configured" - enables URL-based routing)
-	validProfiles := map[string]bool{
-		"":                         true, // Not configured - use URL-based routing in HTTP mode
-		"core":                     true,
-		"historical_data":          true,
-		"historical_data_readonly": true,
-		"live_investigation":       true,
-		"threat_response":          true,
-		"fleet_management":         true,
-		"detection_engineering":    true,
-		"platform_admin":           true,
-		"ai_powered":               true,
-		"all":                      true,
-	}
-
-	if !validProfiles[c.Server.Profile] {
-		return fmt.Errorf("invalid profile: %s", c.Server.Profile)
+	// Validate profile against the defined profiles rather than a hardcoded list,
+	// so a profile added to profiles.yaml is immediately selectable.
+	// An empty string means "not configured" - enables URL-based routing;
+	// "all" is the union of every profile.
+	if c.Server.Profile != "" && c.Server.Profile != "all" {
+		if _, ok := tools.ProfileDefinitions[c.Server.Profile]; !ok {
+			return fmt.Errorf("invalid profile: %s", c.Server.Profile)
+		}
 	}
 
 	// Validate log level

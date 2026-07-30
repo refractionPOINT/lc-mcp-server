@@ -71,51 +71,11 @@ func stringSlice(v interface{}) ([]string, bool) {
 	return out, true
 }
 
-// updateRecordMTD reads the existing record metadata for a hive record and
-// applies the provided mutation while preserving all other usr_mtd fields.
-// The mutate callback receives a copy of the existing UsrMtd and returns the
-// HiveArgs metadata fields to send. We always pass every preserved field so
-// the API does not clobber the ones we did not intend to change.
-func updateRecordMTD(org *lc.Organization, hiveName, partitionKey, key string, mutate func(existing lc.UsrMtd) lc.HiveArgs) error {
-	client := lc.NewHiveClient(org)
-
-	existing, err := client.GetMTD(lc.HiveArgs{
-		HiveName:     hiveName,
-		PartitionKey: partitionKey,
-		Key:          key,
-	})
-	if err != nil {
-		return err
-	}
-
-	args := mutate(existing.UsrMtd)
-	args.HiveName = hiveName
-	args.PartitionKey = partitionKey
-	args.Key = key
-
-	_, err = client.Update(args)
-	return err
-}
-
-// preservedArgs returns HiveArgs that carry all of the existing usr_mtd fields
-// so Update (which rebuilds usr_mtd purely from args) does not drop any of them.
-func preservedArgs(existing lc.UsrMtd) lc.HiveArgs {
-	enabled := existing.Enabled
-	expiry := existing.Expiry
-	comment := existing.Comment
-	args := lc.HiveArgs{
-		Enabled: &enabled,
-		Comment: &comment,
-		Tags:    existing.Tags,
-	}
-	if expiry != 0 {
-		args.Expiry = &expiry
-	}
-	// Ensure Tags is non-nil so the existing tags are always sent.
-	if args.Tags == nil {
-		args.Tags = []string{}
-	}
-	return args
+// updateRecordMTD reads the existing metadata of a hive record and writes back
+// the mutation, carrying every field the caller did not change (including
+// ui_actions, which the SDK's HiveArgs cannot express). See SetRecordMetadata.
+func updateRecordMTD(org *lc.Organization, hiveName, partitionKey, key string, mutate func(existing lc.UsrMtd) lc.UsrMtd) error {
+	return SetRecordMetadata(org, hiveName, partitionKey, key, mutate)
 }
 
 // RegisterSetHiveRecordEnabled registers the set_hive_record_enabled tool
@@ -164,11 +124,9 @@ func RegisterSetHiveRecordEnabled() {
 				partitionKey = org.GetOID()
 			}
 
-			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.HiveArgs {
-				a := preservedArgs(existing)
-				e := enabled
-				a.Enabled = &e
-				return a
+			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.UsrMtd {
+				existing.Enabled = enabled
+				return existing
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set enabled on '%s' in hive '%s': %v", key, hiveName, err), nil
@@ -241,14 +199,13 @@ func RegisterSetHiveRecordTags() {
 			}
 
 			var newTags []string
-			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.HiveArgs {
-				a := preservedArgs(existing)
+			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.UsrMtd {
 				newTags = applyTagAction(existing.Tags, tags, action)
 				if newTags == nil {
 					newTags = []string{}
 				}
-				a.Tags = newTags
-				return a
+				existing.Tags = newTags
+				return existing
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set tags on '%s' in hive '%s': %v", key, hiveName, err), nil
@@ -311,11 +268,9 @@ func RegisterSetHiveRecordComment() {
 				partitionKey = org.GetOID()
 			}
 
-			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.HiveArgs {
-				a := preservedArgs(existing)
-				c := comment
-				a.Comment = &c
-				return a
+			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.UsrMtd {
+				existing.Comment = comment
+				return existing
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set comment on '%s' in hive '%s': %v", key, hiveName, err), nil

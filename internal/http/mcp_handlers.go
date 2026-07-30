@@ -235,7 +235,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		return
 	}
 
-	if tool.RequiresOID {
+	if tool.NeedsOID() {
+		// Resolve the OID the call will actually execute against: the explicit
+		// argument when given, otherwise the OID already pinned on the auth
+		// context (in any mode). The ai_agent.operate check keys off that
+		// effective OID so that omitting the argument cannot bypass it.
+		effectiveOID := ""
 		if oidParam, ok := arguments["oid"].(string); ok && oidParam != "" {
 			var err error
 			ctx, err = auth.WithOID(ctx, oidParam, s.logger)
@@ -243,29 +248,23 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 				s.writeJSONRPCError(w, id, -32000, "Invalid OID", fmt.Sprintf("Failed to switch OID: %v", err))
 				return
 			}
-
-			// Check ai_agent.operate permission after successful OID switch
-			// Skip the check for tools marked with SkipsAIAgentPermission
-			if !tool.SkipsAIAgentPermission {
-				if err := s.checkAIAgentPermission(ctx, oidParam); err != nil {
-					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
-					return
-				}
-			}
+			effectiveOID = oidParam
 		} else if isJWTPassthrough {
 			// JWT passthrough mode requires OID in tool arguments
 			s.writeJSONRPCError(w, id, -32602, "Missing parameter",
 				fmt.Sprintf("'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
 			return
-		} else if authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
-			// Normal mode (single-org) - check permission against pre-configured OID
-			// This ensures organizations can block AI agent access even in single-org deployments
-			// Skip the check for tools marked with SkipsAIAgentPermission
-			if !tool.SkipsAIAgentPermission {
-				if err := s.checkAIAgentPermission(ctx, authCtx.OID); err != nil {
-					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
-					return
-				}
+		} else {
+			effectiveOID = authCtx.OID
+		}
+
+		// This ensures organizations can block AI agent access whatever the auth
+		// mode. Skip the check for tools marked with SkipsAIAgentPermission, and
+		// for genuinely org-less contexts (the call fails downstream anyway).
+		if effectiveOID != "" && !tool.SkipsAIAgentPermissionCheck() {
+			if err := s.checkAIAgentPermission(ctx, effectiveOID); err != nil {
+				s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+				return
 			}
 		}
 	}
@@ -273,7 +272,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	// Call the tool handler
 	s.logger.Info("Executing tool handler", "request_id", requestID, "tool", toolName)
 	toolStartTime := time.Now()
-	result, err := tool.Handler(ctx, arguments)
+	result, err := tool.Invoke(ctx, arguments)
 	toolDuration := time.Since(toolStartTime)
 	if err != nil {
 		s.logger.Info("Tool execution failed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds(), "error", err.Error())
@@ -323,15 +322,15 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 			continue
 		}
 
-		schema := tool.Schema
+		schema := tool.ToolSchema()
 
 		// Add OID parameter for tools that require it when in multi-org mode
-		if tool.RequiresOID && needsOIDParam {
+		if tool.NeedsOID() && needsOIDParam {
 			schema = tools.AddOIDToToolSchema(schema)
 		}
 
 		toolList = append(toolList, map[string]interface{}{
-			"name":        tool.Name,
+			"name":        tool.ToolName(),
 			"description": schema.Description,
 			"inputSchema": schema.InputSchema,
 		})

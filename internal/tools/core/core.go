@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"path/filepath"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -67,16 +68,11 @@ func RegisterGetSensorInfo() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor (returns *Sensor, error stored in LastError)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
-			}
-
-			// Update sensor info (returns *Sensor)
-			sensor = sensor.Update()
 			if sensor.LastError != nil {
-				return tools.ErrorResultf("failed to update sensor: %v", sensor.LastError), nil
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Get tags
@@ -93,24 +89,31 @@ func RegisterGetSensorInfo() {
 			}
 
 			// Format result
-			result := map[string]interface{}{
-				"sensor": map[string]interface{}{
-					"sid":             sensor.SID,
-					"hostname":        sensor.Hostname,
-					"platform":        sensor.Platform,
-					"architecture":    sensor.Architecture,
-					"last_seen":       sensor.AliveTS,
-					"enroll_time":     sensor.EnrollTS,
-					"internal_ip":     sensor.InternalIP,
-					"external_ip":     sensor.ExternalIP,
-					"tags":            tagStrings,
-					"installation_id": sensor.IID,
-					"organization_id": sensor.OID,
-					"is_isolated":     sensor.IsIsolated,
-				},
+			info := map[string]interface{}{
+				"sid":             sensor.SID,
+				"hostname":        sensor.Hostname,
+				"platform":        sensor.Platform,
+				"architecture":    sensor.Architecture,
+				"last_seen":       sensor.AliveTS,
+				"enroll_time":     sensor.EnrollTS,
+				"internal_ip":     sensor.InternalIP,
+				"external_ip":     sensor.ExternalIP,
+				"tags":            tagStrings,
+				"installation_id": sensor.IID,
+				"organization_id": sensor.OID,
 			}
 
-			return tools.SuccessResult(result), nil
+			// Isolation is not readable from the sensor record (see
+			// tools.GetSensorIsolation); a failure here is non-fatal, the rest
+			// of the record is still worth returning.
+			if isolation, err := tools.GetSensorIsolation(org, sid); err == nil {
+				info["is_isolated"] = isolation.IsIsolated
+				info["should_isolate"] = isolation.ShouldIsolate
+			} else {
+				info["isolation_error"] = err.Error()
+			}
+
+			return tools.SuccessResult(map[string]interface{}{"sensor": info}), nil
 		},
 	})
 }
@@ -196,30 +199,22 @@ func RegisterGetOnlineSensors() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get all sensors
-			sensors, err := org.ListSensors(lc.ListSensorsOptions{})
+			// Filter server-side rather than listing the whole fleet and then
+			// POSTing every SID back to the online endpoint.
+			sensors, err := org.ListSensors(lc.ListSensorsOptions{OnlineOnly: true})
 			if err != nil {
-				return tools.ErrorResultf("failed to list sensors: %v", err), nil
+				return tools.ErrorResultf("failed to list online sensors: %v", err), nil
 			}
 
-			// Get list of sensor IDs (sensors is map[string]*Sensor)
-			sids := make([]string, 0, len(sensors))
-			for sid := range sensors {
-				sids = append(sids, sid)
-			}
-
-			// Check which are active/online
-			activeSensors, err := org.ActiveSensors(sids)
-			if err != nil {
-				return tools.ErrorResultf("failed to check active sensors: %v", err), nil
-			}
-
-			// Build result with only online sensors
-			onlineSensors := make([]string, 0)
-			for sid, isActive := range activeSensors {
-				if isActive {
-					onlineSensors = append(onlineSensors, sid)
-				}
+			onlineSensors := make([]map[string]interface{}, 0, len(sensors))
+			for _, sensor := range sensors {
+				onlineSensors = append(onlineSensors, map[string]interface{}{
+					"sid":         sensor.SID,
+					"hostname":    sensor.Hostname,
+					"platform":    sensor.Platform,
+					"internal_ip": sensor.InternalIP,
+					"external_ip": sensor.ExternalIP,
+				})
 			}
 
 			result := map[string]interface{}{
@@ -259,10 +254,11 @@ func RegisterIsOnline() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get sensor (returns *Sensor)
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResult("sensor not found"), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			// Check if online
@@ -289,10 +285,10 @@ func RegisterSearchHosts() {
 		Profile:     "core",
 		RequiresOID: true,
 		Schema: mcp.NewTool("search_hosts",
-			mcp.WithDescription("Search for sensors by hostname pattern (supports wildcards with *)"),
+			mcp.WithDescription("Search for sensors by hostname pattern. Matching is case-insensitive and supports the wildcards * (any run of characters), ? (one character) and [...] character classes; every other character, backslashes included, is matched literally."),
 			mcp.WithString("hostname_expr",
 				mcp.Required(),
-				mcp.Description("Hostname expression to search for")),
+				mcp.Description("Hostname pattern to match, e.g. 'web-*', '*-prod', 'db-0?'. Use '*' to match every host.")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -314,22 +310,19 @@ func RegisterSearchHosts() {
 				return tools.ErrorResultf("failed to list sensors: %v", err), nil
 			}
 
-			// Simple pattern matching (convert * to regex-like behavior)
-			// For simplicity, we'll just do prefix/suffix/contains matching
-			var matches []map[string]interface{}
-
+			matches := make([]map[string]interface{}, 0)
 			for _, sensor := range sensors {
-				hostname := sensor.Hostname
-				if matchHostname(hostname, hostnameExpr) {
-					matches = append(matches, map[string]interface{}{
-						"sid":         sensor.SID,
-						"hostname":    hostname,
-						"platform":    sensor.Platform,
-						"last_seen":   sensor.AliveTS,
-						"internal_ip": sensor.InternalIP,
-						"external_ip": sensor.ExternalIP,
-					})
+				if !matchHostname(sensor.Hostname, hostnameExpr) {
+					continue
 				}
+				matches = append(matches, map[string]interface{}{
+					"sid":         sensor.SID,
+					"hostname":    sensor.Hostname,
+					"platform":    sensor.Platform,
+					"last_seen":   sensor.AliveTS,
+					"internal_ip": sensor.InternalIP,
+					"external_ip": sensor.ExternalIP,
+				})
 			}
 
 			result := map[string]interface{}{
@@ -342,15 +335,21 @@ func RegisterSearchHosts() {
 	})
 }
 
-// matchHostname performs wildcard matching using filepath.Match
-// Supports patterns like: "web-*", "*-prod", "web-*-prod", "*"
+// matchHostname performs case-insensitive glob matching of a hostname against a
+// pattern supporting *, ? and [...].
+//
+// Backslashes in the pattern are doubled before matching: filepath.Match reads a
+// lone '\' as an escape character, so a Windows-style pattern would otherwise
+// lose it, and '\\' is how filepath.Match spells a literal backslash. Hostnames
+// are compared case-insensitively, matching how the platform's own hostname
+// index is keyed.
 func matchHostname(hostname, pattern string) bool {
-	// Use filepath.Match for proper glob-style pattern matching
-	// This handles *, ?, and [...] patterns correctly
-	matched, err := filepath.Match(pattern, hostname)
+	escaped := strings.ToLower(strings.ReplaceAll(pattern, `\`, `\\`))
+	matched, err := filepath.Match(escaped, strings.ToLower(hostname))
 	if err != nil {
-		// Pattern is invalid, fall back to exact match
-		return hostname == pattern
+		// Malformed pattern (e.g. an unterminated character class): fall back
+		// to an exact, case-insensitive comparison.
+		return strings.EqualFold(hostname, pattern)
 	}
 	return matched
 }

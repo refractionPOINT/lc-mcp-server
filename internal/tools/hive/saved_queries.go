@@ -134,7 +134,7 @@ func RegisterSetSavedQuery() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_saved_query",
-			mcp.WithDescription("Save an LCQL query for later use"),
+			mcp.WithDescription("Save an LCQL query for later use. Updating an existing saved query preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("query_name",
 				mcp.Required(),
 				mcp.Description("Name for the saved query")),
@@ -143,6 +143,7 @@ func RegisterSetSavedQuery() {
 				mcp.Description("The LCQL query string")),
 			mcp.WithString("description",
 				mcp.Description("Optional description of what the query does")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -159,39 +160,42 @@ func RegisterSetSavedQuery() {
 
 			description, _ := args["description"].(string)
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for saved queries
-			hive := lc.NewHiveClient(org)
-
 			// Create query data
-			queryData := map[string]interface{}{
+			queryData := lc.Dict{
 				"query": lcqlQuery,
 			}
 			if description != "" {
 				queryData["description"] = description
 			}
 
-			// Set saved query
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "query",
-				PartitionKey: org.GetOID(),
-				Key:          queryName,
-				Data:         lc.Dict(queryData),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "query",
+				Key:       queryName,
+				Data:      queryData,
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to save query '%s': %v", queryName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully saved query '%s'", queryName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

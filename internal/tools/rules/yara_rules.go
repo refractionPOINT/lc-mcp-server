@@ -3,6 +3,7 @@ package rules
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -23,11 +24,11 @@ func init() {
 func RegisterListYaraRules() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "list_yara_rules",
-		Description: "List all YARA rules in the organization",
+		Description: "List YARA sources and deployed rule-sets",
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_yara_rules",
-			mcp.WithDescription("List all YARA rules in the organization"),
+			mcp.WithDescription("List both kinds of YARA object in the organization: 'sources' (individual YARA rule sources — these names are what get_yara_rule, set_yara_rule and delete_yara_rule take) and 'rule_sets' (deployments mapping sources to sensors — these names are what set_yara_ruleset and delete_yara_ruleset take). Source content is omitted here; fetch it with get_yara_rule (a source whose 'source' is empty holds literal rules rather than a remote URL)."),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -36,16 +37,39 @@ func RegisterListYaraRules() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// List YARA rules
-			rules, err := org.YaraListRules()
-			if err != nil {
-				return tools.ErrorResultf("failed to list YARA rules: %v", err), nil
+			// The two halves are independent listings, so one of them failing
+			// (they have separate failure modes: the source listing resolves the
+			// content of every literal source) still returns the other.
+			sources, sourcesErr := org.YaraListSources()
+			ruleSets, ruleSetsErr := org.YaraListRules()
+			if sourcesErr != nil && ruleSetsErr != nil {
+				return tools.ErrorResultf("failed to list YARA sources (%v) and rule-sets (%v)", sourcesErr, ruleSetsErr), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
-				"rules": rules,
-				"count": len(rules),
-			}), nil
+			// Keep the listing an index: the source bodies are what
+			// get_yara_rule is for, and they are large.
+			sourceIndex := make(map[string]interface{}, len(sources))
+			for name, source := range sources {
+				sourceIndex[name] = map[string]interface{}{
+					"by":      source.Author,
+					"source":  source.Source,
+					"updated": source.LastUpdated,
+				}
+			}
+
+			result := map[string]interface{}{
+				"sources":        sourceIndex,
+				"source_count":   len(sourceIndex),
+				"rule_sets":      ruleSets,
+				"rule_set_count": len(ruleSets),
+			}
+			if sourcesErr != nil {
+				result["sources_error"] = sourcesErr.Error()
+			}
+			if ruleSetsErr != nil {
+				result["rule_sets_error"] = ruleSetsErr.Error()
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
@@ -54,14 +78,14 @@ func RegisterListYaraRules() {
 func RegisterGetYaraRule() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_yara_rule",
-		Description: "Get a specific YARA rule by name",
+		Description: "Get a specific YARA source by name",
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_yara_rule",
-			mcp.WithDescription("Get a specific YARA rule by name"),
+			mcp.WithDescription("Get the content of a specific YARA source by name. Deals in sources, not deployed rule-sets; list them with list_yara_rules or list_yara_sources."),
 			mcp.WithString("rule_name",
 				mcp.Required(),
-				mcp.Description("Name of the YARA rule to retrieve")),
+				mcp.Description("Name of the YARA source to retrieve")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -95,17 +119,17 @@ func RegisterGetYaraRule() {
 func RegisterSetYaraRule() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "set_yara_rule",
-		Description: "Create or update a YARA rule",
+		Description: "Create or update a YARA source",
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_yara_rule",
-			mcp.WithDescription("Create or update a YARA rule source"),
+			mcp.WithDescription("Create or update a YARA source. This creates a source, not a deployment: attach it to sensors with set_yara_ruleset."),
 			mcp.WithString("rule_name",
 				mcp.Required(),
-				mcp.Description("Name for the YARA rule")),
+				mcp.Description("Name for the YARA source")),
 			mcp.WithString("rule_content",
 				mcp.Required(),
-				mcp.Description("YARA rule content (the actual YARA syntax)")),
+				mcp.Description("YARA source content (the actual YARA syntax)")),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -125,24 +149,24 @@ func RegisterSetYaraRule() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Optional: validate YARA rule syntax before adding
-			if err := validateYaraRuleSyntax(ruleContent); err != nil {
-				return tools.ErrorResultf("invalid YARA rule syntax: %v", err), nil
-			}
-
-			// Add YARA rule source
+			// Add YARA rule source. The client-side heuristics are advisory
+			// only -- the server does the real parse -- so they never block.
 			yaraSource := lc.YaraSource{
 				Content: ruleContent,
 			}
 			err = org.YaraSourceAdd(ruleName, yaraSource)
 			if err != nil {
-				return tools.ErrorResultf("failed to add/update YARA rule: %v", err), nil
+				return tools.ErrorResultf("failed to add/update YARA source: %v", err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
-				"message": fmt.Sprintf("Successfully created/updated YARA rule '%s'", ruleName),
-			}), nil
+				"message": fmt.Sprintf("Successfully created/updated YARA source '%s'", ruleName),
+			}
+			if advisories := yaraSyntaxAdvisories(ruleContent); len(advisories) > 0 {
+				result["advisories"] = advisories
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
@@ -151,14 +175,14 @@ func RegisterSetYaraRule() {
 func RegisterDeleteYaraRule() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "delete_yara_rule",
-		Description: "Delete a YARA rule",
+		Description: "Delete a YARA source",
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("delete_yara_rule",
-			mcp.WithDescription("Delete a YARA rule"),
+			mcp.WithDescription("Delete a YARA source. Deals in sources, not deployed rule-sets (see delete_yara_ruleset)."),
 			mcp.WithString("rule_name",
 				mcp.Required(),
-				mcp.Description("Name of the YARA rule to delete")),
+				mcp.Description("Name of the YARA source to delete")),
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -194,7 +218,7 @@ func RegisterValidateYaraRule() {
 		Profile:     "detection_engineering",
 		RequiresOID: false, // Client-side validation, no OID needed
 		Schema: mcp.NewTool("validate_yara_rule",
-			mcp.WithDescription("Validate YARA rule syntax (client-side validation)"),
+			mcp.WithDescription("Check YARA rule content with client-side heuristics. This is not a YARA parse: the authoritative validation happens server-side when the source is saved with set_yara_rule."),
 			mcp.WithString("rule_content",
 				mcp.Required(),
 				mcp.Description("YARA rule content to validate")),
@@ -206,57 +230,52 @@ func RegisterValidateYaraRule() {
 				return tools.ErrorResult("rule_content parameter is required"), nil
 			}
 
-			// Validate YARA rule syntax
-			if err := validateYaraRuleSyntax(ruleContent); err != nil {
-				return tools.SuccessResult(map[string]interface{}{
-					"valid":   false,
-					"message": fmt.Sprintf("Invalid YARA rule: %v", err),
-				}), nil
+			advisories := yaraSyntaxAdvisories(ruleContent)
+			result := map[string]interface{}{
+				"looks_like_yara": len(advisories) == 0,
+				"advisories":      advisories,
+				"note":            "heuristic check only; the authoritative YARA parse happens server-side when the source is saved",
 			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"valid":   true,
-				"message": "YARA rule syntax is valid",
-			}), nil
+			if len(advisories) == 0 {
+				result["message"] = "YARA rule content passes the client-side heuristics"
+			} else {
+				result["message"] = "YARA rule content did not pass every client-side heuristic; these are hints, not errors"
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
 
-// validateYaraRuleSyntax performs basic client-side YARA syntax validation
-func validateYaraRuleSyntax(ruleContent string) error {
-	// Basic validation checks
-	if len(strings.TrimSpace(ruleContent)) == 0 {
-		return fmt.Errorf("rule content cannot be empty")
+// yaraConditionRe matches a condition section header. YARA allows whitespace
+// before the colon, so a plain "condition:" substring test misses legal rules.
+var yaraConditionRe = regexp.MustCompile(`(?m)^\s*condition\s*:`)
+
+// yaraSyntaxAdvisories reports what does not look like YARA about a source.
+//
+// These are heuristics, not a parse: the authoritative validation happens
+// server-side when the source is saved (legion_config_hive def_yara parses it
+// with gyp), and legal rules can trip them -- a brace inside a string literal
+// unbalances the brace count, for instance. They must therefore never block a
+// write, only inform the caller.
+func yaraSyntaxAdvisories(ruleContent string) []string {
+	advisories := []string{}
+
+	if !strings.Contains(ruleContent, "rule ") {
+		advisories = append(advisories, "no 'rule' keyword found")
 	}
 
-	// Check for required YARA keywords
-	hasRule := strings.Contains(ruleContent, "rule ")
-	if !hasRule {
-		return fmt.Errorf("rule content must contain 'rule' keyword")
-	}
-
-	// Check for basic structure
-	hasOpenBrace := strings.Contains(ruleContent, "{")
-	hasCloseBrace := strings.Contains(ruleContent, "}")
-	if !hasOpenBrace || !hasCloseBrace {
-		return fmt.Errorf("rule content must have opening and closing braces")
-	}
-
-	// Count braces for balance
 	openCount := strings.Count(ruleContent, "{")
 	closeCount := strings.Count(ruleContent, "}")
-	if openCount != closeCount {
-		return fmt.Errorf("unbalanced braces in rule content")
+	switch {
+	case openCount == 0 || closeCount == 0:
+		advisories = append(advisories, "no rule body braces found")
+	case openCount != closeCount:
+		advisories = append(advisories, "braces look unbalanced (expected if a string literal contains a brace)")
 	}
 
-	// Check for condition keyword (required in YARA)
-	hasCondition := strings.Contains(ruleContent, "condition:")
-	if !hasCondition {
-		return fmt.Errorf("rule must contain 'condition:' section")
+	if !yaraConditionRe.MatchString(ruleContent) {
+		advisories = append(advisories, "no 'condition:' section found")
 	}
 
-	// Note: For full validation, would need to use YARA library
-	// This is basic syntax checking only
-
-	return nil
+	return advisories
 }

@@ -335,7 +335,7 @@ func getSchemaInfo(ctx context.Context, org *lc.Organization, schemaType string)
 
 	eventTypes := []string{}
 	for _, eventType := range schemas.EventTypes {
-		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 && parts[0] == schemaType || schemaType == "" {
+		if parts := strings.SplitN(eventType, ":", 2); len(parts) == 2 && (schemaType == "" || parts[0] == schemaType) {
 			eventTypes = append(eventTypes, fmt.Sprintf("%q", parts[1]))
 		}
 	}

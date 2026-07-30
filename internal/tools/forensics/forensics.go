@@ -38,12 +38,7 @@ func sendSensorCommand(ctx context.Context, sid string, command string, params m
 	}
 	defer cleanup() // Ensure Spout is shut down when request completes
 
-	// Build command string with parameters
-	// Format: "command --param1 value1 --param2 value2"
-	cmdStr := command
-	for k, v := range params {
-		cmdStr += fmt.Sprintf(" --%s %v", k, v)
-	}
+	cmdStr := buildCommandString(command, nil, params)
 
 	// Log the command being sent
 	logger := slog.Default()
@@ -80,19 +75,7 @@ func sendSensorCommandWithPositional(ctx context.Context, sid string, command st
 	}
 	defer cleanup() // Ensure Spout is shut down when request completes
 
-	// Build command string with positional arguments first, then flags
-	// Format: "command <arg1> <arg2> --flag1 value1 --flag2 value2"
-	cmdStr := command
-
-	// Add positional arguments
-	for _, arg := range positionalArgs {
-		cmdStr += fmt.Sprintf(" %s", arg)
-	}
-
-	// Add flag parameters
-	for k, v := range flagParams {
-		cmdStr += fmt.Sprintf(" --%s %v", k, v)
-	}
+	cmdStr := buildCommandString(command, positionalArgs, flagParams)
 
 	// Log the command being sent
 	logger := slog.Default()
@@ -213,9 +196,11 @@ func RegisterFindStrings() {
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
-			mcp.WithString("strings",
+			mcp.WithArray("strings",
 				mcp.Required(),
-				mcp.Description("Comma-separated list of strings to find")),
+				mcp.Description("Strings to look for. Each entry is searched as its own literal string.")),
+			mcp.WithNumber("pid",
+				mcp.Description("Optional process ID to restrict the search to (default: all processes)")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -224,14 +209,33 @@ func RegisterFindStrings() {
 				return tools.ErrorResult("sid parameter is required"), nil
 			}
 
-			strings, ok := args["strings"].(string)
-			if !ok {
-				return tools.ErrorResult("strings parameter is required"), nil
+			rawStrings, ok := args["strings"].([]interface{})
+			if !ok || len(rawStrings) == 0 {
+				return tools.ErrorResult("strings parameter is required and must be a non-empty array"), nil
 			}
 
-			resp, err := sendSensorCommand(ctx, sid, "mem_find_string", map[string]interface{}{
-				"str": strings,
-			})
+			needles := make([]string, 0, len(rawStrings))
+			for i, raw := range rawStrings {
+				s, ok := raw.(string)
+				if !ok {
+					return tools.ErrorResultf("strings[%d] is not a string", i), nil
+				}
+				if s == "" {
+					return tools.ErrorResultf("strings[%d] is empty", i), nil
+				}
+				needles = append(needles, s)
+			}
+
+			// mem_find_string declares Strings as a `separate` flag, so the
+			// flag has to be repeated once per value.
+			params := map[string]interface{}{
+				"string": needles,
+			}
+			if pid, ok := args["pid"].(float64); ok {
+				params["pid"] = int(pid)
+			}
+
+			resp, err := sendSensorCommand(ctx, sid, "mem_find_string", params)
 			if err != nil {
 				return tools.ErrorResultf("failed to find strings: %v", err), nil
 			}
@@ -566,7 +570,7 @@ func RegisterGetRegistryKeys() {
 				mcp.Description("Sensor ID (UUID)")),
 			mcp.WithString("path",
 				mcp.Required(),
-				mcp.Description("Registry path to query")),
+				mcp.Description(`Registry path to query, starting with one of hkcr, hkcc, hkcu, hklm, hku and using single backslashes, e.g. hklm\software\microsoft`)),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -576,13 +580,12 @@ func RegisterGetRegistryKeys() {
 			}
 
 			path, ok := args["path"].(string)
-			if !ok {
+			if !ok || path == "" {
 				return tools.ErrorResult("path parameter is required"), nil
 			}
 
-			resp, err := sendSensorCommand(ctx, sid, "reg_list", map[string]interface{}{
-				"reg": path,
-			})
+			// reg_list takes the path as a required positional.
+			resp, err := sendSensorCommandWithPositional(ctx, sid, "reg_list", []string{path}, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to get registry keys: %v", err), nil
 			}
@@ -600,16 +603,16 @@ func RegisterGetHistoricEvents() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_historic_events",
-			mcp.WithDescription("Get historical events for a sensor between timestamps"),
+			mcp.WithDescription("Get historical events for a sensor between timestamps. Returns {events, count}; if pagination fails partway through it also returns truncated=true and error, and the events are a partial result."),
 			mcp.WithString("sid",
 				mcp.Required(),
 				mcp.Description("Sensor ID (UUID)")),
 			mcp.WithNumber("start",
 				mcp.Required(),
-				mcp.Description("Start timestamp (Unix epoch in seconds)")),
+				mcp.Description("Start timestamp in Unix epoch SECONDS (not milliseconds - millisecond values are rejected)")),
 			mcp.WithNumber("end",
 				mcp.Required(),
-				mcp.Description("End timestamp (Unix epoch in seconds)")),
+				mcp.Description("End timestamp in Unix epoch SECONDS (not milliseconds - millisecond values are rejected)")),
 			mcp.WithNumber("limit",
 				mcp.Description("Maximum number of events to return (default: 1000)")),
 			mcp.WithString("event_type",
@@ -637,35 +640,18 @@ func RegisterGetHistoricEvents() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Build query parameters
-			params := lc.Dict{
-				"sid":   sid,
-				"start": int64(start),
-				"end":   int64(end),
-			}
-
-			if limit, ok := args["limit"].(float64); ok {
-				params["limit"] = int(limit)
-			} else {
-				params["limit"] = 1000
-			}
-
-			if eventType, ok := args["event_type"].(string); ok {
-				params["event_type"] = eventType
-			}
-
 			// Get historic events using the SDK method
+			limit := 1000
+			if limitParam, ok := args["limit"].(float64); ok {
+				limit = int(limitParam)
+			}
 			req := lc.HistoricEventsRequest{
 				Start: int64(start),
 				End:   int64(end),
+				Limit: &limit,
 			}
 
-			if limit, ok := params["limit"].(int); ok {
-				limitPtr := limit
-				req.Limit = &limitPtr
-			}
-
-			if eventType, ok := params["event_type"].(string); ok {
+			if eventType, ok := args["event_type"].(string); ok {
 				req.EventType = eventType
 			}
 
@@ -675,13 +661,31 @@ func RegisterGetHistoricEvents() {
 			}
 			defer closeFunc()
 
-			// Collect events from channel
-			events := []lc.IteratedEvent{}
+			// The SDK reports a mid-iteration page failure by pushing an
+			// IteratedEvent carrying only an Error and then stopping, so the
+			// events collected so far are a partial result, not a complete one.
+			events := make([]lc.Dict, 0, 64)
+			fetchErr := ""
 			for event := range eventChan {
-				events = append(events, event)
+				if event.Error != "" {
+					fetchErr = event.Error
+					break
+				}
+				events = append(events, event.Data)
 			}
 
-			return tools.SuccessResult(events), nil
+			result := map[string]interface{}{
+				"events": events,
+				"count":  len(events),
+			}
+			if fetchErr != "" {
+				// Partial result: the events above are valid, the pagination
+				// stopped early. Callers must treat this as incomplete.
+				result["truncated"] = true
+				result["error"] = fetchErr
+			}
+
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

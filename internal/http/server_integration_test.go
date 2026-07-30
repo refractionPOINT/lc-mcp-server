@@ -22,6 +22,7 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/ai"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/api" // Generic API access tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/artifacts"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/cloudsec" // Cloud Security (CNAPP) tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/config"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/forensics"

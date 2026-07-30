@@ -48,5 +48,8 @@ bin/
 # Environment variables
 .env
 .env.local
+
+# Local Claude Code MCP client config
+.mcp.json
 lc-mcp-server
 __pycache__/

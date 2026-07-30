@@ -59,11 +59,14 @@ func handleExpandInvestigation(ctx context.Context, args map[string]interface{})
 		reqData["investigation_name"] = investigationName
 	}
 
-	// Call API
+	// This route declares an application/json body and reads it raw, so the
+	// form-encoded GenericPOSTRequest cannot be used: the gateway's own form
+	// parsing drains the body first and the handler then fails with
+	// "missing request body".
 	var response map[string]interface{}
 	endpoint := fmt.Sprintf("orgs/%s/investigation/expand", org.GetOID())
 
-	if err := org.GenericPOSTRequest(endpoint, reqData, &response); err != nil {
+	if err := tools.PostJSON(ctx, org, endpoint, reqData, &response); err != nil {
 		return tools.ErrorResultf("failed to expand investigation: %v", err), nil
 	}
 

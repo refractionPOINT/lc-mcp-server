@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 )
 
 func init() {
@@ -106,7 +107,7 @@ func RegisterSetDRGeneralRule() {
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_dr_general_rule",
-			mcp.WithDescription("Create or update a general Detection & Response rule"),
+			mcp.WithDescription("Create or update a general Detection & Response rule. Updating an existing rule preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given, so a deliberately disabled rule stays disabled."),
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name for the rule")),
@@ -115,6 +116,7 @@ func RegisterSetDRGeneralRule() {
 				mcp.Description("Rule content (detection and response)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			hive.WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -127,6 +129,11 @@ func RegisterSetDRGeneralRule() {
 			ruleContent, ok := args["rule_content"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
+			}
+
+			overrides, err := hive.ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
 			}
 
 			org, err := tools.GetOrganization(ctx)
@@ -155,18 +162,14 @@ func RegisterSetDRGeneralRule() {
 			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
 				exp := time.Now().UnixMilli() + int64(ttl)*1000
 				expiry = &exp
+				overrides.Expiry = expiry
 			}
 
-			// Create hive client and add rule
-			hive := lc.NewHiveClient(org)
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "dr-general",
-				PartitionKey: org.GetOID(),
-				Key:          ruleName,
-				Data:         data,
-				Enabled:      &enabled,
-				Expiry:       expiry,
+			warning, err := hive.SetRecord(org, hive.RecordWrite{
+				HiveName:  "dr-general",
+				Key:       ruleName,
+				Data:      data,
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to add/update D&R rule: %v", err), nil
@@ -185,6 +188,9 @@ func RegisterSetDRGeneralRule() {
 			// Note if TTL was set
 			if expiry != nil {
 				result["expiry"] = *expiry
+			}
+			if warning != "" {
+				result["warning"] = warning
 			}
 
 			return tools.SuccessResult(result), nil
@@ -314,7 +320,7 @@ func RegisterSetDRManagedRule() {
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_dr_managed_rule",
-			mcp.WithDescription("Create or update a managed Detection & Response rule"),
+			mcp.WithDescription("Create or update a managed Detection & Response rule. Updating an existing rule preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given, so a deliberately disabled rule stays disabled."),
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name for the rule")),
@@ -323,6 +329,7 @@ func RegisterSetDRManagedRule() {
 				mcp.Description("Rule content (detection and response)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			hive.WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -335,6 +342,11 @@ func RegisterSetDRManagedRule() {
 			ruleContent, ok := args["rule_content"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
+			}
+
+			overrides, err := hive.ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
 			}
 
 			org, err := tools.GetOrganization(ctx)
@@ -363,18 +375,14 @@ func RegisterSetDRManagedRule() {
 			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
 				exp := time.Now().UnixMilli() + int64(ttl)*1000
 				expiry = &exp
+				overrides.Expiry = expiry
 			}
 
-			// Create hive client and add rule
-			hive := lc.NewHiveClient(org)
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "dr-managed",
-				PartitionKey: org.GetOID(),
-				Key:          ruleName,
-				Data:         data,
-				Enabled:      &enabled,
-				Expiry:       expiry,
+			warning, err := hive.SetRecord(org, hive.RecordWrite{
+				HiveName:  "dr-managed",
+				Key:       ruleName,
+				Data:      data,
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to add/update managed D&R rule: %v", err), nil
@@ -392,6 +400,9 @@ func RegisterSetDRManagedRule() {
 			// Note if TTL was set
 			if expiry != nil {
 				result["expiry"] = *expiry
+			}
+			if warning != "" {
+				result["warning"] = warning
 			}
 
 			return tools.SuccessResult(result), nil
@@ -446,7 +457,7 @@ func RegisterGetDetectionRules() {
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_detection_rules",
-			mcp.WithDescription("Get all Detection & Response rules from all namespaces"),
+			mcp.WithDescription("Get all Detection & Response rules from every namespace (general, managed, service), keyed by namespace"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -455,16 +466,36 @@ func RegisterGetDetectionRules() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// List all rules (no namespace filter)
-			rules, err := org.DRRules()
-			if err != nil {
-				return tools.ErrorResultf("failed to list all D&R rules: %v", err), nil
+			// The API defaults an unfiltered request to the general namespace,
+			// so every namespace has to be asked for explicitly. Each namespace
+			// is authorized separately (dr.list, dr.list.managed,
+			// dr.list.service), so one namespace being off-limits reports itself
+			// instead of failing the whole listing.
+			namespaces := []string{"general", "managed", "service"}
+			byNamespace := map[string]interface{}{}
+			failures := map[string]interface{}{}
+			total := 0
+			for _, ns := range namespaces {
+				rules, err := org.DRRules(lc.WithNamespace(ns))
+				if err != nil {
+					failures[ns] = err.Error()
+					continue
+				}
+				byNamespace[ns] = rules
+				total += len(rules)
+			}
+			if len(failures) == len(namespaces) {
+				return tools.ErrorResultf("failed to list D&R rules in every namespace: %v", failures), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
-				"rules": rules,
-				"count": len(rules),
-			}), nil
+			result := map[string]interface{}{
+				"rules": byNamespace,
+				"count": total,
+			}
+			if len(failures) > 0 {
+				result["unavailable_namespaces"] = failures
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

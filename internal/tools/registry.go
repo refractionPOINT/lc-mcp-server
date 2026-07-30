@@ -67,6 +67,8 @@ var ProfileDefinitions = map[string][]string{
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
+		"get_event_by_atom",
+		"get_atom_children",
 		// Saved queries
 		"list_saved_queries",
 		"get_saved_query",
@@ -95,6 +97,8 @@ var ProfileDefinitions = map[string][]string{
 		"search_iocs",
 		"batch_search_iocs",
 		"get_time_when_sensor_has_data",
+		"get_event_by_atom",
+		"get_atom_children",
 		// Saved queries (read-only - excludes set/delete)
 		"list_saved_queries",
 		"get_saved_query",
@@ -144,6 +148,7 @@ var ProfileDefinitions = map[string][]string{
 		"delete_sensor",
 		"reliable_tasking",
 		"list_reliable_tasks",
+		"delete_reliable_task",
 		// --- MCP-parity additions ---
 		"task_sensor",
 		"memory_dump_sensor",
@@ -169,6 +174,7 @@ var ProfileDefinitions = map[string][]string{
 		"find_sensors_by_tag",
 		"wait_sensor_online",
 		"export_sensors",
+		"upgrade_sensors",
 	},
 	"detection_engineering": {
 		"get_detection_rules",
@@ -220,6 +226,9 @@ var ProfileDefinitions = map[string][]string{
 		"list_dr_service_rules",
 		"set_dr_service_rule",
 		"delete_dr_service_rule",
+		"test_dr_rule_events",
+		"replay_dr_rule",
+		"validate_usp_mapping",
 	},
 	"platform_admin": {
 		// Organization Management
@@ -232,6 +241,7 @@ var ProfileDefinitions = map[string][]string{
 		"get_sku_definitions",
 		"create_org",
 		"list_user_orgs",
+		"get_org_oid_by_name",
 		// User Management
 		"list_org_users",
 		"add_org_user",
@@ -286,6 +296,7 @@ var ProfileDefinitions = map[string][]string{
 		"delete_extension_config",
 		"subscribe_to_extension",
 		"unsubscribe_from_extension",
+		"list_extension_subscriptions",
 		// Hive Rules
 		"list_rules",
 		"get_rule",
@@ -316,6 +327,11 @@ var ProfileDefinitions = map[string][]string{
 		"get_sop",
 		"set_sop",
 		"delete_sop",
+		// AI Skills (documents in the ai_skill hive)
+		"list_ai_skills",
+		"get_ai_skill",
+		"set_ai_skill",
+		"delete_ai_skill",
 		// --- MCP-parity additions ---
 		"vulnerability_query_cves",
 		"vulnerability_get_cve",
@@ -345,6 +361,7 @@ var ProfileDefinitions = map[string][]string{
 		"get_org_value",
 		"set_org_value",
 		"rename_org",
+		"set_org_description",
 		"delete_org",
 		"resolve_arl",
 		"list_available_extensions",
@@ -416,6 +433,127 @@ var ProfileDefinitions = map[string][]string{
 		"get_case_report",
 		"bulk_update_cases",
 		"merge_cases",
+	},
+	"cloud_security": {
+		// Posture summary / trends
+		"cloudsec_get_overview",
+		"cloudsec_get_risk_trend",
+		"cloudsec_list_changes",
+		"cloudsec_get_scan_status",
+		"cloudsec_get_topology",
+		"cloudsec_list_chokepoints",
+		// Findings worklist
+		"cloudsec_list_findings",
+		"cloudsec_get_finding_facets",
+		"cloudsec_get_finding",
+		"cloudsec_list_finding_classes",
+		"cloudsec_list_attack_paths",
+		"cloudsec_list_finding_causes",
+		// Identity / CIEM
+		"cloudsec_get_public_access",
+		"cloudsec_get_identity",
+		"cloudsec_get_identity_facets",
+		"cloudsec_list_identities",
+		// Inventory / data security / resources / graph
+		"cloudsec_list_inventory",
+		"cloudsec_get_inventory_facets",
+		"cloudsec_get_data_security_facets",
+		"cloudsec_list_data_stores",
+		"cloudsec_get_resource",
+		"cloudsec_get_graph_neighbors",
+		"cloudsec_list_queries",
+		// Compliance
+		"cloudsec_get_compliance_report",
+		"cloudsec_list_compliance_frameworks",
+		"cloudsec_list_compliance_assignments",
+		// CAASM (third-party asset attack surface)
+		"cloudsec_list_caasm_assets",
+		"cloudsec_list_caasm_coverage",
+		"cloudsec_get_caasm_policy",
+		"cloudsec_get_provider_manifests",
+		// Policy authoring aids (read-only previews)
+		"cloudsec_get_policy_vocabulary",
+		"cloudsec_suggest_policy_values",
+		"cloudsec_simulate_resource_match",
+		"cloudsec_simulate_finding_match",
+		"cloudsec_run_query",
+		// Sensor <-> cloud asset resolution
+		"cloudsec_resolve_sensors",
+		"cloudsec_resolve_assets",
+		// CSV export
+		"cloudsec_export_csv",
+		// Free tier / fleet (multi-org)
+		"cloudsec_get_free_tier_status",
+		"cloudsec_get_fleet_overview",
+		// Finding triage writes (cloudsec.set)
+		"cloudsec_set_finding_status",
+		"cloudsec_bulk_set_finding_status",
+		"cloudsec_set_finding_owner",
+		"cloudsec_set_finding_ticket",
+		// Chokepoint dismissal
+		"cloudsec_dismiss_chokepoint",
+		"cloudsec_restore_chokepoint",
+		// CAASM policy / ingest
+		"cloudsec_set_caasm_policy",
+		"cloudsec_ingest_caasm_records",
+		// Provider credential preflight
+		"cloudsec_test_provider",
+	},
+	"cloud_security_readonly": {
+		// The cloudsec.get subset: every read plus the CSV export. Excludes all
+		// nine cloudsec.set writes, including cloudsec_test_provider (a probe,
+		// but gated on cloudsec.set because testing a credential is as
+		// sensitive as saving one).
+		// Posture summary / trends
+		"cloudsec_get_overview",
+		"cloudsec_get_risk_trend",
+		"cloudsec_list_changes",
+		"cloudsec_get_scan_status",
+		"cloudsec_get_topology",
+		"cloudsec_list_chokepoints",
+		// Findings worklist
+		"cloudsec_list_findings",
+		"cloudsec_get_finding_facets",
+		"cloudsec_get_finding",
+		"cloudsec_list_finding_classes",
+		"cloudsec_list_attack_paths",
+		"cloudsec_list_finding_causes",
+		// Identity / CIEM
+		"cloudsec_get_public_access",
+		"cloudsec_get_identity",
+		"cloudsec_get_identity_facets",
+		"cloudsec_list_identities",
+		// Inventory / data security / resources / graph
+		"cloudsec_list_inventory",
+		"cloudsec_get_inventory_facets",
+		"cloudsec_get_data_security_facets",
+		"cloudsec_list_data_stores",
+		"cloudsec_get_resource",
+		"cloudsec_get_graph_neighbors",
+		"cloudsec_list_queries",
+		// Compliance
+		"cloudsec_get_compliance_report",
+		"cloudsec_list_compliance_frameworks",
+		"cloudsec_list_compliance_assignments",
+		// CAASM (third-party asset attack surface)
+		"cloudsec_list_caasm_assets",
+		"cloudsec_list_caasm_coverage",
+		"cloudsec_get_caasm_policy",
+		"cloudsec_get_provider_manifests",
+		// Policy authoring aids (read-only previews)
+		"cloudsec_get_policy_vocabulary",
+		"cloudsec_suggest_policy_values",
+		"cloudsec_simulate_resource_match",
+		"cloudsec_simulate_finding_match",
+		"cloudsec_run_query",
+		// Sensor <-> cloud asset resolution
+		"cloudsec_resolve_sensors",
+		"cloudsec_resolve_assets",
+		// CSV export
+		"cloudsec_export_csv",
+		// Free tier / fleet (multi-org)
+		"cloudsec_get_free_tier_status",
+		"cloudsec_get_fleet_overview",
 	},
 }
 
@@ -568,22 +706,10 @@ func AddToolsToServer(s *server.MCPServer, profile string, authMode auth.AuthMod
 			continue
 		}
 
-		// Get schema from either interface or legacy fields
-		var schema mcp.Tool
-		var requiresOID bool
-
-		if reg.Tool != nil {
-			// Use interface-based tool
-			schema = reg.Tool.Schema()
-			requiresOID = reg.Tool.RequiresOID()
-		} else {
-			// Use legacy struct fields
-			schema = reg.Schema
-			requiresOID = reg.RequiresOID
-		}
+		schema := reg.ToolSchema()
 
 		// Dynamically add OID parameter if tool requires it and we're in UID mode
-		if requiresOID && isUIDMode {
+		if reg.NeedsOID() && isUIDMode {
 			schema = AddOIDToToolSchema(schema)
 		}
 
@@ -605,61 +731,40 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 		// Extract arguments using the method
 		args := request.GetArguments()
 
-		// Determine if tool requires OID from either interface or legacy fields
-		var requiresOID bool
-		var toolName string
-
-		if reg.Tool != nil {
-			requiresOID = reg.Tool.RequiresOID()
-			toolName = reg.Tool.Name()
-		} else {
-			requiresOID = reg.RequiresOID
-			toolName = reg.Name
-		}
+		requiresOID := reg.NeedsOID()
+		toolName := reg.ToolName()
 
 		// Automatically handle OID switching for tools that require it in UID mode
-		if requiresOID && isUIDMode {
-			if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
+		if requiresOID {
+			// Resolve the OID the call will actually execute against: the explicit
+			// argument when the caller can switch orgs, otherwise the OID already
+			// pinned on the auth context. The ai_agent.operate check keys off that
+			// effective OID so that omitting the argument cannot bypass it.
+			effectiveOID := ""
+			if oidParam, ok := args["oid"].(string); ok && oidParam != "" && isUIDMode {
 				var err error
 				// Pass nil logger - WithOID will use slog.Default() as fallback
 				ctx, err = auth.WithOID(ctx, oidParam, nil)
 				if err != nil {
 					return mcp.NewToolResultError(fmt.Sprintf("failed to switch OID: %v", err)), nil
 				}
-
-				// Check ai_agent.operate permission after successful OID switch
-				// Skip the check for tools marked with SkipsAIAgentPermission
-				if !shouldSkipAIAgentPermission(reg) {
-					if err := checkAIAgentPermission(ctx, oidParam); err != nil {
-						return mcp.NewToolResultError(err.Error()), nil
-					}
-				}
+				effectiveOID = oidParam
+			} else if authCtx, err := auth.FromContext(ctx); err == nil {
+				effectiveOID = authCtx.OID
 			}
-		} else if requiresOID && !isUIDMode {
-			// Normal mode (single-org) - check permission against pre-configured OID
-			// This ensures organizations can block AI agent access even in single-org deployments
-			// Skip the check for tools marked with SkipsAIAgentPermission
-			if !shouldSkipAIAgentPermission(reg) {
-				authCtx, err := auth.FromContext(ctx)
-				if err == nil && authCtx.OID != "" {
-					if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
-						return mcp.NewToolResultError(err.Error()), nil
-					}
+
+			// This ensures organizations can block AI agent access whatever the auth
+			// mode. Skip the check for tools marked with SkipsAIAgentPermission, and
+			// for genuinely org-less contexts (the call fails downstream anyway).
+			if effectiveOID != "" && !reg.SkipsAIAgentPermissionCheck() {
+				if err := checkAIAgentPermission(ctx, effectiveOID); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
 				}
 			}
 		}
 
 		// Call the appropriate handler (interface or legacy)
-		var result *mcp.CallToolResult
-		var err error
-
-		if reg.Tool != nil {
-			// Use interface-based tool
-			result, err = reg.Tool.Handle(ctx, args)
-		} else {
-			// Use legacy handler
-			result, err = reg.Handler(ctx, args)
-		}
+		result, err := reg.Invoke(ctx, args)
 
 		if err != nil {
 			return result, err
@@ -685,13 +790,50 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 	}
 }
 
-// shouldSkipAIAgentPermission returns true if the tool should bypass the ai_agent.operate check.
-// It checks both interface-based tools and legacy struct-based tools.
-func shouldSkipAIAgentPermission(reg *ToolRegistration) bool {
+// The accessors below resolve a registration's metadata from the interface-based
+// tool when one is set, falling back to the legacy struct fields otherwise. Every
+// consumer should go through them rather than reading the struct fields directly,
+// so interface-based tools behave identically on all code paths.
+
+// ToolName returns the tool's name.
+func (reg *ToolRegistration) ToolName() string {
+	if reg.Tool != nil {
+		return reg.Tool.Name()
+	}
+	return reg.Name
+}
+
+// ToolSchema returns the tool's MCP schema.
+func (reg *ToolRegistration) ToolSchema() mcp.Tool {
+	if reg.Tool != nil {
+		return reg.Tool.Schema()
+	}
+	return reg.Schema
+}
+
+// NeedsOID returns true if the tool requires an OID parameter in UID mode.
+func (reg *ToolRegistration) NeedsOID() bool {
+	if reg.Tool != nil {
+		return reg.Tool.RequiresOID()
+	}
+	return reg.RequiresOID
+}
+
+// SkipsAIAgentPermissionCheck returns true if the tool should bypass the
+// ai_agent.operate check.
+func (reg *ToolRegistration) SkipsAIAgentPermissionCheck() bool {
 	if reg.Tool != nil {
 		return reg.Tool.SkipsAIAgentPermission()
 	}
 	return reg.SkipsAIAgentPermission
+}
+
+// Invoke runs the tool's handler.
+func (reg *ToolRegistration) Invoke(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	if reg.Tool != nil {
+		return reg.Tool.Handle(ctx, args)
+	}
+	return reg.Handler(ctx, args)
 }
 
 // checkAIAgentPermission verifies that the current credentials have the ai_agent.operate
@@ -883,59 +1025,40 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 		return ErrorResultf("tool %q not found", toolName), nil
 	}
 
-	// Get schema from either interface or legacy fields
-	var schema mcp.Tool
-	var requiresOID bool
-	var handler ToolHandler
-
-	if reg.Tool != nil {
-		schema = reg.Tool.Schema()
-		requiresOID = reg.Tool.RequiresOID()
-		handler = reg.Tool.Handle
-	} else {
-		schema = reg.Schema
-		requiresOID = reg.RequiresOID
-		handler = reg.Handler
-	}
-
 	// Validate parameters against schema
-	if err := ValidateToolParameters(schema, args); err != nil {
+	if err := ValidateToolParameters(reg.ToolSchema(), args); err != nil {
 		return ErrorResultf("parameter validation failed: %v", err), nil
 	}
 
 	// Handle OID switching if tool requires it
-	if requiresOID {
+	if reg.NeedsOID() {
+		// Resolve the OID the call will actually execute against: the explicit
+		// argument when given, otherwise the OID already pinned on the auth
+		// context (in any mode). The ai_agent.operate check keys off that
+		// effective OID so that omitting the argument cannot bypass it.
+		effectiveOID := ""
 		if oidParam, ok := args["oid"].(string); ok && oidParam != "" {
 			var err error
 			ctx, err = auth.WithOID(ctx, oidParam, nil)
 			if err != nil {
 				return ErrorResultf("failed to switch OID: %v", err), nil
 			}
+			effectiveOID = oidParam
+		} else if authCtx, err := auth.FromContext(ctx); err == nil {
+			effectiveOID = authCtx.OID
+		}
 
-			// Check ai_agent.operate permission after successful OID switch
-			// Skip the check for tools marked with SkipsAIAgentPermission
-			if !shouldSkipAIAgentPermission(reg) {
-				if err := checkAIAgentPermission(ctx, oidParam); err != nil {
-					return ErrorResultf("%v", err), nil
-				}
-			}
-		} else {
-			// No OID param provided - check if we're in Normal mode with pre-configured OID
-			// This handles the case where CallTool is used in single-org deployments
-			// Skip the check for tools marked with SkipsAIAgentPermission
-			if !shouldSkipAIAgentPermission(reg) {
-				authCtx, err := auth.FromContext(ctx)
-				if err == nil && authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
-					if err := checkAIAgentPermission(ctx, authCtx.OID); err != nil {
-						return ErrorResultf("%v", err), nil
-					}
-				}
+		// Skip the check for tools marked with SkipsAIAgentPermission, and for
+		// genuinely org-less contexts (the call fails downstream anyway).
+		if effectiveOID != "" && !reg.SkipsAIAgentPermissionCheck() {
+			if err := checkAIAgentPermission(ctx, effectiveOID); err != nil {
+				return ErrorResultf("%v", err), nil
 			}
 		}
 	}
 
 	// Call the handler
-	result, err := handler(ctx, args)
+	result, err := reg.Invoke(ctx, args)
 	if err != nil {
 		return result, err
 	}

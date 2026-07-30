@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	// Import tools to register them
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/cloudsec" // Cloud Security (CNAPP) tools
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/core"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/historical"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/investigation"

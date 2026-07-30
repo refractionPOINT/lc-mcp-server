@@ -2,11 +2,13 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 )
 
 func init() {
@@ -37,10 +39,10 @@ func RegisterListLookups() {
 			}
 
 			// Create hive client for lookups
-			hive := lc.NewHiveClient(org)
+			client := lc.NewHiveClient(org)
 
 			// List all lookups from the lookup hive
-			lookups, err := hive.List(lc.HiveArgs{
+			lookups, err := client.List(lc.HiveArgs{
 				HiveName:     "lookup",
 				PartitionKey: org.GetOID(),
 			})
@@ -94,10 +96,10 @@ func RegisterGetLookup() {
 			}
 
 			// Create hive client for lookups
-			hive := lc.NewHiveClient(org)
+			client := lc.NewHiveClient(org)
 
 			// Get lookup table
-			lookup, err := hive.Get(lc.HiveArgs{
+			lookup, err := client.Get(lc.HiveArgs{
 				HiveName:     "lookup",
 				PartitionKey: org.GetOID(),
 				Key:          lookupName,
@@ -134,13 +136,14 @@ func RegisterSetLookup() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_lookup",
-			mcp.WithDescription("Create or update a lookup table"),
+			mcp.WithDescription("Create or update a lookup table. Updating an existing table preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("lookup_name",
 				mcp.Required(),
 				mcp.Description("Name for the lookup table")),
 			mcp.WithObject("lookup_data",
 				mcp.Required(),
 				mcp.Description("Lookup table data (dict of strings -> dict, string is the key, dict value is the item metadata)")),
+			hive.WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -155,31 +158,34 @@ func RegisterSetLookup() {
 				return tools.ErrorResult("lookup_data parameter is required and must be an object"), nil
 			}
 
+			overrides, err := hive.ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for lookups
-			hive := lc.NewHiveClient(org)
-
-			// Set lookup table
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "lookup",
-				PartitionKey: org.GetOID(),
-				Key:          lookupName,
-				Data:         lc.Dict(map[string]interface{}{"lookup_data": lookupData}),
-				Enabled:      &enabled,
+			warning, err := hive.SetRecord(org, hive.RecordWrite{
+				HiveName:  "lookup",
+				Key:       lookupName,
+				Data:      lc.Dict{"lookup_data": lookupData},
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set lookup '%s': %v", lookupName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated lookup table '%s'", lookupName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }
@@ -210,10 +216,10 @@ func RegisterDeleteLookup() {
 			}
 
 			// Create hive client for lookups
-			hive := lc.NewHiveClient(org)
+			client := lc.NewHiveClient(org)
 
 			// Delete lookup table
-			_, err = hive.Remove(lc.HiveArgs{
+			_, err = client.Remove(lc.HiveArgs{
 				HiveName:     "lookup",
 				PartitionKey: org.GetOID(),
 				Key:          lookupName,
@@ -228,6 +234,62 @@ func RegisterDeleteLookup() {
 			}), nil
 		},
 	})
+}
+
+// lookupValue looks an indicator up in a stored lookup record's data. It reads
+// the plain lookup_data table first, then the optimized form, where
+// _LC_INDICATORS maps an indicator to its index in the _LC_METADATA list.
+func lookupValue(data map[string]interface{}, key string) (interface{}, bool) {
+	if table, ok := data["lookup_data"].(map[string]interface{}); ok {
+		if value, found := table[key]; found {
+			return value, true
+		}
+	}
+
+	optimized, ok := data["optimized_lookup_data"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	indicators, ok := optimized["_LC_INDICATORS"].(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	rawIndex, found := indicators[key]
+	if !found {
+		return nil, false
+	}
+	metadata, _ := optimized["_LC_METADATA"].([]interface{})
+	index, ok := asIndex(rawIndex)
+	if !ok || index >= len(metadata) {
+		// The indicator is present; its metadata is not addressable.
+		return nil, true
+	}
+	return metadata[index], true
+}
+
+// asIndex converts a JSON-decoded number into a usable slice index. The SDK has
+// two decode paths — plain encoding/json (float64) and its own clean unmarshal
+// (int64/json.Number for large integers) — so all three shapes can turn up.
+func asIndex(v interface{}) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		if n < 0 {
+			return 0, false
+		}
+		return int(n), true
+	case int64:
+		if n < 0 {
+			return 0, false
+		}
+		return int(n), true
+	case json.Number:
+		i, err := n.Int64()
+		if err != nil || i < 0 {
+			return 0, false
+		}
+		return int(i), true
+	}
+	return 0, false
 }
 
 // RegisterQueryLookup registers the query_lookup tool
@@ -264,10 +326,10 @@ func RegisterQueryLookup() {
 			}
 
 			// Create hive client for lookups
-			hive := lc.NewHiveClient(org)
+			client := lc.NewHiveClient(org)
 
 			// Get lookup table
-			lookup, err := hive.Get(lc.HiveArgs{
+			lookup, err := client.Get(lc.HiveArgs{
 				HiveName:     "lookup",
 				PartitionKey: org.GetOID(),
 				Key:          lookupName,
@@ -276,8 +338,11 @@ func RegisterQueryLookup() {
 				return tools.ErrorResultf("failed to get lookup '%s': %v", lookupName, err), nil
 			}
 
-			// Query the key from the lookup data
-			value, found := lookup.Data[key]
+			// A stored lookup record only ever carries lookup_data and/or
+			// optimized_lookup_data at its root (the hive's PreIngest hook
+			// rewrites the record into that shape), so the indicators live one
+			// level down.
+			value, found := lookupValue(lookup.Data, key)
 
 			return tools.SuccessResult(map[string]interface{}{
 				"value": value,

@@ -2,11 +2,14 @@ package rules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 )
 
 func init() {
@@ -29,6 +32,30 @@ func importNamespaceToHive(args map[string]interface{}) (string, string, error) 
 	}
 }
 
+// importedRuleMetadata turns the batched metadata read of one rule into the
+// usr_mtd to send with its upsert. A nil result means "send no usr_mtd", which
+// is what makes the hive keep the record's existing metadata (the write path
+// replaces usr_mtd wholesale whenever one is present).
+func importedRuleMetadata(mtdResp lc.BatchResponse, overrides hive.MetadataOverrides) (*lc.UsrMtd, error) {
+	if mtdResp.Error != "" {
+		if !strings.Contains(mtdResp.Error, "RECORD_NOT_FOUND") {
+			return nil, errors.New(mtdResp.Error)
+		}
+		// New rule: default to enabled, then apply the caller's override.
+		created := hive.MergeUsrMtd(lc.UsrMtd{Enabled: true}, overrides)
+		return &created, nil
+	}
+	if overrides.IsEmpty() {
+		return nil, nil
+	}
+	existing := lc.HiveData{}
+	if err := mtdResp.Data.UnMarshalToStruct(&existing); err != nil {
+		return nil, err
+	}
+	merged := hive.MergeUsrMtd(existing.UsrMtd, overrides)
+	return &merged, nil
+}
+
 // RegisterImportDRRules registers the import_dr_rules tool.
 func RegisterImportDRRules() {
 	tools.RegisterTool(&tools.ToolRegistration{
@@ -37,7 +64,7 @@ func RegisterImportDRRules() {
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("import_dr_rules",
-			mcp.WithDescription("Bulk import (upsert) D&R rules into a namespace. Each rule is an object with 'detect' (and optional 'respond'). Use dry_run to preview without writing."),
+			mcp.WithDescription("Bulk import (upsert) D&R rules into a namespace. Each rule is an object with 'detect' (and optional 'respond'). Rules that already exist keep their metadata (enabled state, tags, comment) unless 'enabled' is given. Use dry_run to preview without writing."),
 			mcp.WithObject("rules",
 				mcp.Required(),
 				mcp.Description("Map of rule_name -> {detect, respond} objects to upsert")),
@@ -46,7 +73,7 @@ func RegisterImportDRRules() {
 			mcp.WithBoolean("dry_run",
 				mcp.Description("If true, validate and report what would change without writing")),
 			mcp.WithBoolean("enabled",
-				mcp.Description("Whether imported rules are enabled (default: true)")),
+				mcp.Description("Whether imported rules are enabled. Omit to keep the current state of rules that already exist (new rules default to enabled).")),
 			mcp.WithDestructiveHintAnnotation(true),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -124,25 +151,47 @@ func RegisterImportDRRules() {
 				}), nil
 			}
 
-			// Build and execute the batch upsert.
-			hive := lc.NewHiveClient(org)
-			batch := hive.NewBatchOperations()
-			enabled := true
+			// An upsert must not reset the metadata of the rules it overwrites,
+			// so read the current metadata of the whole set first (one batch)
+			// and only send a usr_mtd where one has to change.
+			overrides := hive.MetadataOverrides{}
 			if e, ok := args["enabled"].(bool); ok {
-				enabled = e
+				overrides.Enabled = &e
 			}
+
+			client := lc.NewHiveClient(org)
 			hiveID := lc.HiveID{
 				Name:      hiveName,
 				Partition: lc.PartitionID(org.GetOID()),
 			}
+			records := make([]lc.RecordID, 0, len(prepared))
+			mtdBatch := client.NewBatchOperations()
 			for _, p := range prepared {
 				record := lc.RecordID{
 					Hive: hiveID,
 					Name: lc.RecordName(p.name),
 				}
-				batch.SetRecord(record, lc.ConfigRecordMutation{
+				records = append(records, record)
+				mtdBatch.GetRecordMtd(record)
+			}
+			mtdResps, err := mtdBatch.Execute()
+			if err != nil {
+				return tools.ErrorResultf("failed to read existing D&R rule metadata: %v", err), nil
+			}
+			if len(mtdResps) != len(prepared) {
+				return tools.ErrorResultf("failed to read existing D&R rule metadata: expected %d responses, got %d", len(prepared), len(mtdResps)), nil
+			}
+
+			// Build and execute the batch upsert.
+			batch := client.NewBatchOperations()
+			for i, p := range prepared {
+				usrMtd, err := importedRuleMetadata(mtdResps[i], overrides)
+				if err != nil {
+					return tools.ErrorResultf("failed to prepare metadata for rule '%s': %v", p.name, err), nil
+				}
+				batch.SetRecord(records[i], lc.ConfigRecordMutation{
 					Data:   p.data,
-					UsrMtd: &lc.UsrMtd{Enabled: enabled},
+					UsrMtd: usrMtd,
 				})
 			}
 
