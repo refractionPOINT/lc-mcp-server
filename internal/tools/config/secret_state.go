@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 )
 
 func init() {
@@ -15,8 +16,7 @@ func init() {
 }
 
 // setSecretEnabled flips only the Enabled flag of a secret hive record while
-// preserving its existing tags, comment and expiry. It reads the current
-// metadata first so the Update does not clobber other usr_mtd fields.
+// preserving every other usr_mtd field (tags, comment, expiry, ui_actions).
 func setSecretEnabled(ctx context.Context, secretName string, enabled bool) (*mcp.CallToolResult, error) {
 	if secretName == "" {
 		return tools.ErrorResult("secret_name parameter is required"), nil
@@ -27,28 +27,11 @@ func setSecretEnabled(ctx context.Context, secretName string, enabled bool) (*mc
 		return tools.ErrorResultf("failed to get organization: %v", err), nil
 	}
 
-	hive := lc.NewHiveClient(org)
-
-	args := lc.HiveArgs{
-		HiveName:     "secret",
-		PartitionKey: org.GetOID(),
-		Key:          secretName,
-	}
-
-	// Read current metadata so we don't clobber tags/comment/expiry.
-	mtd, err := hive.GetMTD(args)
+	err = hive.SetRecordMetadata(org, "secret", org.GetOID(), secretName, func(existing lc.UsrMtd) lc.UsrMtd {
+		existing.Enabled = enabled
+		return existing
+	})
 	if err != nil {
-		return tools.ErrorResultf("failed to get secret '%s' metadata: %v", secretName, err), nil
-	}
-
-	args.Enabled = &enabled
-	args.Tags = mtd.UsrMtd.Tags
-	comment := mtd.UsrMtd.Comment
-	args.Comment = &comment
-	expiry := mtd.UsrMtd.Expiry
-	args.Expiry = &expiry
-
-	if _, err := hive.Update(args); err != nil {
 		return tools.ErrorResultf("failed to update secret '%s': %v", secretName, err), nil
 	}
 
@@ -75,6 +58,7 @@ func RegisterEnableSecret() {
 				mcp.Required(),
 				mcp.Description("Name of the secret to enable")),
 			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			secretName, _ := args["secret_name"].(string)
@@ -95,7 +79,8 @@ func RegisterDisableSecret() {
 			mcp.WithString("secret_name",
 				mcp.Required(),
 				mcp.Description("Name of the secret to disable")),
-			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			secretName, _ := args["secret_name"].(string)

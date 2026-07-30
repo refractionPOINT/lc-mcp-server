@@ -92,15 +92,15 @@ func RegisterCollectVelociraptorArtifact() {
 		Profile:     "live_investigation",
 		RequiresOID: true,
 		Schema: mcp.NewTool("collect_velociraptor_artifact",
-			mcp.WithDescription("Collect Velociraptor artifacts from sensors for forensic analysis"),
+			mcp.WithDescription("Collect Velociraptor artifacts from sensors for forensic analysis. Two choices are required: WHAT to collect (artifact_list or custom_artifact) and WHERE (sid or sensor_selector). Omitting either pair is rejected by the extension."),
 			mcp.WithArray("artifact_list",
-				mcp.Description("List of artifact names to collect (e.g., ['Windows.System.Drivers', 'Windows.EventLogs.Security'])")),
+				mcp.Description("List of artifact names to collect (e.g., ['Windows.System.Drivers', 'Windows.EventLogs.Security']). Required unless custom_artifact is given.")),
 			mcp.WithString("custom_artifact",
-				mcp.Description("Custom artifact YAML definition (alternative to artifact_list)")),
+				mcp.Description("Custom artifact YAML definition. Required unless artifact_list is given.")),
 			mcp.WithString("sid",
-				mcp.Description("Single sensor ID to target")),
+				mcp.Description("Single sensor ID to target. Required unless sensor_selector is given.")),
 			mcp.WithString("sensor_selector",
-				mcp.Description("Sensor selector expression (e.g., 'plat == windows')")),
+				mcp.Description("Sensor selector expression (e.g., 'plat == windows'). Required unless sid is given.")),
 			mcp.WithString("args",
 				mcp.Description("Comma-separated arguments for artifact (e.g., 'DriverPathRegex=.*malware.*')")),
 			mcp.WithNumber("collection_ttl",
@@ -165,6 +165,21 @@ func RegisterCollectVelociraptorArtifact() {
 			// Handle ignore_cert
 			if v, ok := args["ignore_cert"].(bool); ok {
 				data["ignore_cert"] = v
+			}
+
+			// The collect action declares Requirements
+			// {{"artifact_list","custom_artifact"},{"sid","sensor_selector"}},
+			// enforced by the extension manager before the extension is
+			// reached. Fail here so the caller gets a usable message.
+			if _, ok := data["artifact_list"]; !ok {
+				if _, ok := data["custom_artifact"]; !ok {
+					return tools.ErrorResult("one of artifact_list or custom_artifact is required"), nil
+				}
+			}
+			if _, ok := data["sid"]; !ok {
+				if _, ok := data["sensor_selector"]; !ok {
+					return tools.ErrorResult("one of sid or sensor_selector is required"), nil
+				}
 			}
 
 			resp := lc.Dict{}

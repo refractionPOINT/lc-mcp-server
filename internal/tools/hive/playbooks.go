@@ -132,13 +132,14 @@ func RegisterSetPlaybook() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_playbook",
-			mcp.WithDescription("Create or update a playbook"),
+			mcp.WithDescription("Create or update a playbook. Updating an existing playbook preserves its metadata (enabled state, tags, comment and the UI action buttons) unless enabled/tags/comment are given."),
 			mcp.WithString("playbook_name",
 				mcp.Required(),
 				mcp.Description("Name for the playbook")),
 			mcp.WithObject("playbook_data",
 				mcp.Required(),
-				mcp.Description("Playbook definition (steps, conditions, actions)")),
+				mcp.Description("Playbook definition: {\"python\": \"<playbook source>\"}. The playbook is Python source code; 'python' is the only field the hive stores.")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -152,32 +153,38 @@ func RegisterSetPlaybook() {
 			if !ok {
 				return tools.ErrorResult("playbook_data parameter is required and must be an object"), nil
 			}
+			if python, _ := playbookData["python"].(string); python == "" {
+				return tools.ErrorResult("playbook_data must contain a non-empty 'python' field holding the playbook source"), nil
+			}
+
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
 
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for playbooks
-			hive := lc.NewHiveClient(org)
-
-			// Set playbook
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "playbook",
-				PartitionKey: org.GetOID(),
-				Key:          playbookName,
-				Data:         lc.Dict(playbookData),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "playbook",
+				Key:       playbookName,
+				Data:      lc.Dict(playbookData),
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set playbook '%s': %v", playbookName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated playbook '%s'", playbookName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

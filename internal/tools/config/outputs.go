@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -15,6 +16,21 @@ func init() {
 	RegisterListOutputs()
 	RegisterAddOutput()
 	RegisterDeleteOutput()
+}
+
+// outputModules is the set of destination modules the backend accepts; it
+// rejects anything else (legion_manager-go service/output_config.go).
+var outputModules = []string{
+	"s3", "gcs", "scp", "sftp", "slack", "syslog", "webhook", "webhook_bulk",
+	"smtp", "humio", "kafka", "pubsub", "bigquery", "azure_storage_blob",
+	"azure_event_hub", "elastic", "opensearch", "websocket", "tines", "torq",
+	"datadog", "telegram", "ms_teams",
+}
+
+// outputStreams is the set of streams an output can be attached to.
+var outputStreams = []string{
+	"event", "detect", "audit", "deployment", "file", "log", "artifact",
+	"tailored", "billing",
 }
 
 // RegisterListOutputs registers the list_outputs tool
@@ -62,12 +78,14 @@ func RegisterAddOutput() {
 				mcp.Description("Name for the output")),
 			mcp.WithString("module",
 				mcp.Required(),
-				mcp.Description("Module to use (e.g., 'logging', 's3', 'syslog')")),
+				mcp.Enum(outputModules...),
+				mcp.Description("Destination module. Anything outside this list is rejected by the backend.")),
 			mcp.WithString("output_type",
 				mcp.Required(),
-				mcp.Description("Type of output (e.g., 'event', 'detect', 'audit')")),
+				mcp.Enum(outputStreams...),
+				mcp.Description("Stream to send. Note that the low-throughput modules (webhook, smtp, slack, telegram, ms_teams, tines, torq) cannot be attached to the 'event' stream.")),
 			mcp.WithObject("config",
-				mcp.Description("Additional configuration parameters specific to the module")),
+				mcp.Description("Additional configuration parameters specific to the module, e.g. {\"bucket\": \"my-bucket\", \"is_indexing\": true, \"sec_per_file\": 60}. Booleans and numbers are accepted as-is.")),
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -99,10 +117,23 @@ func RegisterAddOutput() {
 				"type":   outputType,
 			}
 
-			// Merge all config fields into the combined config
+			// Merge all config fields into the combined config. Every boolean
+			// and numeric field of lc.OutputConfig carries the `,string` JSON
+			// option, so encoding/json refuses to decode an unquoted value into
+			// them: coerce scalars to their string form first, otherwise the
+			// natural {"is_indexing": true} fails to parse.
 			if config, ok := args["config"].(map[string]interface{}); ok {
 				for k, v := range config {
-					combinedConfig[k] = v
+					switch t := v.(type) {
+					case bool:
+						combinedConfig[k] = strconv.FormatBool(t)
+					case float64:
+						combinedConfig[k] = strconv.FormatFloat(t, 'f', -1, 64)
+					case json.Number:
+						combinedConfig[k] = t.String()
+					default:
+						combinedConfig[k] = v
+					}
 				}
 			}
 

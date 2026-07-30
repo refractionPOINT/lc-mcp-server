@@ -14,11 +14,21 @@ import (
 // for permission verification. Each cache entry is keyed by credential
 // hash to prevent cross-contamination between different API keys/JWTs.
 type PermissionCache struct {
-	mu     sync.RWMutex
-	cache  map[string]*cachedPermission
-	ttl    time.Duration
-	logger *slog.Logger
+	mu       sync.RWMutex
+	cache    map[string]*cachedPermission
+	ttl      time.Duration
+	logger   *slog.Logger
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
+
+// permissionCacheMaxEntries bounds the cache as a backstop for the sweep.
+//
+// The cache key hashes the caller's JWT, and in OAuth mode a fresh LimaCharlie
+// JWT is minted per request, so entries would otherwise accumulate one per
+// request for the process's lifetime — each holding a WhoAmI response (that
+// user's whole org/permission map).
+const permissionCacheMaxEntries = 1000
 
 // cachedPermission holds a cached WhoAmI response with timestamp
 type cachedPermission struct {
@@ -31,10 +41,49 @@ func NewPermissionCache(ttl time.Duration, logger *slog.Logger) *PermissionCache
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &PermissionCache{
+	c := &PermissionCache{
 		cache:  make(map[string]*cachedPermission),
 		ttl:    ttl,
 		logger: logger,
+		stopCh: make(chan struct{}),
+	}
+	go c.cleanupLoop()
+	return c
+}
+
+// cleanupLoop periodically deletes expired entries so a credential's permission
+// map does not stay resident after it has gone stale. Stopped by Close.
+func (c *PermissionCache) cleanupLoop() {
+	interval := c.ttl / 2
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.stopCh:
+			return
+		case <-ticker.C:
+			c.cleanup()
+		}
+	}
+}
+
+// evictOldestLocked drops the least recently cached entry. Callers must hold the
+// write lock.
+func (c *PermissionCache) evictOldestLocked() {
+	var oldestKey string
+	var oldest time.Time
+	for k, entry := range c.cache {
+		if oldestKey == "" || entry.cachedAt.Before(oldest) {
+			oldestKey = k
+			oldest = entry.cachedAt
+		}
+	}
+	if oldestKey != "" {
+		delete(c.cache, oldestKey)
 	}
 }
 
@@ -86,6 +135,11 @@ func (c *PermissionCache) CheckPermission(ctx context.Context, org *lc.Organizat
 
 	// Update cache
 	c.mu.Lock()
+	// Backstop the sweep so a burst of distinct credentials cannot grow the map
+	// without bound between ticks.
+	if _, exists := c.cache[cacheKey]; !exists && len(c.cache) >= permissionCacheMaxEntries {
+		c.evictOldestLocked()
+	}
 	c.cache[cacheKey] = &cachedPermission{
 		whoAmI:   whoAmI,
 		cachedAt: time.Now(),
@@ -140,5 +194,8 @@ func (c *PermissionCache) cleanup() {
 
 // Close stops the cache and cleans up resources
 func (c *PermissionCache) Close() {
+	c.stopOnce.Do(func() {
+		close(c.stopCh)
+	})
 	c.Clear()
 }

@@ -132,13 +132,14 @@ func RegisterSetInvestigation() {
 		Profile:     "investigation_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_investigation",
-			mcp.WithDescription("Create or update an investigation"),
+			mcp.WithDescription("Create or update an investigation. Updating an existing investigation preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("investigation_name",
 				mcp.Required(),
-				mcp.Description("Name for the investigation")),
+				mcp.Description("Name for the investigation (used as the record key, and as the record's 'name' field when the data omits it)")),
 			mcp.WithObject("investigation_data",
 				mcp.Required(),
-				mcp.Description("Investigation data (name, description, status, priority, events, detections, entities, notes, summary, conclusion)")),
+				mcp.Description("Investigation data. Only these fields are accepted (unknown fields are rejected): name (required, defaults to investigation_name), description, status (new|in_progress|pending_review|escalated|closed_false_positive|closed_true_positive), priority (critical|high|medium|low|informational), events, detections, artifacts, entities, notes, summary, conclusion")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -153,31 +154,44 @@ func RegisterSetInvestigation() {
 				return tools.ErrorResult("investigation_data parameter is required and must be an object"), nil
 			}
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for investigations
-			hive := lc.NewHiveClient(org)
+			// The hive requires a non-empty 'name' inside the record; the
+			// record key alone does not satisfy it.
+			data := lc.Dict{}
+			for k, v := range investigationData {
+				data[k] = v
+			}
+			if name, _ := data["name"].(string); name == "" {
+				data["name"] = investigationName
+			}
 
-			// Set investigation
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "investigation",
-				PartitionKey: org.GetOID(),
-				Key:          investigationName,
-				Data:         lc.Dict(investigationData),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "investigation",
+				Key:       investigationName,
+				Data:      data,
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set investigation '%s': %v", investigationName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated investigation '%s'", investigationName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

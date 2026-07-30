@@ -132,13 +132,14 @@ func RegisterSetExtensionConfig() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_extension_config",
-			mcp.WithDescription("Create or update an extension configuration"),
+			mcp.WithDescription("Create or update an extension configuration. Updating an existing config preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("extension_name",
 				mcp.Required(),
 				mcp.Description("Name of the extension")),
 			mcp.WithObject("config_data",
 				mcp.Required(),
 				mcp.Description("Extension configuration data")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -153,31 +154,34 @@ func RegisterSetExtensionConfig() {
 				return tools.ErrorResult("config_data parameter is required and must be an object"), nil
 			}
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for extension configs
-			hive := lc.NewHiveClient(org)
-
-			// Set extension config
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "extension_config",
-				PartitionKey: org.GetOID(),
-				Key:          extensionName,
-				Data:         lc.Dict(configData),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "extension_config",
+				Key:       extensionName,
+				Data:      lc.Dict(configData),
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set extension config '%s': %v", extensionName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated extension config '%s'", extensionName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

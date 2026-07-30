@@ -24,6 +24,20 @@ func TestMatchHostname(t *testing.T) {
 		{"prefix no match", "server1", "web*", false},
 		{"suffix match", "server1", "*ver1", true},
 		{"suffix no match", "server1", "*ver2", false},
+		{"single char wildcard", "db-07", "db-0?", true},
+		{"character class", "web-3", "web-[0-9]", true},
+		{"character class no match", "web-x", "web-[0-9]", false},
+		// filepath.Match reads a lone backslash as an escape on Linux, which
+		// silently dropped it from Windows-style patterns.
+		{"backslash is literal", `corp\web1`, `corp\web1`, true},
+		{"backslash with wildcard", `corp\web1`, `corp\*`, true},
+		{"backslash mismatch", `corpweb1`, `corp\web1`, false},
+		// Hostnames are matched case-insensitively.
+		{"pattern case is ignored", "Server1", "server*", true},
+		{"hostname case is ignored", "server1", "SERVER1", true},
+		// Malformed pattern: falls back to an exact comparison.
+		{"unterminated class falls back to exact", "web-[0", "web-[0", true},
+		{"unterminated class no match", "web-3", "web-[0", false},
 	}
 
 	for _, tt := range tests {

@@ -7,6 +7,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 )
 
 func init() {
@@ -34,39 +35,12 @@ func drNamespaceToHive(args map[string]interface{}) (string, error) {
 }
 
 // setHiveRecordEnabled flips only the Enabled flag of a hive record, preserving
-// the existing tags, comment and expiry. It reads the current mtd first and only
-// changes Enabled.
+// every other usr_mtd field (tags, comment, expiry, ui_actions).
 func setHiveRecordEnabled(org *lc.Organization, hiveName, key string, enabled bool) error {
-	hive := lc.NewHiveClient(org)
-	args := lc.HiveArgs{
-		HiveName:     hiveName,
-		PartitionKey: org.GetOID(),
-		Key:          key,
-	}
-
-	existing, err := hive.GetMTD(args)
-	if err != nil {
-		return err
-	}
-
-	// Preserve existing metadata, only flip Enabled.
-	enabledVal := enabled
-	expiry := existing.UsrMtd.Expiry
-	comment := existing.UsrMtd.Comment
-	updateArgs := lc.HiveArgs{
-		HiveName:     hiveName,
-		PartitionKey: org.GetOID(),
-		Key:          key,
-		Enabled:      &enabledVal,
-		Tags:         existing.UsrMtd.Tags,
-		Comment:      &comment,
-	}
-	if expiry != 0 {
-		updateArgs.Expiry = &expiry
-	}
-
-	_, err = hive.Update(updateArgs)
-	return err
+	return hive.SetRecordMetadata(org, hiveName, org.GetOID(), key, func(existing lc.UsrMtd) lc.UsrMtd {
+		existing.Enabled = enabled
+		return existing
+	})
 }
 
 func registerDRStateTool(name, summary string, enabled bool) {
@@ -82,7 +56,9 @@ func registerDRStateTool(name, summary string, enabled bool) {
 				mcp.Description("Name of the D&R rule")),
 			mcp.WithString("namespace",
 				mcp.Description("D&R namespace: 'general' (default) or 'managed'")),
-			mcp.WithDestructiveHintAnnotation(true),
+			// Enabling is not destructive, disabling is: the convention across
+			// the enable_*/disable_* tools is destructive = !enabled.
+			mcp.WithDestructiveHintAnnotation(!enabled),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -128,7 +104,7 @@ func registerFPStateTool(name, summary string, enabled bool) {
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name of the false-positive rule")),
-			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(!enabled),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {

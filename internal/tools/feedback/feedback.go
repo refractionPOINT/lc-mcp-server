@@ -20,6 +20,28 @@ func init() {
 	RegisterRemoveFeedbackChannel()
 }
 
+// feedbackExtensionName is the extension that backs the feedback system.
+const feedbackExtensionName = "ext-feedback"
+
+// feedbackRequestData builds the parameters shared by every ext-feedback
+// request action, mirroring the shaping the SDK uses (optional parameters are
+// only sent when set). The requests go through ExtensionRequest directly rather
+// than the SDK's Feedback helpers because the SDK option structs carry no
+// ai_agent_name, which the extension requires for the 'ai_agent' destination.
+func feedbackRequestData(args map[string]interface{}, channel string, question string, destination string) lc.Dict {
+	data := lc.Dict{
+		"channel":              channel,
+		"question":             question,
+		"feedback_destination": destination,
+	}
+	for _, key := range []string{"case_id", "playbook_name", "ai_agent_name"} {
+		if v := asString(args, key); v != "" {
+			data[key] = v
+		}
+	}
+	return data
+}
+
 // asDict converts an object argument into a lc.Dict, returning nil when absent.
 func asDict(args map[string]interface{}, key string) lc.Dict {
 	v, ok := args[key].(map[string]interface{})
@@ -50,7 +72,7 @@ func RegisterRequestFeedbackApproval() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("request_feedback_approval",
-			mcp.WithDescription("Send a simple Approve/Deny feedback request to a configured feedback channel. The recipient's choice is dispatched to the given feedback destination (case or playbook)."),
+			mcp.WithDescription("Send a simple Approve/Deny feedback request to a configured feedback channel. The recipient's choice is dispatched to the given feedback destination (case, playbook or AI agent)."),
 			mcp.WithString("channel",
 				mcp.Required(),
 				mcp.Description("Name of the configured feedback channel to deliver the request to")),
@@ -59,11 +81,13 @@ func RegisterRequestFeedbackApproval() {
 				mcp.Description("The question/prompt shown to the recipient")),
 			mcp.WithString("feedback_destination",
 				mcp.Required(),
-				mcp.Description("Where the response is dispatched: 'case' or 'playbook'")),
+				mcp.Description("Where the response is dispatched: 'case' adds a note to a case, 'playbook' triggers a playbook with the response, 'ai_agent' starts an AI agent session with the response")),
 			mcp.WithString("case_id",
 				mcp.Description("Case number to attach the response to (required when destination is 'case')")),
 			mcp.WithString("playbook_name",
 				mcp.Description("Playbook to trigger with the response (required when destination is 'playbook')")),
+			mcp.WithString("ai_agent_name",
+				mcp.Description("ai_agent hive record to start with the response (required when destination is 'ai_agent')")),
 			mcp.WithObject("approved_content",
 				mcp.Description("JSON data included in the response payload when the recipient approves")),
 			mcp.WithObject("denied_content",
@@ -95,18 +119,25 @@ func RegisterRequestFeedbackApproval() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			opts := lc.RequestApprovalOptions{
-				CaseID:          asString(args, "case_id"),
-				PlaybookName:    asString(args, "playbook_name"),
-				ApprovedContent: asDict(args, "approved_content"),
-				DeniedContent:   asDict(args, "denied_content"),
-				TimeoutSeconds:  asInt(args, "timeout_seconds"),
-				TimeoutChoice:   asString(args, "timeout_choice"),
-				TimeoutContent:  asDict(args, "timeout_content"),
+			data := feedbackRequestData(args, channel, question, destination)
+			if v := asDict(args, "approved_content"); v != nil {
+				data["approved_content"] = v
+			}
+			if v := asDict(args, "denied_content"); v != nil {
+				data["denied_content"] = v
+			}
+			if v := asInt(args, "timeout_seconds"); v != 0 {
+				data["timeout_seconds"] = v
+			}
+			if v := asString(args, "timeout_choice"); v != "" {
+				data["timeout_choice"] = v
+			}
+			if v := asDict(args, "timeout_content"); v != nil {
+				data["timeout_content"] = v
 			}
 
-			resp, err := org.Feedback().RequestApproval(channel, question, destination, opts)
-			if err != nil {
+			var resp lc.Dict
+			if err := org.ExtensionRequest(&resp, feedbackExtensionName, "request_simple_approval", data, false); err != nil {
 				return tools.ErrorResultf("failed to request approval: %v", err), nil
 			}
 
@@ -125,7 +156,7 @@ func RegisterRequestFeedbackAck() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("request_feedback_ack",
-			mcp.WithDescription("Send an acknowledgement request (single Acknowledge button) to a configured feedback channel. The acknowledgement is dispatched to the given feedback destination (case or playbook)."),
+			mcp.WithDescription("Send an acknowledgement request (single Acknowledge button) to a configured feedback channel. The acknowledgement is dispatched to the given feedback destination (case, playbook or AI agent)."),
 			mcp.WithString("channel",
 				mcp.Required(),
 				mcp.Description("Name of the configured feedback channel to deliver the request to")),
@@ -134,11 +165,13 @@ func RegisterRequestFeedbackAck() {
 				mcp.Description("The message/prompt shown to the recipient")),
 			mcp.WithString("feedback_destination",
 				mcp.Required(),
-				mcp.Description("Where the response is dispatched: 'case' or 'playbook'")),
+				mcp.Description("Where the response is dispatched: 'case' adds a note to a case, 'playbook' triggers a playbook with the response, 'ai_agent' starts an AI agent session with the response")),
 			mcp.WithString("case_id",
 				mcp.Description("Case number to attach the response to (required when destination is 'case')")),
 			mcp.WithString("playbook_name",
 				mcp.Description("Playbook to trigger with the response (required when destination is 'playbook')")),
+			mcp.WithString("ai_agent_name",
+				mcp.Description("ai_agent hive record to start with the response (required when destination is 'ai_agent')")),
 			mcp.WithObject("acknowledged_content",
 				mcp.Description("JSON data included in the response payload when the recipient acknowledges")),
 			mcp.WithNumber("timeout_seconds",
@@ -166,16 +199,19 @@ func RegisterRequestFeedbackAck() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			opts := lc.RequestAcknowledgementOptions{
-				CaseID:              asString(args, "case_id"),
-				PlaybookName:        asString(args, "playbook_name"),
-				AcknowledgedContent: asDict(args, "acknowledged_content"),
-				TimeoutSeconds:      asInt(args, "timeout_seconds"),
-				TimeoutContent:      asDict(args, "timeout_content"),
+			data := feedbackRequestData(args, channel, question, destination)
+			if v := asDict(args, "acknowledged_content"); v != nil {
+				data["acknowledged_content"] = v
+			}
+			if v := asInt(args, "timeout_seconds"); v != 0 {
+				data["timeout_seconds"] = v
+			}
+			if v := asDict(args, "timeout_content"); v != nil {
+				data["timeout_content"] = v
 			}
 
-			resp, err := org.Feedback().RequestAcknowledgement(channel, question, destination, opts)
-			if err != nil {
+			var resp lc.Dict
+			if err := org.ExtensionRequest(&resp, feedbackExtensionName, "request_acknowledgement", data, false); err != nil {
 				return tools.ErrorResultf("failed to request acknowledgement: %v", err), nil
 			}
 
@@ -194,7 +230,7 @@ func RegisterRequestFeedbackQuestion() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("request_feedback_question",
-			mcp.WithDescription("Send a question with a free-form text input field to a configured feedback channel. The recipient's text answer is dispatched to the given feedback destination (case or playbook)."),
+			mcp.WithDescription("Send a question with a free-form text input field to a configured feedback channel. The recipient's text answer is dispatched to the given feedback destination (case, playbook or AI agent)."),
 			mcp.WithString("channel",
 				mcp.Required(),
 				mcp.Description("Name of the configured feedback channel to deliver the request to")),
@@ -203,11 +239,13 @@ func RegisterRequestFeedbackQuestion() {
 				mcp.Description("The question shown to the recipient")),
 			mcp.WithString("feedback_destination",
 				mcp.Required(),
-				mcp.Description("Where the response is dispatched: 'case' or 'playbook'")),
+				mcp.Description("Where the response is dispatched: 'case' adds a note to a case, 'playbook' triggers a playbook with the response, 'ai_agent' starts an AI agent session with the response")),
 			mcp.WithString("case_id",
 				mcp.Description("Case number to attach the response to (required when destination is 'case')")),
 			mcp.WithString("playbook_name",
 				mcp.Description("Playbook to trigger with the response (required when destination is 'playbook')")),
+			mcp.WithString("ai_agent_name",
+				mcp.Description("ai_agent hive record to start with the response (required when destination is 'ai_agent')")),
 			mcp.WithNumber("timeout_seconds",
 				mcp.Description("Auto-answer after this many seconds with no human response (minimum 60). Requires timeout_content.")),
 			mcp.WithObject("timeout_content",
@@ -233,15 +271,16 @@ func RegisterRequestFeedbackQuestion() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			opts := lc.RequestQuestionOptions{
-				CaseID:         asString(args, "case_id"),
-				PlaybookName:   asString(args, "playbook_name"),
-				TimeoutSeconds: asInt(args, "timeout_seconds"),
-				TimeoutContent: asDict(args, "timeout_content"),
+			data := feedbackRequestData(args, channel, question, destination)
+			if v := asInt(args, "timeout_seconds"); v != 0 {
+				data["timeout_seconds"] = v
+			}
+			if v := asDict(args, "timeout_content"); v != nil {
+				data["timeout_content"] = v
 			}
 
-			resp, err := org.Feedback().RequestQuestion(channel, question, destination, opts)
-			if err != nil {
+			var resp lc.Dict
+			if err := org.ExtensionRequest(&resp, feedbackExtensionName, "request_question", data, false); err != nil {
 				return tools.ErrorResultf("failed to request question: %v", err), nil
 			}
 
@@ -299,7 +338,7 @@ func RegisterAddFeedbackChannel() {
 				mcp.Description("Channel type: one of web, slack, email, telegram, ms_teams")),
 			mcp.WithString("output_name",
 				mcp.Description("Tailored Output holding the channel credentials. Required for all types except 'web'.")),
-			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			name, ok := args["name"].(string)

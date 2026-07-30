@@ -2,6 +2,7 @@ package cases
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -94,19 +95,42 @@ func RegisterCreateCase() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			opts := lc.CreateCaseOptions{}
-			if d, ok := args["detection"].(map[string]interface{}); ok {
-				opts.Detection = lc.Dict(d)
-			}
-			if s, ok := args["severity"].(string); ok {
-				opts.Severity = s
-			}
-			if s, ok := args["summary"].(string); ok {
-				opts.Summary = s
+			detection, hasDetection := args["detection"].(map[string]interface{})
+			if !hasDetection {
+				// Without a detection the SDK path is correct.
+				opts := lc.CreateCaseOptions{}
+				if s, ok := args["severity"].(string); ok {
+					opts.Severity = s
+				}
+				if s, ok := args["summary"].(string); ok {
+					opts.Summary = s
+				}
+				resp, err := org.Cases().CreateCase(opts)
+				if err != nil {
+					return tools.ErrorResultf("failed to create case: %v", err), nil
+				}
+				return tools.SuccessResult(map[string]interface{}{"case": resp}), nil
 			}
 
-			resp, err := org.Cases().CreateCase(opts)
+			// ext-cases declares "detection" as SchemaDataTypes.JSON, which the
+			// extension manager validates as a *string* containing JSON, and it
+			// rejects the request before ext-cases ever sees it. The SDK's
+			// CreateCase passes the dict through as an object, so the detection
+			// has to be marshalled here and the extension called directly.
+			detectionJSON, err := json.Marshal(detection)
 			if err != nil {
+				return tools.ErrorResultf("failed to encode detection: %v", err), nil
+			}
+			data := lc.Dict{"detection": string(detectionJSON)}
+			if s, ok := args["severity"].(string); ok && s != "" {
+				data["severity"] = s
+			}
+			if s, ok := args["summary"].(string); ok && s != "" {
+				data["summary"] = s
+			}
+
+			resp := lc.Dict{}
+			if err := org.ExtensionRequest(&resp, "ext-cases", "create_case", data, false); err != nil {
 				return tools.ErrorResultf("failed to create case: %v", err), nil
 			}
 			return tools.SuccessResult(map[string]interface{}{"case": resp}), nil

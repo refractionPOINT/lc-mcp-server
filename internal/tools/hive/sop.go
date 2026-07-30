@@ -25,10 +25,13 @@ func RegisterListSops() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_sops",
-			mcp.WithDescription("List all Standard Operating Procedures in the organization"),
+			mcp.WithDescription("List all Standard Operating Procedures in the organization. The full listing carries every procedure body; use brief to get just the index."),
+			withBriefParam("the 'description' field"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			brief := briefArg(args)
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
@@ -49,8 +52,12 @@ func RegisterListSops() {
 			// Convert to response format
 			result := make(map[string]interface{})
 			for name, data := range sops {
+				payload := data.Data
+				if brief {
+					payload = BriefData(payload, "description")
+				}
 				result[name] = map[string]interface{}{
-					"data":     data.Data,
+					"data":     payload,
 					"enabled":  data.UsrMtd.Enabled,
 					"tags":     data.UsrMtd.Tags,
 					"comment":  data.UsrMtd.Comment,
@@ -132,7 +139,7 @@ func RegisterSetSop() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_sop",
-			mcp.WithDescription("Create or update a Standard Operating Procedure"),
+			mcp.WithDescription("Create or update a Standard Operating Procedure. Updating an existing SOP preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given."),
 			mcp.WithString("sop_name",
 				mcp.Required(),
 				mcp.Description("Name for the SOP")),
@@ -141,6 +148,7 @@ func RegisterSetSop() {
 				mcp.Description("The text content of the SOP")),
 			mcp.WithString("description",
 				mcp.Description("Optional description for the SOP")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -157,39 +165,42 @@ func RegisterSetSop() {
 
 			description, _ := args["description"].(string)
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for SOPs
-			hive := lc.NewHiveClient(org)
-
 			// Build the data
-			sopData := map[string]interface{}{
+			sopData := lc.Dict{
 				"text": text,
 			}
 			if description != "" {
 				sopData["description"] = description
 			}
 
-			// Set SOP
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "sop",
-				PartitionKey: org.GetOID(),
-				Key:          sopName,
-				Data:         lc.Dict(sopData),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "sop",
+				Key:       sopName,
+				Data:      sopData,
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set SOP '%s': %v", sopName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated SOP '%s'", sopName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

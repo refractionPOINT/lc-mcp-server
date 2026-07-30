@@ -132,13 +132,14 @@ func RegisterSetCloudSensor() {
 		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_cloud_sensor",
-			mcp.WithDescription("Create or update a cloud sensor configuration"),
+			mcp.WithDescription("Create or update a cloud sensor configuration. Updating an existing sensor preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given, so a deliberately disabled adapter stays disabled."),
 			mcp.WithString("sensor_name",
 				mcp.Required(),
 				mcp.Description("Name for the cloud sensor")),
 			mcp.WithObject("sensor_config",
 				mcp.Required(),
 				mcp.Description("Cloud sensor configuration data")),
+			WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -153,31 +154,34 @@ func RegisterSetCloudSensor() {
 				return tools.ErrorResult("sensor_config parameter is required and must be an object"), nil
 			}
 
+			overrides, err := ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for cloud sensors
-			hive := lc.NewHiveClient(org)
-
-			// Set cloud sensor
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "cloud_sensor",
-				PartitionKey: org.GetOID(),
-				Key:          sensorName,
-				Data:         lc.Dict(sensorConfig),
-				Enabled:      &enabled,
+			warning, err := SetRecord(org, RecordWrite{
+				HiveName:  "cloud_sensor",
+				Key:       sensorName,
+				Data:      lc.Dict(sensorConfig),
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set cloud sensor '%s': %v", sensorName, err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
+			result := map[string]interface{}{
 				"success": true,
 				"message": fmt.Sprintf("Successfully created/updated cloud sensor '%s'", sensorName),
-			}), nil
+			}
+			if warning != "" {
+				result["warning"] = warning
+			}
+			return tools.SuccessResult(result), nil
 		},
 	})
 }

@@ -25,7 +25,7 @@ func RegisterGetEventSchema() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_event_schema",
 		Description: "Get a specific event type schema definition",
-		Profile:     "event_schemas",
+		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_event_schema",
 			mcp.WithDescription("Get a specific schema definition for an event_type in LimaCharlie"),
@@ -66,7 +66,7 @@ func RegisterGetEventSchemasBatch() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_event_schemas_batch",
 		Description: "Get schema definitions for multiple event_types in parallel",
-		Profile:     "event_schemas",
+		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_event_schemas_batch",
 			mcp.WithDescription("Get schema definitions for multiple event_types in LimaCharlie in parallel"),
@@ -160,7 +160,7 @@ func RegisterGetEventTypesWithSchemas() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_event_types_with_schemas",
 		Description: "Get all available event_types with schemas",
-		Profile:     "event_schemas",
+		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_event_types_with_schemas",
 			mcp.WithDescription("Get all available event_type with schemas available for the organization"),
@@ -191,7 +191,7 @@ func RegisterGetEventTypesWithSchemasForPlatform() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_event_types_with_schemas_for_platform",
 		Description: "Get all available event_types with schemas for a specific platform",
-		Profile:     "event_schemas",
+		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_event_types_with_schemas_for_platform",
 			mcp.WithDescription("Get all available event_type with schemas available for a specific platform"),
@@ -231,7 +231,7 @@ func RegisterGetPlatformNames() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_platform_names",
 		Description: "Get the platform names ontology from LimaCharlie",
-		Profile:     "event_schemas",
+		Profile:     "fleet_management",
 		RequiresOID: false, // /ontology endpoint does not require OID or authentication
 		Schema: mcp.NewTool("get_platform_names",
 			mcp.WithDescription("Get the platform names ontology from LimaCharlie (does not mean the tenant has sensors for these platforms)"),
@@ -262,7 +262,7 @@ func RegisterListWithPlatform() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "list_with_platform",
 		Description: "List all sensors with a specific platform",
-		Profile:     "event_schemas",
+		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_with_platform",
 			mcp.WithDescription("List all sensors with a specific platform"),

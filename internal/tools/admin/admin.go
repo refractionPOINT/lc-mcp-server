@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -190,13 +191,15 @@ func RegisterCreateOrg() {
 		Profile:     "platform_admin",
 		RequiresOID: false,
 		Schema: mcp.NewTool("create_org",
-			mcp.WithDescription("Create a new organization (user-level operation, does not require OID)"),
+			mcp.WithDescription("Create a new organization (user-level operation, does not require OID). NOT idempotent: on a timeout the org may still have been created — check with list_user_orgs before retrying."),
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name for the new organization")),
 			mcp.WithString("location",
 				mcp.Required(),
-				mcp.Description("Location for the organization (e.g., 'usa', 'europe', 'canada', 'india', 'uk')")),
+				mcp.Description("Datacenter for the organization: 'usa', 'europe', 'canada', 'india', 'uk', 'australia', or 'auto' for the closest region")),
+			mcp.WithString("description",
+				mcp.Description("Optional description for the organization")),
 			mcp.WithString("template",
 				mcp.Description("Optional YAML Infrastructure-as-Code template to initialize the organization")),
 			mcp.WithDestructiveHintAnnotation(false),
@@ -212,27 +215,42 @@ func RegisterCreateOrg() {
 				return tools.ErrorResult("location parameter is required"), nil
 			}
 
-			template := ""
-			if t, ok := args["template"].(string); ok {
-				template = t
-			}
-
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization context: %v", err), nil
 			}
 
-			// Create new organization
-			// SDK signature is CreateOrganization(location, name, template)
-			newOrgResp, err := org.CreateOrganization(location, name, template)
-			if err != nil {
+			// POST /v1/orgs/new directly rather than through the SDK's
+			// CreateOrganization, which cannot carry "description" and discards the
+			// organization code and resolved location from the response.
+			form := lc.Dict{
+				"name": name,
+				"loc":  location,
+			}
+			if t, ok := args["template"].(string); ok && t != "" {
+				form["template"] = t
+			}
+			if d, ok := args["description"].(string); ok && d != "" {
+				form["description"] = d
+			}
+
+			var resp struct {
+				Success bool `json:"success"`
+				Data    struct {
+					OID      string `json:"oid"`
+					Code     string `json:"code"`
+					Location string `json:"loc"`
+				} `json:"data"`
+			}
+			if err := org.GenericPOSTRequest("orgs/new", form, &resp); err != nil {
 				return tools.ErrorResultf("failed to create organization: %v", err), nil
 			}
 
 			return tools.SuccessResult(map[string]interface{}{
-				"oid":      newOrgResp.Data.Oid,
+				"oid":      resp.Data.OID,
+				"code":     resp.Data.Code,
+				"location": resp.Data.Location,
 				"name":     name,
-				"location": location,
 			}), nil
 		},
 	})
@@ -444,11 +462,12 @@ func RegisterCreateAPIKey() {
 			mcp.WithDescription("Create a new API key for the organization (key value only shown once)"),
 			mcp.WithString("key_name",
 				mcp.Required(),
-				mcp.Description("Description/name for the API key")),
+				mcp.Description("Description/name for the API key. May not contain '@'.")),
 			mcp.WithArray("permissions",
-				mcp.Description("Optional list of permissions for the key")),
+				mcp.Required(),
+				mcp.Description("List of permissions granted to the key (e.g., 'sensor.get', 'dr.list'). At least one is required; the API rejects keys without permissions and silently drops permissions that are deprecated or not user-assignable.")),
 			mcp.WithString("allowed_ip_range",
-				mcp.Description("Optional CIDR notation IP range to restrict key usage (e.g., '192.168.1.0/24')")),
+				mcp.Description("Optional IP range in CIDR notation to restrict key usage (e.g., '192.168.1.0/24'). Must parse as CIDR.")),
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -456,19 +475,30 @@ func RegisterCreateAPIKey() {
 			if !ok || keyName == "" {
 				return tools.ErrorResult("key_name parameter is required"), nil
 			}
+			if strings.Contains(keyName, "@") {
+				return tools.ErrorResult("key_name may not contain '@'"), nil
+			}
 
 			var permissions []string
 			if perms, ok := args["permissions"].([]interface{}); ok {
 				for _, p := range perms {
-					if perm, ok := p.(string); ok {
+					if perm, ok := p.(string); ok && perm != "" {
 						permissions = append(permissions, perm)
 					}
 				}
+			}
+			if len(permissions) == 0 {
+				return tools.ErrorResult("permissions parameter is required and must contain at least one permission"), nil
 			}
 
 			allowedIPRange := ""
 			if ipRange, ok := args["allowed_ip_range"].(string); ok {
 				allowedIPRange = ipRange
+			}
+			if allowedIPRange != "" {
+				if _, _, err := net.ParseCIDR(allowedIPRange); err != nil {
+					return tools.ErrorResultf("allowed_ip_range must be valid CIDR notation: %v", err), nil
+				}
 			}
 
 			org, err := tools.GetOrganization(ctx)
@@ -484,6 +514,7 @@ func RegisterCreateAPIKey() {
 			result := map[string]interface{}{
 				"key":      key.Key,     // Only returned on creation
 				"key_hash": key.KeyHash, // Use this to retrieve full key details later
+				"key_name": keyName,
 			}
 			if allowedIPRange != "" {
 				result["allowed_ip_range"] = allowedIPRange
@@ -569,9 +600,9 @@ func RegisterGetSKUDefinitions() {
 		Name:        "get_sku_definitions",
 		Description: "Get SKU definitions and pricing information",
 		Profile:     "platform_admin",
-		RequiresOID: false, // This is a global query
+		RequiresOID: true, // The SKU route is org-scoped and authorizes org.get against the OID
 		Schema: mcp.NewTool("get_sku_definitions",
-			mcp.WithDescription("Get SKU definitions and pricing information"),
+			mcp.WithDescription("Get SKU definitions and pricing information for the organization"),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -580,13 +611,14 @@ func RegisterGetSKUDefinitions() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Get SKU definitions via GenericGETRequest
-			resp := lc.Dict{}
-			if err := org.GenericGETRequest("billing/sku", nil, &resp); err != nil {
+			skus, err := org.GetBillingSkuDefinitions()
+			if err != nil {
 				return tools.ErrorResultf("failed to get SKU definitions: %v", err), nil
 			}
 
-			return tools.SuccessResult(resp), nil
+			return tools.SuccessResult(map[string]interface{}{
+				"skus": skus,
+			}), nil
 		},
 	})
 }
@@ -595,42 +627,48 @@ func RegisterGetSKUDefinitions() {
 func RegisterUpgradeSensors() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "upgrade_sensors",
-		Description: "Upgrade all sensors in an organization to a specific version, downgrade to previous version, or set to dormant mode",
+		Description: "Upgrade all sensors in an organization to a specific version or the latest, downgrade to the stable/fallback version, or set to dormant mode",
 		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("upgrade_sensors",
-			mcp.WithDescription("Update the sensor version for the organization. Supports upgrading to specific versions, downgrading to previous version, or setting sensors to dormant mode."),
+			mcp.WithDescription("Update the sensor version for the organization. Supports upgrading to a specific version or to the latest, downgrading to the stable/fallback version, or setting sensors to dormant mode. Exactly one of version, to_latest, is_fallback or is_sleep must be provided."),
 			mcp.WithString("version",
-				mcp.Description("Target sensor version: semantic version (e.g., '4.33.20') or version label ('latest', 'stable', 'experimental'). Mutually exclusive with is_fallback and is_sleep.")),
+				mcp.Description("Target sensor version as a semantic version, e.g. '4.33.20'. Version labels are not accepted: the value is turned into a package filename server-side, so a non-existent version fails at download. Mutually exclusive with to_latest, is_fallback and is_sleep.")),
+			mcp.WithBoolean("to_latest",
+				mcp.Description("If true, upgrade to the current latest sensor version. Mutually exclusive with version, is_fallback and is_sleep.")),
 			mcp.WithBoolean("is_fallback",
-				mcp.Description("If true, downgrade to the previous version of the sensor. Mutually exclusive with version and is_sleep.")),
+				mcp.Description("If true, move sensors to the stable/fallback version (a downgrade from latest). Mutually exclusive with version, to_latest and is_sleep.")),
 			mcp.WithBoolean("is_sleep",
-				mcp.Description("If true, move sensors to dormant mode. Mutually exclusive with version and is_fallback.")),
+				mcp.Description("If true, move sensors to dormant mode. Mutually exclusive with version, to_latest and is_fallback.")),
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			// Get parameters
-			version, hasVersion := args["version"].(string)
-			isFallback, hasFallback := args["is_fallback"].(bool)
-			isSleep, hasSleep := args["is_sleep"].(bool)
+			version, _ := args["version"].(string)
+			toLatest, _ := args["to_latest"].(bool)
+			isFallback, _ := args["is_fallback"].(bool)
+			isSleep, _ := args["is_sleep"].(bool)
 
 			// Validate that exactly one parameter is provided
 			providedCount := 0
-			if hasVersion && version != "" {
+			if version != "" {
 				providedCount++
 			}
-			if hasFallback && isFallback {
+			if toLatest {
 				providedCount++
 			}
-			if hasSleep && isSleep {
+			if isFallback {
+				providedCount++
+			}
+			if isSleep {
 				providedCount++
 			}
 
 			if providedCount == 0 {
-				return tools.ErrorResult("one of 'version', 'is_fallback', or 'is_sleep' must be provided"), nil
+				return tools.ErrorResult("one of 'version', 'to_latest', 'is_fallback', or 'is_sleep' must be provided"), nil
 			}
 			if providedCount > 1 {
-				return tools.ErrorResult("only one of 'version', 'is_fallback', or 'is_sleep' can be provided"), nil
+				return tools.ErrorResult("only one of 'version', 'to_latest', 'is_fallback', or 'is_sleep' can be provided"), nil
 			}
 
 			// Get organization
@@ -643,15 +681,20 @@ func RegisterUpgradeSensors() {
 			queryParams := lc.Dict{}
 			var message string
 
-			if hasVersion && version != "" {
+			switch {
+			case version != "":
 				// Upgrade to specific version
 				queryParams["specific_version"] = version
 				message = fmt.Sprintf("Sensor upgrade to version %s initiated successfully. Sensors will update within approximately 20 minutes.", version)
-			} else if hasFallback && isFallback {
-				// Downgrade to previous version
+			case toLatest:
+				// Sending no version parameter at all is what selects the latest
+				// version from the package index server-side.
+				message = "Sensor upgrade to the latest version initiated successfully. Sensors will update within approximately 20 minutes."
+			case isFallback:
+				// Move to the stable/fallback version
 				queryParams["is_fallback"] = "true"
-				message = "Sensor downgrade to previous version initiated successfully. Sensors will update within approximately 20 minutes."
-			} else if hasSleep && isSleep {
+				message = "Sensor downgrade to the stable/fallback version initiated successfully. Sensors will update within approximately 20 minutes."
+			case isSleep:
 				// Move to dormant mode
 				queryParams["is_sleep"] = "true"
 				message = "Sensors will be moved to dormant mode within approximately 20 minutes."

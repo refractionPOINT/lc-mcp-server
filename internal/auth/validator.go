@@ -32,6 +32,39 @@ var (
 
 // ValidateUID validates a UID to prevent security issues
 // This prevents users from accidentally passing tokens or API keys as UIDs
+// ValidateUIDFormat checks a UID's shape only: length bounds and the allowed
+// character set (or an email identity).
+//
+// Use this on the REQUEST path. ValidateUID additionally rejects values that
+// merely *look* like a token — a 32+ character hex or base64 string — which is
+// the right heuristic for operator-supplied configuration (it catches an API key
+// pasted into LC_UID) but wrong for a caller-supplied header: identity providers
+// mint opaque UIDs, and Firebase UIDs are not bounded to the 28 characters they
+// happen to use today, so that heuristic would reject legitimate users.
+func ValidateUIDFormat(uid string) error {
+	if uid == "" {
+		return ErrInvalidUID
+	}
+	if len(uid) < 3 {
+		return errors.New("UID too short (minimum 3 characters)")
+	}
+	if len(uid) > 128 {
+		return errors.New("UID too long (maximum 128 characters)")
+	}
+	// A JWT in the UID field is a caller mistake worth catching either way: it is
+	// never a valid identity and would otherwise be hashed into a cache key.
+	if jwtPattern.MatchString(uid) {
+		return ErrSuspiciousUID
+	}
+	if emailPattern.MatchString(uid) {
+		return nil
+	}
+	if !uidPattern.MatchString(uid) {
+		return errors.New("UID contains invalid characters (allowed: a-z, A-Z, 0-9, ., -, _)")
+	}
+	return nil
+}
+
 func ValidateUID(uid string) error {
 	if uid == "" {
 		return ErrInvalidUID

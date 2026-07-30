@@ -52,11 +52,9 @@ func setAdapterEnabled(ctx context.Context, args map[string]interface{}, enabled
 		return tools.ErrorResultf("failed to get organization: %v", err), nil
 	}
 
-	err = updateRecordMTD(org, hiveName, org.GetOID(), adapterName, func(existing lc.UsrMtd) lc.HiveArgs {
-		a := preservedArgs(existing)
-		e := enabled
-		a.Enabled = &e
-		return a
+	err = updateRecordMTD(org, hiveName, org.GetOID(), adapterName, func(existing lc.UsrMtd) lc.UsrMtd {
+		existing.Enabled = enabled
+		return existing
 	})
 	if err != nil {
 		return tools.ErrorResultf("failed to set enabled on adapter '%s': %v", adapterName, err), nil
@@ -89,7 +87,8 @@ func RegisterEnableAdapter() {
 				mcp.Description("Name of the adapter")),
 			mcp.WithString("adapter_type",
 				mcp.Description("Type of adapter: 'external' (default) or 'cloud'")),
-			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			return setAdapterEnabled(ctx, args, true)
@@ -112,6 +111,7 @@ func RegisterDisableAdapter() {
 			mcp.WithString("adapter_type",
 				mcp.Description("Type of adapter: 'external' (default) or 'cloud'")),
 			mcp.WithDestructiveHintAnnotation(true),
+			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			return setAdapterEnabled(ctx, args, false)
@@ -171,14 +171,13 @@ func RegisterSetAdapterTags() {
 			}
 
 			var newTags []string
-			err = updateRecordMTD(org, hiveName, org.GetOID(), adapterName, func(existing lc.UsrMtd) lc.HiveArgs {
-				a := preservedArgs(existing)
+			err = updateRecordMTD(org, hiveName, org.GetOID(), adapterName, func(existing lc.UsrMtd) lc.UsrMtd {
 				newTags = applyTagAction(existing.Tags, tags, action)
 				if newTags == nil {
 					newTags = []string{}
 				}
-				a.Tags = newTags
-				return a
+				existing.Tags = newTags
+				return existing
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to set tags on adapter '%s': %v", adapterName, err), nil

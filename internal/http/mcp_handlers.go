@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -120,6 +121,28 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	lcAllowMetaTools := r.Header.Get("X-LC-ALLOW-META-TOOLS")
 	lcDenyMetaTools := r.Header.Get("X-LC-DENY-META-TOOLS")
 
+	// Validate the credential headers at the boundary rather than relying on
+	// downstream UUID checks: these values flow into cache keys and request
+	// paths, so a malformed one must never get that far.
+	if lcOID != "" {
+		if err := auth.ValidateOID(lcOID); err != nil {
+			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid X-LC-OID header: %v", err))
+			return
+		}
+	}
+	if lcUID != "" {
+		if err := auth.ValidateUIDFormat(lcUID); err != nil {
+			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid X-LC-UID header: %v", err))
+			return
+		}
+	}
+	if lcAPIKey != "" {
+		if err := auth.ValidateAPIKey(lcAPIKey); err != nil {
+			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid X-LC-API-KEY header: %v", err))
+			return
+		}
+	}
+
 	if authHeader != "" {
 		// Bearer token provided - use OAuth/JWT passthrough
 		parts := strings.SplitN(authHeader, " ", 2)
@@ -148,6 +171,15 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		// Create auth context from Bearer token
 		if uid == "" && isJWTPassthrough && lcOID != "" {
 			// Org API key JWT passthrough: no UID in token, use OID from header.
+			// The OID comes from a header while the credential is the JWT, so
+			// confirm the JWT's own claims cover that org before pinning to it —
+			// otherwise a caller could present a valid token for org A and name
+			// org B. (The gateway authorizes independently; this is the
+			// server-side half of that boundary.)
+			if !s.jwtCoversOID(limaCharlieJWT, lcOID, requestID) {
+				s.writeJSONRPCError(w, id, -32000, "Unauthorized", "X-LC-OID is not covered by the presented token's organization claims")
+				return
+			}
 			// Clear isJWTPassthrough since the OID is already pinned — passthrough
 			// semantics (requiring OID in every tool call) don't apply here.
 			isJWTPassthrough = false
@@ -217,6 +249,8 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 
 	// Set permission enforcement based on config
 	ctx = auth.WithPermissionEnforcement(ctx, s.config.Features.EnforceAIAgentOperate)
+	// Carried so indirect dispatch applies the same "oid is required" rule.
+	ctx = auth.WithJWTPassthrough(ctx, isJWTPassthrough)
 
 	// Add meta-tool filter to context if headers are provided
 	allowList := parseToolList(lcAllowMetaTools)
@@ -235,7 +269,39 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		return
 	}
 
-	if tool.RequiresOID {
+	// The profile (or X-MCP-Tools allowlist) must bound what can be CALLED, not
+	// merely what tools/list advertises. Otherwise a caller that deliberately
+	// pinned itself to a narrow endpoint — say /mcp/cloud_security_readonly —
+	// could still invoke any registered tool, which is exactly the containment
+	// an agent operator chose that endpoint to get.
+	allowedTools, err := s.getToolsForRequest(r)
+	if err != nil {
+		s.writeJSONRPCError(w, id, -32000, "Invalid request", err.Error())
+		return
+	}
+	if !slices.Contains(allowedTools, toolName) {
+		s.logger.Warn("Rejected tool call outside the request's allowed set",
+			"request_id", requestID,
+			"tool", toolName,
+			"profile", s.getActiveProfile(r))
+		s.writeJSONRPCError(w, id, -32601, "Tool not available",
+			fmt.Sprintf("Tool '%s' is not available on this endpoint; it is outside the active profile's tool set", toolName))
+		return
+	}
+	// Tools reached indirectly through lc_call_tool are bounded by the same set,
+	// except on the api_access endpoint whose entire contract is registry-wide
+	// raw dispatch — bounding the meta-tool to a profile that contains only the
+	// meta-tool would leave it able to call nothing at all.
+	if s.getActiveProfile(r) != ProfileAPIAccess {
+		ctx = auth.WithAllowedTools(ctx, allowedTools)
+	}
+
+	if tool.NeedsOID() {
+		// Resolve the OID the call will actually execute against: the explicit
+		// argument when given, otherwise the OID already pinned on the auth
+		// context (in any mode). The ai_agent.operate check keys off that
+		// effective OID so that omitting the argument cannot bypass it.
+		effectiveOID := ""
 		if oidParam, ok := arguments["oid"].(string); ok && oidParam != "" {
 			var err error
 			ctx, err = auth.WithOID(ctx, oidParam, s.logger)
@@ -243,29 +309,23 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 				s.writeJSONRPCError(w, id, -32000, "Invalid OID", fmt.Sprintf("Failed to switch OID: %v", err))
 				return
 			}
-
-			// Check ai_agent.operate permission after successful OID switch
-			// Skip the check for tools marked with SkipsAIAgentPermission
-			if !tool.SkipsAIAgentPermission {
-				if err := s.checkAIAgentPermission(ctx, oidParam); err != nil {
-					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
-					return
-				}
-			}
+			effectiveOID = oidParam
 		} else if isJWTPassthrough {
 			// JWT passthrough mode requires OID in tool arguments
 			s.writeJSONRPCError(w, id, -32602, "Missing parameter",
 				fmt.Sprintf("'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
 			return
-		} else if authCtx.Mode == auth.AuthModeNormal && authCtx.OID != "" {
-			// Normal mode (single-org) - check permission against pre-configured OID
-			// This ensures organizations can block AI agent access even in single-org deployments
-			// Skip the check for tools marked with SkipsAIAgentPermission
-			if !tool.SkipsAIAgentPermission {
-				if err := s.checkAIAgentPermission(ctx, authCtx.OID); err != nil {
-					s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
-					return
-				}
+		} else {
+			effectiveOID = authCtx.OID
+		}
+
+		// This ensures organizations can block AI agent access whatever the auth
+		// mode. Skip the check for tools marked with SkipsAIAgentPermission, and
+		// for genuinely org-less contexts (the call fails downstream anyway).
+		if effectiveOID != "" && !tool.SkipsAIAgentPermissionCheck() {
+			if err := s.checkAIAgentPermission(ctx, effectiveOID); err != nil {
+				s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+				return
 			}
 		}
 	}
@@ -273,7 +333,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	// Call the tool handler
 	s.logger.Info("Executing tool handler", "request_id", requestID, "tool", toolName)
 	toolStartTime := time.Now()
-	result, err := tool.Handler(ctx, arguments)
+	result, err := tool.Invoke(ctx, arguments)
 	toolDuration := time.Since(toolStartTime)
 	if err != nil {
 		s.logger.Info("Tool execution failed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds(), "error", err.Error())
@@ -323,15 +383,15 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 			continue
 		}
 
-		schema := tool.Schema
+		schema := tool.ToolSchema()
 
 		// Add OID parameter for tools that require it when in multi-org mode
-		if tool.RequiresOID && needsOIDParam {
+		if tool.NeedsOID() && needsOIDParam {
 			schema = tools.AddOIDToToolSchema(schema)
 		}
 
 		toolList = append(toolList, map[string]interface{}{
-			"name":        tool.Name,
+			"name":        tool.ToolName(),
 			"description": schema.Description,
 			"inputSchema": schema.InputSchema,
 		})
@@ -340,6 +400,51 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
 		"tools": toolList,
 	})
+}
+
+// jwtCoversOID reports whether a LimaCharlie JWT's own claims authorize the
+// requested organization.
+//
+// It fails OPEN when the token carries no usable org list, which is required for
+// correctness rather than laxness: thin user tokens legitimately carry oid="-"
+// and no per-org claims, and those callers resolve their orgs downstream. So the
+// answer is "no" only when the claims carry a concrete org list that excludes
+// the requested OID — the case where the caller is naming someone else's org.
+func (s *Server) jwtCoversOID(jwtString, oid, requestID string) bool {
+	claims, err := auth.ParseAndValidateLimaCharlieJWT(jwtString)
+	if err != nil {
+		// Not a parseable LC JWT (e.g. an MCP OAuth token): nothing to compare
+		// against here, and the credential was already validated upstream.
+		return true
+	}
+
+	if oidCoveredByClaims(claims.OIDs, oid) {
+		return true
+	}
+
+	s.logger.Warn("Rejected X-LC-OID not present in token org claims",
+		"request_id", requestID,
+		"requested_oid", oid,
+		"token_oids", claims.OIDs)
+	return false
+}
+
+// oidCoveredByClaims decides whether a token's org claims authorize the
+// requested OID. Returns true when the claims list the OID, and also when the
+// list holds no concrete org at all (a thin token) — see jwtCoversOID for why
+// that must fail open.
+func oidCoveredByClaims(claimOIDs []string, oid string) bool {
+	concrete := false
+	for _, claimOID := range claimOIDs {
+		if claimOID == oid {
+			return true
+		}
+		// "-" is the thin-token placeholder, not a real org.
+		if claimOID != "" && claimOID != "-" {
+			concrete = true
+		}
+	}
+	return !concrete
 }
 
 func (s *Server) extractUIDFromToken(token string) (string, string, string, error) {

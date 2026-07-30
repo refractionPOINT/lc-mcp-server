@@ -90,9 +90,11 @@ func RegisterWaitSensorOnline() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
+			// GetSensor always returns a non-nil Sensor and fetches its record
+			// inline, recording an unknown SID or API failure in LastError.
 			sensor := org.GetSensor(sid)
-			if sensor == nil {
-				return tools.ErrorResultf("sensor not found: %s", sid), nil
+			if sensor.LastError != nil {
+				return tools.ErrorResultf("failed to look up sensor %s: %v", sid, sensor.LastError), nil
 			}
 
 			deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
@@ -147,14 +149,13 @@ func RegisterExportSensors() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
+			// ExportSensors already returns {"sensors": ...}; don't nest it again.
 			resp, err := org.ExportSensors()
 			if err != nil {
 				return tools.ErrorResultf("failed to export sensors: %v", err), nil
 			}
 
-			return tools.SuccessResult(map[string]interface{}{
-				"sensors": resp,
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

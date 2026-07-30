@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -210,7 +211,7 @@ func RegisterRunLCQLQuery() {
 				mcp.Required(),
 				mcp.Description("The LCQL query to run")),
 			mcp.WithNumber("limit",
-				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
+				mcp.Description("Maximum number of results to return, must be greater than 0 (unlimited if not specified)")),
 			mcp.WithString("stream",
 				mcp.Description("Stream to query: 'event', 'detect', or 'audit' (default: 'event')")),
 			mcp.WithReadOnlyHintAnnotation(true),
@@ -226,6 +227,9 @@ func RegisterRunLCQLQuery() {
 			limit := math.MaxInt
 			if limitFloat, ok := args["limit"].(float64); ok {
 				limit = int(limitFloat)
+				if limit <= 0 {
+					return tools.ErrorResultf("limit must be greater than 0 (got %d); omit it for no limit", limit), nil
+				}
 			}
 
 			// Extract stream (default "event")
@@ -327,7 +331,7 @@ func RegisterRunLCQLQueryFree() {
 				mcp.Required(),
 				mcp.Description("The LCQL query to run (without timeframe, or with timeframe <= 720h/30 days)")),
 			mcp.WithNumber("limit",
-				mcp.Description("Maximum number of results to return (unlimited if not specified)")),
+				mcp.Description("Maximum number of results to return, must be greater than 0 (unlimited if not specified)")),
 			mcp.WithString("stream",
 				mcp.Description("Stream to query: 'event', 'detect', or 'audit' (default: 'event')")),
 			mcp.WithReadOnlyHintAnnotation(true),
@@ -349,6 +353,9 @@ func RegisterRunLCQLQueryFree() {
 			limit := math.MaxInt
 			if limitFloat, ok := args["limit"].(float64); ok {
 				limit = int(limitFloat)
+				if limit <= 0 {
+					return tools.ErrorResultf("limit must be greater than 0 (got %d); omit it for no limit", limit), nil
+				}
 			}
 
 			// Extract stream (default "event")
@@ -601,10 +608,10 @@ func RegisterGetHistoricDetections() {
 			mcp.WithDescription("Get historic detections for the organization between two epoch timestamps"),
 			mcp.WithNumber("start",
 				mcp.Required(),
-				mcp.Description("Start timestamp in Unix epoch seconds")),
+				mcp.Description("Start timestamp in Unix epoch SECONDS (not milliseconds - millisecond values are rejected)")),
 			mcp.WithNumber("end",
 				mcp.Required(),
-				mcp.Description("End timestamp in Unix epoch seconds")),
+				mcp.Description("End timestamp in Unix epoch SECONDS (not milliseconds - millisecond values are rejected)")),
 			mcp.WithString("sid",
 				mcp.Description("Optional sensor ID to filter detections by")),
 			mcp.WithString("cat",
@@ -669,14 +676,16 @@ func RegisterGetHistoricDetections() {
 
 				allDetects = append(allDetects, resp.Detects...)
 
-				// Check if there's a next cursor
-				if resp.NextCursor == "" {
+				// Truncate before deciding to stop: checking the cursor first
+				// let the final page through untruncated, so the call could
+				// return up to twice the requested limit.
+				if limit > 0 && len(allDetects) >= limit {
+					allDetects = allDetects[:limit]
 					break
 				}
 
-				// Check if we've reached the limit
-				if limit > 0 && len(allDetects) >= limit {
-					allDetects = allDetects[:limit]
+				// Check if there's a next cursor
+				if resp.NextCursor == "" {
 					break
 				}
 
@@ -722,7 +731,7 @@ func RegisterGetDetection() {
 			}
 
 			// Make GET request to /insight/{oid}/detections/{detection_id}
-			path := fmt.Sprintf("insight/%s/detections/%s", org.GetOID(), detectionID)
+			path := fmt.Sprintf("insight/%s/detections/%s", org.GetOID(), url.PathEscape(detectionID))
 			var response lc.Dict
 			if err := org.GenericGETRequest(path, nil, &response); err != nil {
 				return tools.ErrorResultf("failed to get detection: %v", err), nil
@@ -754,7 +763,11 @@ func RegisterSearchIOCs() {
 				mcp.Required(),
 				mcp.Description("Type of information to retrieve: 'summary' (occurrence counts) or 'locations' (specific sensor locations)")),
 			mcp.WithBoolean("case_sensitive",
-				mcp.Description("Whether the search should be case-sensitive (default: false, always false for location searches)")),
+				mcp.Description("Whether the search should be case-sensitive. Defaults to FALSE here (the limacharlie CLI defaults to true, so the same search can return more rows through this tool). Forced to false for info_type='locations'.")),
+			mcp.WithNumber("limit",
+				mcp.Description("Maximum number of results to return (server default applies when omitted)")),
+			mcp.WithBoolean("per_object",
+				mcp.Description("Return one entry per matched object rather than one aggregate. Defaults to true for a wildcard summary search and false otherwise; set it explicitly to override.")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -832,18 +845,36 @@ func RegisterSearchIOCs() {
 				return tools.ErrorResultf("unsupported ioc_type '%s'. Valid types: file_hash, domain, ip, file_path, file_name, user, service_name, package_name, hostname", iocType), nil
 			}
 
-			// Create search parameters
-			params := lc.IOCSearchParams{
-				SearchTerm:    iocValue,
-				ObjectType:    objectType,
-				CaseSensitive: caseSensitive,
+			// The SDK's SearchIOCSummary / SearchIOCLocations cannot forward
+			// limit or per_object (IOCSearchParams has no such fields), so the
+			// query is built here. The derived defaults below are exactly the
+			// ones those two methods apply.
+			hasWildcards := strings.Contains(iocValue, "%")
+			params := lc.Dict{
+				"name":           iocValue,
+				"case_sensitive": caseSensitive,
+				"with_wildcards": hasWildcards,
 			}
+			if limit, ok := args["limit"].(float64); ok {
+				if int(limit) <= 0 {
+					return tools.ErrorResultf("limit must be greater than 0 (got %d); omit it for the server default", int(limit)), nil
+				}
+				params["limit"] = int(limit)
+			}
+			endpoint := fmt.Sprintf("insight/%s/objects/%s", org.GetOID(), url.PathEscape(string(objectType)))
 
 			// Execute search based on info type
 			switch infoType {
 			case "summary":
-				resp, err := org.SearchIOCSummary(params)
-				if err != nil {
+				params["info"] = "summary"
+				// per_object is true only for wildcard searches.
+				params["per_object"] = hasWildcards
+				if perObject, ok := args["per_object"].(bool); ok {
+					params["per_object"] = perObject
+				}
+
+				resp := &lc.IOCSummaryResponse{}
+				if err := org.GenericGETRequest(endpoint, params, resp); err != nil {
 					return tools.ErrorResultf("failed to search IOC summary: %v", err), nil
 				}
 
@@ -890,9 +921,25 @@ func RegisterSearchIOCs() {
 				return tools.SuccessResult(result), nil
 
 			case "locations", "location":
-				resp, err := org.SearchIOCLocations(params)
-				if err != nil {
+				params["info"] = "locations"
+				// ALWAYS false for location searches (per web app).
+				params["case_sensitive"] = false
+				params["per_object"] = false
+				if perObject, ok := args["per_object"].(bool); ok {
+					params["per_object"] = perObject
+				}
+
+				resp := &lc.IOCLocationsResponse{}
+				if err := org.GenericGETRequest(endpoint, params, resp); err != nil {
 					return tools.ErrorResultf("failed to search IOC locations: %v", err), nil
+				}
+				// The API may omit name and type from the locations response, so
+				// populate them from the request parameters like the web app does.
+				if resp.Name == "" {
+					resp.Name = iocValue
+				}
+				if resp.Type == "" {
+					resp.Type = objectType
 				}
 
 				// Format locations as an array for easier consumption
@@ -937,7 +984,13 @@ func RegisterBatchSearchIOCs() {
 				mcp.Description("JSON array of IOC objects with type and value fields")),
 			mcp.WithString("info_type",
 				mcp.Required(),
-				mcp.Description("Type of information to retrieve: 'summary', 'locations', etc.")),
+				mcp.Description("Type of information to retrieve: 'summary' (hit counts per time bucket) or 'locations' (per-indicator sensor locations)")),
+			mcp.WithNumber("limit",
+				mcp.Description("Per-indicator location cap, only used when info_type='locations' (default 100, max 1000)")),
+			mcp.WithBoolean("case_sensitive",
+				mcp.Description("Whether the search should be case-sensitive (default: false)")),
+			mcp.WithBoolean("with_wildcards",
+				mcp.Description("Treat each IOC value as a SQL LIKE pattern, e.g. '10.10.%'. Only valid when info_type='locations'.")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -950,6 +1003,14 @@ func RegisterBatchSearchIOCs() {
 			infoType, ok := args["info_type"].(string)
 			if !ok || infoType == "" {
 				return tools.ErrorResult("info_type parameter is required"), nil
+			}
+			switch infoType {
+			case "summary", "locations", "location":
+			default:
+				return tools.ErrorResultf("unsupported info_type '%s'. Valid types: summary, locations", infoType), nil
+			}
+			if infoType == "location" {
+				infoType = "locations"
 			}
 
 			// Get organization
@@ -1003,15 +1064,39 @@ func RegisterBatchSearchIOCs() {
 				objects[objectType] = append(objects[objectType], iocValue)
 			}
 
-			// Create the batch request
-			req := lc.InsightObjectsBatchRequest{
-				Objects:         objects,
-				IsCaseSensitive: false, // Default to case insensitive
+			// The SDK's InsightObjectsBatch never sends info/limit/with_wildcards
+			// (InsightObjectsBatchRequest carries only objects and
+			// case_sensitive), so a request for locations silently came back as
+			// summary counts. This route reads form params, so the
+			// form-encoding GenericPOSTRequest is the right transport.
+			data := lc.Dict{
+				"objects": objects,
+				"info":    infoType,
 			}
 
-			// Call InsightObjectsBatch
-			resp, err := org.InsightObjectsBatch(req)
-			if err != nil {
+			caseSensitive := false
+			if cs, ok := args["case_sensitive"].(bool); ok {
+				caseSensitive = cs
+			}
+			data["case_sensitive"] = caseSensitive
+
+			if limit, ok := args["limit"].(float64); ok {
+				if int(limit) <= 0 {
+					return tools.ErrorResultf("limit must be greater than 0 (got %d); omit it for the server default", int(limit)), nil
+				}
+				data["limit"] = int(limit)
+			}
+
+			if withWildcards, ok := args["with_wildcards"].(bool); ok {
+				if withWildcards && infoType != "locations" {
+					return tools.ErrorResult("with_wildcards is only valid when info_type='locations'"), nil
+				}
+				data["with_wildcards"] = withWildcards
+			}
+
+			resp := lc.Dict{}
+			path := fmt.Sprintf("insight/%s/objects", org.GetOID())
+			if err := org.GenericPOSTRequest(path, data, &resp); err != nil {
 				return tools.ErrorResultf("failed to batch search IOCs: %v", err), nil
 			}
 
@@ -1034,10 +1119,10 @@ func RegisterGetTimeWhenSensorHasData() {
 				mcp.Description("Sensor ID (UUID)")),
 			mcp.WithNumber("start",
 				mcp.Required(),
-				mcp.Description("Start timestamp in Unix epoch seconds")),
+				mcp.Description("Start timestamp in Unix epoch SECONDS (not milliseconds - millisecond values are rejected)")),
 			mcp.WithNumber("end",
 				mcp.Required(),
-				mcp.Description("End timestamp in Unix epoch seconds")),
+				mcp.Description("End timestamp in Unix epoch SECONDS (not milliseconds - millisecond values are rejected)")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -1125,7 +1210,7 @@ func RegisterGetEventByAtom() {
 			}
 
 			// Make GET request to /insight/{oid}/{sid}/{atom}
-			path := fmt.Sprintf("insight/%s/%s/%s", org.GetOID(), sid, atom)
+			path := fmt.Sprintf("insight/%s/%s/%s", org.GetOID(), sid, url.PathEscape(atom))
 			var response lc.Dict
 			if err := org.GenericGETRequest(path, nil, &response); err != nil {
 				return tools.ErrorResultf("failed to get event: %v", err), nil
@@ -1173,7 +1258,7 @@ func RegisterGetAtomChildren() {
 			}
 
 			// Make GET request to /insight/{oid}/{sid}/{atom}/children
-			path := fmt.Sprintf("insight/%s/%s/%s/children", org.GetOID(), sid, atom)
+			path := fmt.Sprintf("insight/%s/%s/%s/children", org.GetOID(), sid, url.PathEscape(atom))
 			var response lc.Dict
 			if err := org.GenericGETRequest(path, nil, &response); err != nil {
 				return tools.ErrorResultf("failed to get atom children: %v", err), nil

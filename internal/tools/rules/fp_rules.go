@@ -8,6 +8,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 )
 
 func init() {
@@ -105,7 +106,7 @@ func RegisterSetFPRule() {
 		Profile:     "detection_engineering",
 		RequiresOID: true,
 		Schema: mcp.NewTool("set_fp_rule",
-			mcp.WithDescription("Create or update a false positive rule"),
+			mcp.WithDescription("Create or update a false positive rule. Updating an existing rule preserves its metadata (enabled state, tags, comment) unless enabled/tags/comment are given, so a deliberately disabled rule stays disabled."),
 			mcp.WithString("rule_name",
 				mcp.Required(),
 				mcp.Description("Name for the FP rule")),
@@ -114,6 +115,7 @@ func RegisterSetFPRule() {
 				mcp.Description("FP rule content (detection filter)")),
 			mcp.WithNumber("ttl",
 				mcp.Description("Time-to-live in seconds. Rule auto-deletes after this duration. Optional.")),
+			hive.WithMetadataOverrideParams(),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
 		),
@@ -126,6 +128,11 @@ func RegisterSetFPRule() {
 			ruleContent, ok := args["rule_content"].(map[string]interface{})
 			if !ok {
 				return tools.ErrorResult("rule_content parameter is required and must be an object"), nil
+			}
+
+			overrides, err := hive.ParseMetadataOverrides(args)
+			if err != nil {
+				return tools.ErrorResultf("%v", err), nil
 			}
 
 			org, err := tools.GetOrganization(ctx)
@@ -154,18 +161,14 @@ func RegisterSetFPRule() {
 			if ttl, ok := args["ttl"].(float64); ok && ttl > 0 {
 				exp := time.Now().UnixMilli() + int64(ttl)*1000
 				expiry = &exp
+				overrides.Expiry = expiry
 			}
 
-			// Create hive client and add rule
-			hive := lc.NewHiveClient(org)
-			enabled := true
-			_, err = hive.Add(lc.HiveArgs{
-				HiveName:     "fp",
-				PartitionKey: org.GetOID(),
-				Key:          ruleName,
-				Data:         lc.Dict(detectionMap),
-				Enabled:      &enabled,
-				Expiry:       expiry,
+			warning, err := hive.SetRecord(org, hive.RecordWrite{
+				HiveName:  "fp",
+				Key:       ruleName,
+				Data:      lc.Dict(detectionMap),
+				Overrides: overrides,
 			})
 			if err != nil {
 				return tools.ErrorResultf("failed to add/update FP rule: %v", err), nil
@@ -179,6 +182,9 @@ func RegisterSetFPRule() {
 			// Note if TTL was set
 			if expiry != nil {
 				result["expiry"] = *expiry
+			}
+			if warning != "" {
+				result["warning"] = warning
 			}
 
 			return tools.SuccessResult(result), nil
