@@ -86,13 +86,11 @@ func RegisterGenerateLCQLQuery() {
 					return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 				}
 
-				// Parse response (format: query on first line, then explanation)
-				lines := strings.SplitN(response, "\n", 2)
-				generatedQuery := strings.TrimSpace(lines[0])
-				explanation := ""
-				if len(lines) > 1 {
-					explanation = strings.TrimSpace(lines[1])
-				}
+				// Parse response (format: query on first line, then explanation).
+				// Markdown decoration is stripped here: a stray wrapping backtick
+				// makes the query fail to parse at position 0, which reads as an
+				// unrelated syntax error and derails every subsequent retry.
+				generatedQuery, explanation := extractGeneratedLCQL(response)
 
 				// Validate the query
 				valid, validationError := validateLCQLQuery(org, generatedQuery)
@@ -122,7 +120,7 @@ func RegisterGenerateLCQLQuery() {
 					"role": "user",
 					"parts": []interface{}{
 						map[string]interface{}{
-							"text": fmt.Sprintf("The previous query generated was invalid with this error: %s\n\nCRITICAL REMINDER: You MUST follow the exact output format. Your response must start with the LCQL query on the FIRST LINE, followed by explanation. Do NOT include phrases like 'Here is the query:' or 'My apologies' before the query. START DIRECTLY WITH THE QUERY.", validationError),
+							"text": fmt.Sprintf("This exact query string was submitted for validation:\n%s\n\nIt was rejected with this error: %s\n\nThe string above is what the validator saw, so diagnose the error against it — the surrounding markdown of your reply is already stripped and is never part of the query.\n\nCRITICAL REMINDER: You MUST follow the exact output format. Your response must start with the LCQL query on the FIRST LINE, followed by explanation. Do NOT include phrases like 'Here is the query:' or 'My apologies' before the query. START DIRECTLY WITH THE QUERY.", generatedQuery, validationError),
 						},
 					},
 				})
@@ -455,13 +453,10 @@ func RegisterGenerateSensorSelector() {
 				return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 			}
 
-			// Parse response (format: selector on first line, then explanation)
-			lines := strings.SplitN(response, "\n", 2)
-			selector := strings.TrimSpace(lines[0])
-			explanation := ""
-			if len(lines) > 1 {
-				explanation = strings.TrimSpace(lines[1])
-			}
+			// Parse response (format: selector on first line, then explanation).
+			// Selectors legitimately contain backticks (plat == `windows`), so
+			// only a single wrapping pair is removed.
+			selector, explanation := extractFirstLine(response)
 
 			elapsed := time.Since(startTime)
 			slog.Debug("generate_sensor_selector completed", "duration_ms", elapsed.Milliseconds())

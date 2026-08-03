@@ -242,6 +242,113 @@ func validateDRRuleDict(org *lc.Organization, rule lc.Dict) (bool, string) {
 	return true, ""
 }
 
+// isLanguageHint reports whether a token is a bare markdown fence language hint
+// (e.g. "lcql", "yaml"). Anything carrying punctuation is content, not a hint —
+// an LCQL query starts with a timeframe like "-1h", which must never be mistaken
+// for one and dropped.
+func isLanguageHint(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+// dropFenceLines removes markdown code-fence marker lines ("```", "```lcql")
+// from a response, keeping every other line — including whatever follows the
+// closing fence.
+//
+// Deleting the whole span from the opening fence to the last "```" would be
+// simpler, but it silently swallows the explanation models place after the
+// closing fence, and that explanation is returned to the caller.
+func dropFenceLines(response string) string {
+	lines := strings.Split(strings.TrimSpace(response), "\n")
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "```") {
+			kept = append(kept, line)
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
+		// A bare marker, or a marker plus a lone language hint, is pure
+		// decoration and disappears. A marker with real content glued to it
+		// keeps that content.
+		if rest == "" || isLanguageHint(rest) {
+			continue
+		}
+		kept = append(kept, rest)
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
+}
+
+// unwrapInlineCode removes a single pair of wrapping backticks from a line.
+// Exactly one backtick is removed from each end, so expressions that legitimately
+// contain backticks survive intact (e.g. "`plat == `windows``" -> "plat == `windows`",
+// and "`-1h | * | * | event/FILE_PATH matches `.*`" + "`" keeps its inner regex quoting).
+func unwrapInlineCode(line string) string {
+	line = strings.TrimSpace(line)
+	if len(line) >= 2 && strings.HasPrefix(line, "`") && strings.HasSuffix(line, "`") {
+		line = strings.TrimSpace(line[1 : len(line)-1])
+	}
+	return line
+}
+
+// extractFirstLine pulls the first meaningful line out of an AI response and
+// strips the markdown decoration models habitually add around it, returning the
+// value and whatever remains as the explanation.
+//
+// Models routinely wrap the value in a code fence or inline backticks despite
+// being told not to. Passing those characters through to a validator produces a
+// parse failure at position 0 that looks nothing like the real problem, which
+// then poisons every retry with a misleading error.
+func extractFirstLine(response string) (string, string) {
+	body := dropFenceLines(response)
+	lines := strings.SplitN(body, "\n", 2)
+	value := unwrapInlineCode(lines[0])
+	explanation := ""
+	if len(lines) > 1 {
+		explanation = strings.TrimSpace(lines[1])
+	}
+	return value, explanation
+}
+
+// lcqlComponentSeparators is the number of pipes separating an LCQL query's 4
+// required components, and so the minimum a line must have to be query-shaped.
+const lcqlComponentSeparators = 3
+
+// extractGeneratedLCQL extracts the LCQL query and explanation from an AI response.
+//
+// On top of the markdown stripping done by extractFirstLine, this scans for the
+// first line that actually looks like LCQL (an LCQL query has at least the 3
+// pipes separating its 4 required components). That keeps a preamble sentence
+// the model was told not to emit — or a refusal paragraph — from being submitted
+// to the validator in place of the query sitting a few lines below it.
+func extractGeneratedLCQL(response string) (string, string) {
+	value, explanation := extractFirstLine(response)
+	if strings.Count(value, "|") >= lcqlComponentSeparators {
+		return value, explanation
+	}
+
+	// First line was not a query; look for one further down.
+	lines := strings.Split(dropFenceLines(response), "\n")
+	for i, line := range lines {
+		candidate := unwrapInlineCode(line)
+		if strings.Count(candidate, "|") < lcqlComponentSeparators {
+			continue
+		}
+		return candidate, strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+	}
+
+	// Nothing query-shaped found: fall back to the first line so the validator
+	// error reported to the user reflects what the model actually produced.
+	return value, explanation
+}
+
 // cleanYAMLResponse removes markdown formatting from AI-generated YAML
 func cleanYAMLResponse(response string) string {
 	// Remove markdown code fences and trim whitespace
