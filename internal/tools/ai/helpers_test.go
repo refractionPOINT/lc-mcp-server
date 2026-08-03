@@ -246,13 +246,41 @@ func TestExtractGeneratedLCQL_SkipsPreamble(t *testing.T) {
 	assert.Equal(t, "It matches evil domains.", explanation)
 }
 
-func TestExtractGeneratedLCQL_PreservesInnerBackticks(t *testing.T) {
-	// A backtick-quoted regex in a `matches` clause must survive unwrapping.
-	response := "`-1h | * | NEW_PROCESS | event/FILE_PATH matches `.*system32.*``"
+func TestExtractGeneratedLCQL_PreservesSensorSelectorBackticks(t *testing.T) {
+	// Backticks are legal in an LCQL query's *sensors* component, which is a
+	// sensor selector. (They are NOT legal around a filter value — the parser
+	// rejects "matches `regex`" — so the sensors component is the real reason
+	// interior backticks have to survive unwrapping.)
+	response := "`-1h | plat == `windows` | NEW_PROCESS | / exists`"
 
 	query, _ := extractGeneratedLCQL(response)
 
-	assert.Equal(t, "-1h | * | NEW_PROCESS | event/FILE_PATH matches `.*system32.*`", query)
+	assert.Equal(t, "-1h | plat == `windows` | NEW_PROCESS | / exists", query)
+}
+
+func TestExtractGeneratedLCQL_UnterminatedCodeSpan(t *testing.T) {
+	// Observed in production after the first fix shipped: the model opens a
+	// markdown code span and never closes it on that line. Requiring a matching
+	// pair let the leading backtick straight through to the validator, which
+	// reproduced the original "1:1 (0)" parse failure. A query always starts
+	// with a timeframe, so a leading backtick is always a wrapper.
+	response := "`-24h | * | WEL | event/EVENT/System/EventID == \"17\" and event/EVENT/EventData/PipeName contains \"Example_Pipe_\""
+
+	query, _ := extractGeneratedLCQL(response)
+
+	assert.Equal(t, "-24h | * | WEL | event/EVENT/System/EventID == \"17\" and event/EVENT/EventData/PipeName contains \"Example_Pipe_\"", query)
+	assert.False(t, strings.HasPrefix(query, "`"), "leading backtick must never reach the validator")
+}
+
+func TestExtractGeneratedLCQL_SelectorBackticksWithWrapper(t *testing.T) {
+	// Two legal backtick pairs in the sensors component plus a wrapper. The
+	// wrapper's closing backtick is the one nothing else pairs with.
+	response := "`-1h | `vip` in tags and plat == `windows` | NEW_PROCESS | / exists`"
+
+	query, _ := extractGeneratedLCQL(response)
+
+	assert.Equal(t, "-1h | `vip` in tags and plat == `windows` | NEW_PROCESS | / exists", query)
+	assert.Equal(t, 0, strings.Count(query, "`")%2, "selector quotes must stay balanced")
 }
 
 func TestExtractGeneratedLCQL_NoQueryFoundFallsBackToFirstLine(t *testing.T) {
