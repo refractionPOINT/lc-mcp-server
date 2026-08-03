@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -280,6 +281,46 @@ func TestExtractFirstLine_SelectorWithQuotedValueAtOneEnd(t *testing.T) {
 	selector, _ := extractFirstLine("plat == `linux` and isolated == true")
 
 	assert.Equal(t, "plat == `linux` and isolated == true", selector)
+}
+
+// TestExtractFirstLine_SelectorCorpus covers the selector forms the generator
+// actually emits: the three returned by live generations during the
+// investigation of this regression, plus every example the sensor-selector
+// prompt template teaches the model to produce.
+func TestExtractFirstLine_SelectorCorpus(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// Observed live. The first is the one that regressed.
+		{"live: quoted value at both ends", "`vip` in tags and plat == `windows`", "`vip` in tags and plat == `windows`"},
+		{"live: quoted value mid-expression", "plat == `linux` and isolated == true", "plat == `linux` and isolated == true"},
+		{"live: quoted values, unquoted tail", "`production` in tags and `critical` in tags", "`production` in tags and `critical` in tags"},
+
+		// Forms taught by prompts/gen_sensor_selector.txt.
+		{"prompt example: plat and tag", "plat == `windows` and `vip` in tags", "plat == `windows` and `vip` in tags"},
+		{"prompt example: no backticks at all", "isolated == true or should_isolate == true", "isolated == true or should_isolate == true"},
+		{"prompt example: numeric-leading value", "plat == `1password`", "plat == `1password`"},
+
+		// Markdown decoration the model adds despite instructions.
+		{"unambiguous inline wrapper", "`isolated == true`", "isolated == true"},
+		{"fenced, quoted values", "```\nplat == `windows` and `vip` in tags\n```", "plat == `windows` and `vip` in tags"},
+		{"fenced, no backticks", "```\nisolated == true\n```", "isolated == true"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := extractFirstLine(tc.input)
+			assert.Equal(t, tc.want, got)
+
+			// Invariant that generically catches this class of corruption: a
+			// selector's backticks always pair up, so an odd count means a
+			// quote was eaten.
+			assert.Equal(t, 0, strings.Count(got, "`")%2,
+				"unbalanced backticks in %q — a quoted value was corrupted", got)
+		})
+	}
 }
 
 func TestExtractFirstLine_UnwrapsUnambiguousSelector(t *testing.T) {
