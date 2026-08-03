@@ -342,3 +342,82 @@ func TestExtractFirstLine_UnwrappedSelectorUnchanged(t *testing.T) {
 
 	assert.Equal(t, "plat == `windows`", selector)
 }
+
+// TestCleanYAMLResponse_Corpus covers the response shapes the D&R generators
+// receive. Each case previously produced either unparseable YAML (conversational
+// text left in) or silently altered content (fence sequences deleted from inside
+// string values).
+func TestCleanYAMLResponse_Corpus(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"clean fenced", "```yaml\nop: is\npath: event/FILE_PATH\n```", "op: is\npath: event/FILE_PATH"},
+		{"bare fence", "```\nop: is\n```", "op: is"},
+		{"no fence at all", "op: is\npath: event/FILE_PATH", "op: is\npath: event/FILE_PATH"},
+
+		// Conversational text the prompt explicitly forbids, emitted anyway.
+		{"preamble then fence", "Here is the detection rule:\n```yaml\nop: is\n```", "op: is"},
+		{"apology then fence", "My apologies. Let me fix that:\n```yaml\nop: is\n```", "op: is"},
+		{"trailing prose after fence", "```yaml\nop: is\n```\nThis rule matches file paths.", "op: is"},
+		{"preamble, no fence", "Here is the detection rule:\nop: is\npath: event/FILE_PATH", "op: is\npath: event/FILE_PATH"},
+
+		// A prose line is itself valid YAML (a mapping key), so it has to be
+		// recognised by the key containing whitespace, not by well-formedness.
+		{"prose line parses as yaml key", "Here is the rule:\nop: is", "op: is"},
+
+		// Content that must survive untouched.
+		{"fence sequence inside a value", "```yaml\nvalue: \"a ``` b\"\n```", "value: \"a ``` b\""},
+		{"comment first", "# detects powershell\nop: is", "# detects powershell\nop: is"},
+		{"list item first", "- action: report\n  name: test", "- action: report\n  name: test"},
+		{"respond list in fence", "```yaml\n- action: report\n  name: suspicious\n```", "- action: report\n  name: suspicious"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, cleanYAMLResponse(tc.input))
+		})
+	}
+}
+
+func TestCleanYAMLResponse_UnrecognisableIsReturnedIntact(t *testing.T) {
+	// Nothing YAML-shaped: return it verbatim so the parse error the caller
+	// reports reflects what the model actually produced, rather than an empty
+	// string that hides it.
+	in := "I cannot generate that rule because the event type is unavailable."
+
+	assert.Equal(t, in, cleanYAMLResponse(in))
+}
+
+func TestCleanCodeResponse_Corpus(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"python fence", "```python\nprint('hi')\n```", "print('hi')"},
+		{"bare fence", "```\nprint('hi')\n```", "print('hi')"},
+		{"preamble then fence", "Here is the playbook:\n```python\nprint('hi')\n```", "print('hi')"},
+		{"no fence", "print('hi')", "print('hi')"},
+
+		// A docstring containing a fence sequence must not be rewritten; the old
+		// ReplaceAll approach deleted it from inside the string.
+		{"fence inside a docstring", "```python\ndoc = \"\"\"use ``` to fence\"\"\"\n```", "doc = \"\"\"use ``` to fence\"\"\""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, cleanCodeResponse(tc.input))
+		})
+	}
+}
+
+func TestFirstFencedBlock_UnterminatedFence(t *testing.T) {
+	// A truncated response should degrade to everything after the opening
+	// fence rather than losing the content entirely.
+	got, ok := firstFencedBlock("```yaml\nop: is\npath: event/FILE_PATH")
+
+	assert.True(t, ok)
+	assert.Equal(t, "op: is\npath: event/FILE_PATH", got)
+}

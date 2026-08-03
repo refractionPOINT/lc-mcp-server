@@ -402,12 +402,78 @@ func extractGeneratedLCQL(response string) (string, string) {
 
 // cleanYAMLResponse removes markdown formatting from AI-generated YAML
 func cleanYAMLResponse(response string) string {
-	// Remove markdown code fences and trim whitespace
-	response = strings.TrimSpace(response)
-	response = strings.ReplaceAll(response, "```yaml", "")
-	response = strings.ReplaceAll(response, "```yml", "")
-	response = strings.ReplaceAll(response, "```", "")
+	if block, ok := firstFencedBlock(response); ok {
+		return block
+	}
+	return trimLeadingProse(strings.TrimSpace(response))
+}
+
+// cleanCodeResponse extracts generated source code from an AI response, using
+// the same fenced-block rule as cleanYAMLResponse. Unfenced responses are
+// returned as-is: code has no equivalent of a YAML key to anchor prose
+// detection on, and guessing would risk deleting a leading comment or import.
+func cleanCodeResponse(response string) string {
+	if block, ok := firstFencedBlock(response); ok {
+		return block
+	}
 	return strings.TrimSpace(response)
+}
+
+// firstFencedBlock returns the contents of the first ```-delimited block, and
+// whether one was found. An unterminated opening fence yields everything after
+// it, which is what a truncated response should degrade to.
+//
+// Only lines that *begin* with a fence marker are treated as markers, so a
+// fence sequence appearing inside a string value is left alone. Deleting every
+// "```" substring instead — as this used to — silently rewrote such values.
+func firstFencedBlock(response string) (string, bool) {
+	lines := strings.Split(strings.TrimSpace(response), "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return "", false
+	}
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
+			return strings.TrimSpace(strings.Join(lines[start+1:i], "\n")), true
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[start+1:], "\n")), true
+}
+
+// trimLeadingProse drops conversational lines that precede the YAML in an
+// unfenced response ("Here is the detection rule:", "My apologies...").
+//
+// Such a line is often valid YAML on its own — "Here is the detection rule:"
+// parses as a mapping key — so it cannot be rejected by well-formedness alone.
+// It is recognised instead by the key containing whitespace: rule fields are
+// single tokens (op, path, event, rules), prose keys are sentences. Once a line
+// that looks like real YAML is seen, everything from there on is kept verbatim.
+func trimLeadingProse(response string) string {
+	lines := strings.Split(response, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Comments and list items are unambiguous YAML starts.
+		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "-") {
+			return strings.TrimSpace(strings.Join(lines[i:], "\n"))
+		}
+		key, _, isMapping := strings.Cut(trimmed, ":")
+		if isMapping && !strings.ContainsAny(key, " \t") {
+			return strings.TrimSpace(strings.Join(lines[i:], "\n"))
+		}
+		// Prose: keep scanning.
+	}
+	// Nothing recognisable — return the response untouched so the parse error
+	// reported to the caller reflects what the model actually produced.
+	return response
 }
 
 // schemaTypeCodeToString converts a schema type code to a string

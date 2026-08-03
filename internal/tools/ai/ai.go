@@ -217,7 +217,7 @@ func RegisterGenerateDRRuleDetection() {
 						"role": "user",
 						"parts": []interface{}{
 							map[string]interface{}{
-								"text": fmt.Sprintf("The previous detection rule generated had invalid YAML syntax with this error: %s\n\nCRITICAL REMINDER: You MUST return ONLY valid YAML with NO explanations, apologies, or conversational text. Your response must start directly with the YAML (either a comment # or a field name like event:). Do NOT include phrases like 'Here is the YAML:' or 'My apologies'. Return PURE YAML ONLY.", lastError),
+								"text": fmt.Sprintf("This exact text was parsed as YAML:\n%s\n\nIt failed with this error: %s\n\nDiagnose the error against the text above — it is what was parsed, after the markdown of your reply was stripped.\n\nCRITICAL REMINDER: You MUST return ONLY valid YAML with NO explanations, apologies, or conversational text. Your response must start directly with the YAML (either a comment # or a field name like event:). Do NOT include phrases like 'Here is the YAML:' or 'My apologies'. Return PURE YAML ONLY.", generatedDetection, lastError),
 							},
 						},
 					})
@@ -257,7 +257,7 @@ func RegisterGenerateDRRuleDetection() {
 					"role": "user",
 					"parts": []interface{}{
 						map[string]interface{}{
-							"text": fmt.Sprintf("The previous detection rule generated was invalid with this error: %s\nPlease fix the detection rule and try again.", validationError),
+							"text": fmt.Sprintf("This exact detection rule was submitted for validation:\n%s\n\nIt was rejected with this error: %s\n\nDiagnose the error against the rule above — it is what the validator saw.\nPlease fix the detection rule and try again.", generatedDetection, validationError),
 						},
 					},
 				})
@@ -350,7 +350,7 @@ func RegisterGenerateDRRuleRespond() {
 						"role": "user",
 						"parts": []interface{}{
 							map[string]interface{}{
-								"text": fmt.Sprintf("The previous respond rule generated had invalid YAML syntax with this error: %s\n\nCRITICAL REMINDER: You MUST return ONLY valid YAML with NO explanations, apologies, or conversational text. Your response must start directly with the YAML (either a comment # or a list item -). Do NOT include phrases like 'Here is the YAML:' or 'My apologies'. Return PURE YAML ONLY.", lastError),
+								"text": fmt.Sprintf("This exact text was parsed as YAML:\n%s\n\nIt failed with this error: %s\n\nDiagnose the error against the text above — it is what was parsed, after the markdown of your reply was stripped.\n\nCRITICAL REMINDER: You MUST return ONLY valid YAML with NO explanations, apologies, or conversational text. Your response must start directly with the YAML (either a comment # or a list item -). Do NOT include phrases like 'Here is the YAML:' or 'My apologies'. Return PURE YAML ONLY.", generatedRespond, lastError),
 							},
 						},
 					})
@@ -393,7 +393,7 @@ func RegisterGenerateDRRuleRespond() {
 					"role": "user",
 					"parts": []interface{}{
 						map[string]interface{}{
-							"text": fmt.Sprintf("The previous respond rule generated was invalid with this error: %s\nPlease fix the respond rule and try again.", validationError),
+							"text": fmt.Sprintf("This exact respond rule was submitted for validation:\n%s\n\nIt was rejected with this error: %s\n\nDiagnose the error against the rule above — it is what the validator saw.\nPlease fix the respond rule and try again.", generatedRespond, validationError),
 						},
 					},
 				})
@@ -515,10 +515,10 @@ func RegisterGeneratePythonPlaybook() {
 			}
 
 			// Remove markdown code fences if present
-			playbook := strings.TrimSpace(response)
-			playbook = strings.ReplaceAll(playbook, "```python", "")
-			playbook = strings.ReplaceAll(playbook, "```", "")
-			playbook = strings.TrimSpace(playbook)
+			// Take the fenced block rather than deleting every "```" substring,
+			// which would also strip a fence sequence appearing inside a string
+			// literal or docstring.
+			playbook := cleanCodeResponse(response)
 
 			elapsed := time.Since(startTime)
 			slog.Debug("generate_python_playbook completed", "duration_ms", elapsed.Milliseconds())
