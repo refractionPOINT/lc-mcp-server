@@ -307,6 +307,12 @@ func TestExtractFirstLine_SelectorCorpus(t *testing.T) {
 		{"unambiguous inline wrapper", "`isolated == true`", "isolated == true"},
 		{"fenced, quoted values", "```\nplat == `windows` and `vip` in tags\n```", "plat == `windows` and `vip` in tags"},
 		{"fenced, no backticks", "```\nisolated == true\n```", "isolated == true"},
+
+		// Wrapped AND containing quoted values — the hard case. Observed live:
+		// the leading backtick would have to quote "plat == ", which contains
+		// whitespace and so cannot be a value, marking the pair as a wrapper.
+		{"live: wrapper around quoted value", "`plat == `linux` and isolated == true`", "plat == `linux` and isolated == true"},
+		{"wrapper around leading field", "`plat == `windows` and `vip` in tags`", "plat == `windows` and `vip` in tags"},
 	}
 
 	for _, tc := range cases {

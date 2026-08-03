@@ -306,29 +306,41 @@ func unwrapInlineCode(line string) string {
 	return line
 }
 
-// unwrapUnambiguousInlineCode removes wrapping backticks only when the enclosed
-// content has none of its own.
+// unwrapSelectorInlineCode removes wrapping backticks from a sensor selector,
+// distinguishing a markdown wrapper from the selector's own value quoting.
 //
-// Values whose own syntax uses backticks are ambiguous: a sensor selector like
+// Selectors backtick-quote values, so both of these begin and end with a
+// backtick but mean different things:
 //
-//	`vip` in tags and plat == `windows`
+//	`vip` in tags and plat == `windows`     <- not wrapped; quotes two values
+//	`plat == `linux` and isolated == true`  <- wrapped; quotes one value
 //
-// both starts and ends with a backtick without being wrapped in anything, and
-// blindly removing a pair corrupts it into "vip` in tags and plat == `windows".
-// Requiring a backtick-free interior keeps the unambiguous wrapper case working
-// ("`plat == windows`") while never damaging a value that quotes its own terms.
-// A genuinely wrapped selector containing quoted values is left as-is: passing
-// the wrapper through is recoverable, silently corrupting the expression is not.
-func unwrapUnambiguousInlineCode(line string) string {
+// Stripping a pair from the first corrupts it into
+// "vip` in tags and plat == `windows"; failing to strip the second leaves an
+// unusable expression. They are told apart by what the leading backtick would
+// quote: a selector value is a single bare token, so if that segment contains
+// whitespace the backtick cannot be a value quote and must be a wrapper.
+func unwrapSelectorInlineCode(line string) string {
 	line = strings.TrimSpace(line)
 	if !hasWrappingBackticks(line) {
 		return line
 	}
 	inner := line[1 : len(line)-1]
-	if strings.Contains(inner, "`") {
-		return line
+
+	// No interior backticks: the outer pair can only be a wrapper.
+	i := strings.Index(inner, "`")
+	if i < 0 {
+		return strings.TrimSpace(inner)
 	}
-	return strings.TrimSpace(inner)
+
+	// Whitespace in the segment the leading backtick would quote means it is
+	// not quoting a value, so the outer pair is a wrapper.
+	if strings.ContainsAny(inner[:i], " \t") {
+		return strings.TrimSpace(inner)
+	}
+
+	// The leading backtick opens a real quoted value; leave the line alone.
+	return line
 }
 
 // extractFirstLine pulls the first meaningful line out of an AI response and
@@ -340,7 +352,7 @@ func unwrapUnambiguousInlineCode(line string) string {
 // parse failure at position 0 that looks nothing like the real problem, which
 // then poisons every retry with a misleading error.
 func extractFirstLine(response string) (string, string) {
-	return splitValueAndExplanation(response, unwrapUnambiguousInlineCode)
+	return splitValueAndExplanation(response, unwrapSelectorInlineCode)
 }
 
 // splitValueAndExplanation drops fence lines, then splits the body into its
