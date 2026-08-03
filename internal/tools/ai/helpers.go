@@ -286,16 +286,49 @@ func dropFenceLines(response string) string {
 	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
-// unwrapInlineCode removes a single pair of wrapping backticks from a line.
-// Exactly one backtick is removed from each end, so expressions that legitimately
-// contain backticks survive intact (e.g. "`plat == `windows``" -> "plat == `windows`",
-// and "`-1h | * | * | event/FILE_PATH matches `.*`" + "`" keeps its inner regex quoting).
+// hasWrappingBackticks reports whether a line both begins and ends with a backtick.
+func hasWrappingBackticks(line string) bool {
+	return len(line) >= 2 && strings.HasPrefix(line, "`") && strings.HasSuffix(line, "`")
+}
+
+// unwrapInlineCode removes a single pair of wrapping backticks from a line whose
+// content cannot itself start with one.
+//
+// Safe for LCQL only: a query always begins with a timeframe ("-24h", a date),
+// so a leading backtick is unambiguously a markdown wrapper. One backtick is
+// removed per side, leaving an inner backtick-quoted regex in a `matches` clause
+// intact.
 func unwrapInlineCode(line string) string {
 	line = strings.TrimSpace(line)
-	if len(line) >= 2 && strings.HasPrefix(line, "`") && strings.HasSuffix(line, "`") {
+	if hasWrappingBackticks(line) {
 		line = strings.TrimSpace(line[1 : len(line)-1])
 	}
 	return line
+}
+
+// unwrapUnambiguousInlineCode removes wrapping backticks only when the enclosed
+// content has none of its own.
+//
+// Values whose own syntax uses backticks are ambiguous: a sensor selector like
+//
+//	`vip` in tags and plat == `windows`
+//
+// both starts and ends with a backtick without being wrapped in anything, and
+// blindly removing a pair corrupts it into "vip` in tags and plat == `windows".
+// Requiring a backtick-free interior keeps the unambiguous wrapper case working
+// ("`plat == windows`") while never damaging a value that quotes its own terms.
+// A genuinely wrapped selector containing quoted values is left as-is: passing
+// the wrapper through is recoverable, silently corrupting the expression is not.
+func unwrapUnambiguousInlineCode(line string) string {
+	line = strings.TrimSpace(line)
+	if !hasWrappingBackticks(line) {
+		return line
+	}
+	inner := line[1 : len(line)-1]
+	if strings.Contains(inner, "`") {
+		return line
+	}
+	return strings.TrimSpace(inner)
 }
 
 // extractFirstLine pulls the first meaningful line out of an AI response and
@@ -307,9 +340,15 @@ func unwrapInlineCode(line string) string {
 // parse failure at position 0 that looks nothing like the real problem, which
 // then poisons every retry with a misleading error.
 func extractFirstLine(response string) (string, string) {
+	return splitValueAndExplanation(response, unwrapUnambiguousInlineCode)
+}
+
+// splitValueAndExplanation drops fence lines, then splits the body into its
+// first line (passed through unwrap) and the remaining explanation.
+func splitValueAndExplanation(response string, unwrap func(string) string) (string, string) {
 	body := dropFenceLines(response)
 	lines := strings.SplitN(body, "\n", 2)
-	value := unwrapInlineCode(lines[0])
+	value := unwrap(lines[0])
 	explanation := ""
 	if len(lines) > 1 {
 		explanation = strings.TrimSpace(lines[1])
@@ -329,7 +368,7 @@ const lcqlComponentSeparators = 3
 // the model was told not to emit — or a refusal paragraph — from being submitted
 // to the validator in place of the query sitting a few lines below it.
 func extractGeneratedLCQL(response string) (string, string) {
-	value, explanation := extractFirstLine(response)
+	value, explanation := splitValueAndExplanation(response, unwrapInlineCode)
 	if strings.Count(value, "|") >= lcqlComponentSeparators {
 		return value, explanation
 	}

@@ -264,13 +264,30 @@ func TestExtractGeneratedLCQL_NoQueryFoundFallsBackToFirstLine(t *testing.T) {
 	assert.Equal(t, "I need to clarify an important limitation:", query)
 }
 
-func TestExtractFirstLine_SensorSelectorKeepsBacktickQuoting(t *testing.T) {
-	// Sensor selectors legitimately backtick-quote values, so only one wrapping
-	// pair may be removed.
-	selector, explanation := extractFirstLine("`plat == `windows` and `vip` in tags`\n\nTargets Windows VIP sensors.")
+func TestExtractFirstLine_SelectorStartingAndEndingWithQuotedValue(t *testing.T) {
+	// Regression: this selector both starts and ends with a backtick-quoted
+	// value without being wrapped in anything. Removing a "wrapping" pair
+	// corrupts it into "vip` in tags and plat == `windows", which is exactly
+	// what a live generation returned before this was fixed.
+	selector, _ := extractFirstLine("`vip` in tags and plat == `windows`\n\nTargets Windows VIP sensors.")
 
-	assert.Equal(t, "plat == `windows` and `vip` in tags", selector)
-	assert.Equal(t, "Targets Windows VIP sensors.", explanation)
+	assert.Equal(t, "`vip` in tags and plat == `windows`", selector)
+}
+
+func TestExtractFirstLine_SelectorWithQuotedValueAtOneEnd(t *testing.T) {
+	// Only the trailing end is a quoted value here, so there is no wrapping
+	// pair to be tempted by.
+	selector, _ := extractFirstLine("plat == `linux` and isolated == true")
+
+	assert.Equal(t, "plat == `linux` and isolated == true", selector)
+}
+
+func TestExtractFirstLine_UnwrapsUnambiguousSelector(t *testing.T) {
+	// No backticks inside, so the outer pair can only be a markdown wrapper.
+	selector, explanation := extractFirstLine("`isolated == true`\n\nIsolated sensors.")
+
+	assert.Equal(t, "isolated == true", selector)
+	assert.Equal(t, "Isolated sensors.", explanation)
 }
 
 func TestExtractFirstLine_UnwrappedSelectorUnchanged(t *testing.T) {
