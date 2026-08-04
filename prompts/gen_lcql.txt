@@ -73,8 +73,9 @@ Specifies output fields and aggregation:
 - **`not ends with`**: Suffix exclusion
 
 ### Pattern Operators
-- **`matches`**: Regular expression match
-  - `event/FILE_PATH matches \`.*system[0-9a-z].*\``
+- **`matches`**: Regular expression match. The pattern is a quoted string, exactly like any other value — use `"` or `'`, NEVER backticks. Backticks are not valid around a filter value and the query will fail to parse.
+  - ✅ `event/FILE_PATH matches ".*system[0-9a-z].*"`
+  - ❌ `event/FILE_PATH matches \`.*system[0-9a-z].*\`` (backticks are rejected by the parser)
 - **`not matches`**: Regular expression exclusion
 
 ### Network Operators

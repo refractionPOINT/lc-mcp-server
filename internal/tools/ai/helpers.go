@@ -291,17 +291,30 @@ func hasWrappingBackticks(line string) bool {
 	return len(line) >= 2 && strings.HasPrefix(line, "`") && strings.HasSuffix(line, "`")
 }
 
-// unwrapInlineCode removes a single pair of wrapping backticks from a line whose
-// content cannot itself start with one.
+// unwrapInlineCode removes markdown code-span backticks from an LCQL query.
 //
-// Safe for LCQL only: a query always begins with a timeframe ("-24h", a date),
-// so a leading backtick is unambiguously a markdown wrapper. One backtick is
-// removed per side, leaving an inner backtick-quoted regex in a `matches` clause
-// intact.
+// The two ends are handled differently because only one of them is
+// unambiguous. A query always begins with a timeframe ("-24h", a date), never a
+// backtick, so a leading backtick is always a wrapper and is removed
+// unconditionally — including when the model opened a code span and never
+// closed it, which requiring a matching pair used to let through untouched.
+//
+// The trailing end is handled conservatively. Backticks are legal inside a
+// query — the sensors component quotes values and regexes with them — and those
+// always pair up, so a trailing backtick is taken as the wrapper only when
+// removing the leading one leaves an odd count, i.e. one that nothing else
+// pairs with. Stripping unconditionally instead would consume the closing
+// backtick of a trailing quoted expression, converting a malformed query into a
+// differently malformed one whose validator error no longer points at what the
+// model got wrong.
 func unwrapInlineCode(line string) string {
 	line = strings.TrimSpace(line)
-	if hasWrappingBackticks(line) {
-		line = strings.TrimSpace(line[1 : len(line)-1])
+	if !strings.HasPrefix(line, "`") {
+		return line
+	}
+	line = strings.TrimSpace(line[1:])
+	if strings.HasSuffix(line, "`") && strings.Count(line, "`")%2 == 1 {
+		line = strings.TrimSpace(line[:len(line)-1])
 	}
 	return line
 }
