@@ -47,10 +47,18 @@ The main query logic using field selectors and operators:
 - **Universal filter**: `/ exists` to select everything without filtering
 
 ### 5. Projection Component (Optional)
-Specifies output fields and aggregation:
+Specifies output fields, aggregation, sorting, and result-set limits:
 - **Field projection**: `event/FILE_PATH as path event/USER_NAME as user`
 - **Grouping**: `GROUP BY(field1 field2)`
 - **Aggregators**: `COUNT(field)`, `COUNT_UNIQUE(field)`
+- **Sorting**: `ORDER BY(<field> [asc|desc])` — parens are mandatory. Direction is optional and defaults to ascending. Sort keys may reference raw selectors (e.g. `event/PORT`) or projection aliases (e.g. `Port`). `ORDER BY` works with or without `GROUP BY`. Only **single-key** ORDER BY is currently supported by the backend transcoder; do not emit multi-key forms like `ORDER BY(A asc B desc)`.
+- **Limit**: `LIMIT N` — caps the number of returned rows. Appears at the very end of the projection clause, after any `ORDER BY`.
+
+**Projection clause ordering:** when multiple projection operators are present, write them in this order: projected fields → aggregators → `GROUP BY(...)` → `ORDER BY(...)` → `LIMIT N`.
+
+**Examples:**
+- Sort raw events, no aggregation: `event/IP_ADDRESS as IP event/PORT as Port ORDER BY(Port desc) LIMIT 100`
+- Sort an aggregated count: `event/EVENT/EventData/IpAddress as SourceIP COUNT(event) as FailedAttempts GROUP BY(SourceIP) ORDER BY(FailedAttempts desc) LIMIT 50`
 
 ## Filter Operators
 
