@@ -96,6 +96,15 @@ cloudsec_code_findings { "repo": ["owner/name"], "severity": ["CRITICAL","HIGH"]
 
 `repo` is repeatable and the gateway honours at most 100 values.
 
+`repo` is matched **exactly**, and the owner segment of the stored key carries the casing the
+source-control *connection* was configured with — while a finding's own `code.repo_name` is the
+platform's *display* casing. On the `refractionPOINT` GitHub organization those differ, so an agent
+that reads `refractionPOINT/lc-appsec-fixtures` off a finding and feeds it back as a filter gets zero
+rows. Take the key from `cloudsec_code_repos` or the `repo` facet, which return the one that matches.
+An empty page under a single `repo` filter carries a `note` that says which of the three cases it is:
+the key is right and nothing matched, the key is wrong and here is the real one, or no such
+repository is in the inventory.
+
 Provenance rides on each finding as `code.detected_via`: `lc-code-scanner` for the hosted sandbox
 scan, `lc-code-scanner-byo` for a pushed local scan, `sarif-ingest` / `cyclonedx-ingest` for a
 converted document. **There is no server-side selector on it** — read it per finding rather than
@@ -148,7 +157,8 @@ would need does not exist either — the connector this organization uses is rea
 
 ## Pointing at a non-production gateway
 
-`LC_API_URL` repoints every LimaCharlie REST call this process makes:
+`LC_API_URL` repoints every LimaCharlie REST call this process makes — the SDK reads, the raw
+cloudsec POSTs, and the `PostJSON` helper alike:
 
 ```bash
 --env LC_API_URL=https://lc-api-go-exp-<hash>.<region>.run.app

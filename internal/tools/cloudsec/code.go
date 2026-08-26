@@ -107,7 +107,7 @@ func registerCodeRepos() {
 func codeFindingParams(paging bool) []mcp.ToolOption {
 	params := []mcp.ToolOption{
 		mcp.WithArray("repo", mcp.WithStringItems(),
-			mcp.Description("Repository filter, keyed '<owner>/<name>' EXACTLY as cloudsec_code_repos and the 'repo' facet return it — the stored key is lower-cased, while a finding's own code.repo_name carries the platform's display casing and does NOT match as a filter. Repeatable (OR within the key); at most 100 values are honored. REQUIRED unless facets=true — see the tool description for why")),
+			mcp.Description("Repository filter, keyed '<owner>/<name>' EXACTLY as cloudsec_code_repos and the 'repo' facet return it. It is matched exactly and its owner segment carries the casing the source-control CONNECTION was configured with — a finding's own code.repo_name is the platform's DISPLAY casing and may not match as a filter, so take the key from cloudsec_code_repos rather than from a finding. Repeatable (OR within the key); at most 100 values are honored. REQUIRED unless facets=true — see the tool description for why")),
 	}
 	params = append(params, findingSelectorParams(paging)...)
 	return params
@@ -154,43 +154,10 @@ func handleCodeFindings(ctx context.Context, args map[string]interface{}) (*mcp.
 	if err != nil {
 		return tools.ErrorResultf("cloudsec request to %s failed: %s", path, describeErr(err)), nil
 	}
-	if note := repoCaseNote(q, resp); note != "" {
+	if note := emptyRepoPageNote(ctx, org, q, resp); note != "" {
 		resp["note"] = note
 	}
 	return tools.SuccessResult(resp), nil
-}
-
-// repoCaseNote turns a silent empty page into a diagnosable one.
-//
-// The `repo` selector is matched EXACTLY against a lower-cased stored key, while a
-// finding's own `code.repo_name` carries the source-control platform's display casing —
-// so an agent that reads "refractionPOINT/lc-appsec-fixtures" off one finding and feeds
-// it straight back as a filter gets zero rows and no reason. (The /code/repos list and
-// the `repo` facet both return the lower-cased form, which is the one that matches.)
-//
-// The value is passed through VERBATIM regardless: silently rewriting a caller's filter
-// would be a worse failure than an unexplained empty page, because it would answer a
-// question nobody asked. This only annotates the empty result.
-func repoCaseNote(q lc.Dict, resp map[string]interface{}) string {
-	if findings, ok := resp["findings"].([]interface{}); !ok || len(findings) > 0 {
-		return ""
-	}
-	repos, ok := q["repo"].([]string)
-	if !ok {
-		return ""
-	}
-	var mixed []string
-	for _, r := range repos {
-		if lower := strings.ToLower(r); lower != r {
-			mixed = append(mixed, lower)
-		}
-	}
-	if len(mixed) == 0 {
-		return ""
-	}
-	return "no findings matched, and the 'repo' filter is matched EXACTLY against a lower-cased key: " +
-		"try " + strings.Join(mixed, ", ") + ". A finding's code.repo_name carries the platform's display casing, " +
-		"which is NOT the filter key — cloudsec_code_repos and the 'repo' facet return the one that matches."
 }
 
 // codeFindingsRequest is handleCodeFindings's pure half: it picks the route and builds
@@ -233,6 +200,84 @@ func nonEmpty(in []string) []string {
 	for _, v := range in {
 		if strings.TrimSpace(v) != "" {
 			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// emptyRepoPageNote turns a silent empty page into a diagnosable one, by LOOKING rather
+// than guessing.
+//
+// The trap it exists for: `repo` is matched exactly, and the stored key's owner segment
+// carries whatever casing the SOURCE-CONTROL CONNECTION was configured with — not the
+// display casing a person reads on the platform, and not necessarily lower case either
+// (legion_graph/service/code_handlers.go says so where it builds the two candidate urns).
+// A finding's own `code.repo_name` is the display casing, so an agent that reads one off a
+// finding and feeds it straight back as a filter can get zero rows and no reason.
+//
+// Rather than assert a transformation — an earlier version of this suggested the
+// lower-cased key, which is right only for a connection that happens to be configured in
+// lower case — it asks /code/repos what the repository is actually called. That is one
+// bounded extra request, spent only on an empty page under a repo filter, and it answers
+// with a fact: either the real key, or that no such repository is in the inventory.
+//
+// It never fails the read: any error from the lookup produces no note.
+func emptyRepoPageNote(ctx context.Context, org *lc.Organization, q lc.Dict, resp map[string]interface{}) string {
+	if findings, ok := resp["findings"].([]interface{}); !ok || len(findings) > 0 {
+		return ""
+	}
+	repos, ok := q["repo"].([]string)
+	if !ok || len(repos) != 1 {
+		// With several keys in play there is no single thing to look up, and naming
+		// the wrong one would be worse than saying nothing.
+		return ""
+	}
+	asked := repos[0]
+
+	// The name segment, matched case-insensitively by the route's own `q`.
+	name := asked
+	if i := strings.LastIndex(asked, "/"); i >= 0 {
+		name = asked[i+1:]
+	}
+	if name == "" {
+		return ""
+	}
+	lookup, err := getJSON(ctx, org, orgPath(org, "code/repos"), lc.Dict{"q": name, "limit": 20})
+	if err != nil {
+		return ""
+	}
+	known := repoKeysOf(lookup)
+	if len(known) == 0 {
+		return "no findings matched, and no repository whose key contains " + name +
+			" is in this organization's collected inventory — check the source-control connection and the code_scanning policy scope."
+	}
+	for _, k := range known {
+		if k == asked {
+			// The key is right, so the empty page is the real answer: nothing matched
+			// under these filters. Saying that is worth a line, because the alternative
+			// reading is "the filter was wrong".
+			return "no findings matched; the repository key is correct, so this is an empty result under the other filters rather than a mis-typed key."
+		}
+	}
+	return "no findings matched, and '" + asked + "' is not the stored key. The 'repo' filter is matched EXACTLY, and the owner segment carries the casing the " +
+		"source-control connection was configured with (a finding's code.repo_name is the platform's display casing, which can differ). This organization has: " +
+		strings.Join(known, ", ")
+}
+
+// repoKeysOf pulls the `repo` keys out of a /code/repos payload.
+func repoKeysOf(resp map[string]interface{}) []string {
+	list, ok := resp["repos"].([]interface{})
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, item := range list {
+		row, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if key, ok := row["repo"].(string); ok && key != "" {
+			out = append(out, key)
 		}
 	}
 	return out
