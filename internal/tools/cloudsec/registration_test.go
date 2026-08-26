@@ -83,10 +83,14 @@ var writeTools = map[string]bool{
 	"cloudsec_ingest_caasm_records":    false, // idempotent merge
 	"cloudsec_test_provider":           false, // probe only, nothing persisted
 	// AppSec code lane. Neither is read-only: scan_local can push a report, and
-	// autofix is declared a write so its reserved name cannot be handed to a
-	// read-only profile and later start opening pull requests.
+	// autofix opens a pull request in the customer's own repository.
+	//
+	// AutoFix is a WRITE and not DESTRUCTIVE, and the distinction is worth stating: it
+	// creates a branch and a pull request and changes nothing that exists. Marking it
+	// destructive would put it behind the confirmation an irreversible action deserves
+	// and devalue that signal for the calls that are.
 	"cloudsec_code_scan_local": false, // ingest merges by identity; deletes nothing
-	"cloudsec_code_autofix":    false, // reserved; refuses every call
+	"cloudsec_code_autofix":    false, // creates a branch + pull request; destroys nothing
 }
 
 // noOIDTools do not take an organization: the fleet board's route carries no {oid}
