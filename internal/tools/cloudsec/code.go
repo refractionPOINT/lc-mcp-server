@@ -80,14 +80,21 @@ func registerCodeRepos() {
 			"(a machine-readable 'scan_status_reason' accompanies it). Keyset-paginated: pass the response's 'next_cursor' back as 'cursor'. A page may be SHORT while " +
 			"'next_cursor' is set — the cursor, not the page length, says whether the walk is done. " + codeLaneNote,
 		readOnly: true,
-		params: append([]mcp.ToolOption{
+		params: []mcp.ToolOption{
 			mcp.WithString("q",
 				mcp.Description("Case-insensitive substring filter over the repository key ('<owner>/<name>') and its urn")),
 			mcp.WithBoolean("has_findings",
 				mcp.Description("Restrict to repositories that do (or do not) carry at least one OPEN finding. Omit entirely for no constraint — absent is not false, and has_findings=false is a real selection (the repositories with a clean bill)")),
 			mcp.WithString("provider",
 				mcp.Description("Source-control provider filter (e.g. 'github'); omit for every provider that produces repositories")),
-		}, pagingParams("repositories")...),
+			mcp.WithString("cursor",
+				mcp.Description("Opaque keyset token returned as 'next_cursor' by a previous page; omit for the first page")),
+			// NOT pagingParams: that helper states the findings routes' cap of 1000,
+			// and this route's own cap is 500. Advertising a limit the handler then
+			// silently halves is exactly what mirroring the cap client-side is for.
+			mcp.WithNumber("limit",
+				mcp.Description(fmt.Sprintf("Maximum number of repositories for this page (backend default 100, max %d — a larger ask is reduced to that)", maxCodeRepoLimit))),
+		},
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
 			addScalars(q, args, "q", "provider", "cursor")
@@ -299,6 +306,9 @@ type localScanSpec struct {
 	Scanners string
 	Timeout  time.Duration
 	CLI      string
+	// OutputPath, when set, keeps a copy of the report outside the temporary
+	// directory the scan runs in. It is what a failed ingest is retried from.
+	OutputPath string
 }
 
 func registerCodeScanLocal() {
@@ -335,8 +345,8 @@ func registerCodeScanLocal() {
 				mcp.Description("Comma-separated engines to run. Available locally: "+strings.Join(localScanners, ", ")+" (default "+defaultLocalScanners+"). 'secrets' and 'secrets_history' are refused — see the tool description")),
 			mcp.WithNumber("timeout",
 				mcp.Description(fmt.Sprintf("Seconds to allow the scan (default %d, max %d)", int(codeScanDefaultTimeout/time.Second), int(codeScanMaxTimeout/time.Second)))),
-			mcp.WithString("cli",
-				mcp.Description("Path to the 'limacharlie' CLI, when it is not on PATH")),
+			mcp.WithString("output_path",
+				mcp.Description("Write the report here as well. Worth passing whenever ingest=true: a scan takes minutes and a failed push cannot be retried without rescanning, so this is the copy you retry from")),
 		},
 		handler: handleCodeScanLocal,
 	})
@@ -391,6 +401,16 @@ func handleCodeScanLocal(ctx context.Context, args map[string]interface{}) (*mcp
 		"report_bytes":    len(document),
 		"report_ingested": false,
 	}
+	if spec.OutputPath != "" {
+		if err := os.WriteFile(spec.OutputPath, document, 0o600); err != nil {
+			// Reported, not fatal: the scan happened and the ingest below can still
+			// succeed. Losing the copy is worth saying out loud, because it is the
+			// copy a failed push would have been retried from.
+			out["output_error"] = fmt.Sprintf("could not write %s: %v", spec.OutputPath, err)
+		} else {
+			out["report_written"] = spec.OutputPath
+		}
+	}
 	if !ingest {
 		// Said plainly, because a scan that produced findings and pushed none is easy
 		// to read as "nothing was found".
@@ -408,12 +428,14 @@ func handleCodeScanLocal(ctx context.Context, args map[string]interface{}) (*mcp
 
 	org, err := tools.GetOrganization(ctx)
 	if err != nil {
-		return tools.ErrorResultf("scan succeeded but the report could not be pushed: failed to get organization: %v", err), nil
+		return tools.ErrorResultf("the scan succeeded but the report could not be pushed (failed to get organization: %v) — %s",
+			err, retryAdvice(out)), nil
 	}
 	path := orgPath(org, "code/ingest")
 	resp, err := postJSON(ctx, org, path, body, codeIngestTimeout)
 	if err != nil {
-		return tools.ErrorResultf("the scan succeeded but the ingest to %s failed: %s", path, describeErr(err)), nil
+		return tools.ErrorResultf("the scan succeeded but the ingest to %s failed: %s — %s",
+			path, describeErr(err), retryAdvice(out)), nil
 	}
 	out["report_ingested"] = true
 	out["ingest"] = resp
@@ -440,6 +462,20 @@ func codeIngestBody(spec localScanSpec, args map[string]interface{}, document []
 	}
 	addScalarsTo(body, args, "ref", "provider")
 	return body
+}
+
+// retryAdvice says whether a failed push can be retried without rescanning.
+//
+// The report lives only in the scan's temporary directory, which is removed the moment
+// the scanner returns. A scan costs minutes, so a push that fails for any ordinary reason
+// — not subscribed, the repository not in the collected inventory, no enabled
+// code_scanning policy, the free-tier quota, a transient 502 — otherwise costs those
+// minutes again with nothing said about why.
+func retryAdvice(out map[string]interface{}) string {
+	if p, ok := out["report_written"].(string); ok && p != "" {
+		return "the report is at " + p + "; retry the push without rescanning"
+	}
+	return "the report was not kept, so a retry means rescanning: pass output_path to keep a copy"
 }
 
 // addScalarsTo is addScalars for a plain JSON body rather than a query Dict.
@@ -486,7 +522,7 @@ func localScanSpecFrom(args map[string]interface{}) (localScanSpec, *mcp.CallToo
 	if !info.IsDir() {
 		return localScanSpec{}, tools.ErrorResultf("path %q is a file; the scanner takes the ROOT of a working copy", abs)
 	}
-	if strings.Contains(abs, ":") {
+	if strings.Contains(mountablePart(abs), ":") {
 		// The checkout is bind-mounted as "<path>:/scan/src:ro", so a ':' mis-splits and
 		// the container runtime answers with an opaque "invalid mode".
 		return localScanSpec{}, tools.ErrorResultf(
@@ -506,19 +542,55 @@ func localScanSpecFrom(args map[string]interface{}) (localScanSpec, *mcp.CallToo
 		}
 	}
 
-	cli := argString(args, "cli")
+	// The CLI is named by the OPERATOR, never by the caller.
+	//
+	// This tool runs the named executable. In stdio mode the descriptions and finding
+	// text the calling agent reads are tenant-influenced content (a repository name, a
+	// finding's evidence), so a tool ARGUMENT naming an executable is a
+	// prompt-injection-to-exec primitive for an agent that has no shell otherwise.
+	// LC_CODE_SCANNER_CLI covers the "installed somewhere unusual" case without handing
+	// the choice to the model.
+	cli := strings.TrimSpace(os.Getenv("LC_CODE_SCANNER_CLI"))
 	if cli == "" {
 		cli = "limacharlie"
 	}
 
+	outputPath := strings.TrimSpace(argString(args, "output_path"))
+	if outputPath != "" {
+		// Probed BEFORE the scan: discovering an unwritable destination after twenty
+		// minutes of scanning helps nobody.
+		f, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+		if err != nil {
+			return localScanSpec{}, tools.ErrorResultf("cannot write output_path %q: %v", outputPath, err)
+		}
+		_ = f.Close()
+	}
+
 	return localScanSpec{
-		Path:     abs,
-		Repo:     strings.TrimSpace(argString(args, "repo")),
-		Commit:   strings.TrimSpace(argString(args, "commit")),
-		Scanners: scanners,
-		Timeout:  timeout,
-		CLI:      cli,
+		Path:       abs,
+		Repo:       strings.TrimSpace(argString(args, "repo")),
+		Commit:     strings.TrimSpace(argString(args, "commit")),
+		Scanners:   scanners,
+		Timeout:    timeout,
+		CLI:        cli,
+		OutputPath: outputPath,
 	}, nil
+}
+
+// mountablePart strips a Windows drive-letter prefix before the ':' check.
+//
+// Every absolute Windows path contains a colon — `C:\Users\me\src\api` — and the
+// container runtime handles that one specially (`C:\src:/scan/src:ro` is a valid mount).
+// Rejecting it outright made the tool unusable for every Windows user of Claude Code or
+// Cursor, with advice ("scan it from a path without one") that cannot be followed.
+func mountablePart(abs string) string {
+	if len(abs) >= 2 && abs[1] == ':' {
+		c := abs[0]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+			return abs[2:]
+		}
+	}
+	return abs
 }
 
 // resolveLocalScanners validates the engine list against what a local scan can run.

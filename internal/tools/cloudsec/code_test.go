@@ -411,3 +411,100 @@ func TestRepoKeyFromRemote(t *testing.T) {
 		assert.Equal(t, want, repoKeyFromRemote(remote), remote)
 	}
 }
+
+// Every absolute Windows path contains a colon, and the container runtime handles the
+// drive-letter one specially. Rejecting it outright made the tool unusable for every
+// Windows user, with advice that could not be followed.
+func TestMountablePartKeepsWindowsPathsUsable(t *testing.T) {
+	assert.Equal(t, `\Users\me\src\api`, mountablePart(`C:\Users\me\src\api`))
+	assert.Equal(t, `\src\api`, mountablePart(`d:\src\api`))
+	// The control: a colon anywhere else is still a colon, drive letter or not.
+	assert.Contains(t, mountablePart(`C:\src\od:d\api`), ":")
+	assert.Equal(t, "/home/me/src/api", mountablePart("/home/me/src/api"))
+	assert.Contains(t, mountablePart("/home/me/we:rd"), ":")
+	// Not a drive letter — a two-character path that merely starts with ':'.
+	assert.Equal(t, "1:/x", mountablePart("1:/x"))
+}
+
+// A scan costs minutes and its report lives only in a temporary directory, so a failed
+// push is unrecoverable unless a copy was kept. The failure has to say which case it is.
+func TestCodeScanLocalIngestFailureSaysWhetherThereIsACopy(t *testing.T) {
+	t.Setenv("MCP_MODE", "stdio")
+	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
+		return []byte("REPORT"), nil
+	})
+	defer restore()
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "report.json.gz")
+
+	// No organization in the context, so the push cannot happen.
+	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+		"path": dir, "repo": "acme/api", "ingest": true, "output_path": out,
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, codeResultText(result), "without rescanning")
+
+	// The control: with no output_path the same failure must say the opposite, or the
+	// message is decoration rather than information.
+	result, err = handleCodeScanLocal(context.Background(), map[string]interface{}{
+		"path": dir, "repo": "acme/api", "ingest": true,
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, codeResultText(result), "pass output_path")
+}
+
+func TestCodeScanLocalWritesTheRequestedCopy(t *testing.T) {
+	t.Setenv("MCP_MODE", "stdio")
+	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
+		return []byte("REPORT"), nil
+	})
+	defer restore()
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "report.json.gz")
+	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+		"path": dir, "repo": "acme/api", "output_path": out,
+	})
+	require.NoError(t, err)
+	require.False(t, result.IsError, codeResultText(result))
+	body, err := os.ReadFile(out)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("REPORT"), body)
+
+	t.Run("an unwritable destination is refused BEFORE the scan", func(t *testing.T) {
+		restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
+			t.Fatal("the scan must not start when the report has nowhere to land")
+			return nil, nil
+		})
+		defer restore()
+		res, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+			"path": dir, "output_path": filepath.Join(dir, "no-such-dir", "r.gz"),
+		})
+		require.NoError(t, err)
+		require.True(t, res.IsError)
+		assert.Contains(t, codeResultText(res), "cannot write output_path")
+	})
+}
+
+// The executable this tool runs is named by the OPERATOR, never by the caller: in stdio
+// mode the text the calling agent reads is tenant-influenced, so a tool argument naming
+// an executable would be a prompt-injection-to-exec primitive.
+func TestScannerCLIComesFromTheEnvironmentNotTheCaller(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_scan_local")
+	require.True(t, exists)
+	assert.NotContains(t, reg.Schema.InputSchema.Properties, "cli")
+
+	spec, errResult := localScanSpecFrom(map[string]interface{}{
+		"path": t.TempDir(), "cli": "/tmp/evil",
+	})
+	require.Nil(t, errResult)
+	assert.Equal(t, "limacharlie", spec.CLI, "a 'cli' argument must be ignored, not honored")
+
+	t.Setenv("LC_CODE_SCANNER_CLI", "/opt/lc/limacharlie")
+	spec, errResult = localScanSpecFrom(map[string]interface{}{"path": t.TempDir()})
+	require.Nil(t, errResult)
+	assert.Equal(t, "/opt/lc/limacharlie", spec.CLI)
+}

@@ -123,13 +123,22 @@ Requirements, all of which produce a clear refusal rather than a confusing failu
   server to read a directory it chose.
 - **Docker and the `limacharlie` CLI on PATH.** The scan is delegated to
   `limacharlie cloudsec code scan`, which owns the scanner image pin and the container contract, so a
-  local scan and the hosted scan cannot drift apart. Pass `cli` if it is installed somewhere unusual.
+  local scan and the hosted scan cannot drift apart. If it is installed somewhere unusual, the
+  **operator** names it with `LC_CODE_SCANNER_CLI` — deliberately an environment variable and not a
+  tool argument, because the text a calling agent reads (a repository name, a finding's evidence) is
+  tenant-influenced, and an argument naming an executable would be a way to turn that into one.
 - **Minutes, not seconds.** Default and maximum timeout is 30 minutes, matching the hosted job cap.
 
 `scanners` defaults to `sca,iac,licenses`; `sast` and `images` are also available locally.
 **`secrets` is refused**, and that is deliberate: a credential's identity in this pipeline is a digest
 keyed by a value only the hosted lane holds, so locally-found secrets would neither deduplicate
 against the hosted scan's nor be accepted by the ingest.
+
+Pass `output_path` whenever you pass `ingest`. The report otherwise lives only in the scan's
+temporary directory, which is removed as soon as the scanner returns — so a push that fails for any
+ordinary reason (not subscribed, the repository not in the collected inventory, no enabled
+`code_scanning` policy, the free-tier quota, a transient 502) costs the whole scan again. The failure
+message says which case you are in.
 
 With `ingest: true` and a `repo`, the report is pushed through **this server's own credential** to
 `/code/ingest`. The report format is loss-free, so it lands on exactly the rows a hosted scan of the
