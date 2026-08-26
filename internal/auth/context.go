@@ -149,8 +149,23 @@ func (a *AuthContext) GetClientOptions() lc.ClientOptions {
 		UID:         a.UID,
 		JWT:         a.JWTToken,
 		Environment: a.Environment,
+		// Empty unless the operator set LC_API_URL, in which case the SDK's own reads
+		// have to follow the raw HTTP calls some tool packages make directly. The two
+		// resolving differently would send reads and writes to different gateways.
+		URL: overrideURL(),
 	}
 	return opts
+}
+
+// overrideURL returns the SDK URL override: the configured API root when it is not the
+// production default, and "" otherwise. The SDK treats "" as "use your own default", so
+// passing the default through explicitly would work but would also mean this server
+// hardcodes a URL the SDK is entitled to change.
+func overrideURL() string {
+	if !IsAPIRootOverridden() {
+		return ""
+	}
+	return APIRoot()
 }
 
 // WithAuthContext adds an AuthContext to the context
