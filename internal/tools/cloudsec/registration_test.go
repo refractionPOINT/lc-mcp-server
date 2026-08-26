@@ -65,6 +65,9 @@ var readOnlyTools = []string{
 	// free tier / fleet
 	"cloudsec_get_free_tier_status",
 	"cloudsec_get_fleet_overview",
+	// AppSec code lane reads
+	"cloudsec_code_repos",
+	"cloudsec_code_findings",
 }
 
 // writeTools are the cloudsec.set tools, with the destructive classification each
@@ -79,6 +82,11 @@ var writeTools = map[string]bool{
 	"cloudsec_set_caasm_policy":        true,  // upsert replaces the whole policy
 	"cloudsec_ingest_caasm_records":    false, // idempotent merge
 	"cloudsec_test_provider":           false, // probe only, nothing persisted
+	// AppSec code lane. Neither is read-only: scan_local can push a report, and
+	// autofix is declared a write so its reserved name cannot be handed to a
+	// read-only profile and later start opening pull requests.
+	"cloudsec_code_scan_local": false, // ingest merges by identity; deletes nothing
+	"cloudsec_code_autofix":    false, // reserved; refuses every call
 }
 
 // noOIDTools do not take an organization: the fleet board's route carries no {oid}

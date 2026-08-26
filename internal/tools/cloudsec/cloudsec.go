@@ -36,6 +36,7 @@ func init() {
 	registerExport()
 	registerWrites()
 	registerFleet()
+	registerCode()
 }
 
 // toolDef describes one cloudsec tool. Registering through a single helper keeps the

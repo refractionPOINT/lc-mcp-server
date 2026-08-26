@@ -500,6 +500,11 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_ingest_caasm_records",
 		// Provider credential preflight
 		"cloudsec_test_provider",
+		// AppSec code lane (repository scanning)
+		"cloudsec_code_repos",
+		"cloudsec_code_findings",
+		"cloudsec_code_scan_local",
+		"cloudsec_code_autofix",
 	},
 	"cloud_security_readonly": {
 		// The cloudsec.get subset: every read plus the CSV export. Excludes all
@@ -556,6 +561,11 @@ var ProfileDefinitions = map[string][]string{
 		// Free tier / fleet (multi-org)
 		"cloudsec_get_free_tier_status",
 		"cloudsec_get_fleet_overview",
+		// AppSec code lane reads. cloudsec_code_scan_local is excluded: it can PUSH a
+		// report (ingest=true), and cloudsec_code_autofix is excluded because it is a
+		// declared non-read.
+		"cloudsec_code_repos",
+		"cloudsec_code_findings",
 	},
 }
 
