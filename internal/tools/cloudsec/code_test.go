@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -353,4 +354,32 @@ func TestCodeRepoLimitIsClamped(t *testing.T) {
 	assert.Equal(t, 500, maxCodeRepoLimit)
 	assert.Less(t, int64(codeScanDefaultTimeout), int64(codeScanMaxTimeout)+1)
 	assert.Equal(t, 30*time.Minute, codeScanMaxTimeout)
+}
+
+// The `repo` filter is matched exactly against a lower-cased stored key, while a
+// finding's own code.repo_name carries the platform's display casing. An agent that
+// reads one off a finding and feeds it back gets zero rows and no reason — so an empty
+// page under a mixed-case key says why.
+func TestRepoCaseNote(t *testing.T) {
+	empty := map[string]interface{}{"findings": []interface{}{}}
+
+	t.Run("an empty page under a mixed-case key names the key that matches", func(t *testing.T) {
+		note := repoCaseNote(lc.Dict{"repo": []string{"refractionPOINT/lc-appsec-fixtures"}}, empty)
+		assert.Contains(t, note, "refractionpoint/lc-appsec-fixtures")
+	})
+
+	t.Run("an empty page under an already-lower key says nothing", func(t *testing.T) {
+		// The control: the note must describe a CASING problem, not every empty page,
+		// or it becomes noise that hides the real one.
+		assert.Equal(t, "", repoCaseNote(lc.Dict{"repo": []string{"acme/api"}}, empty))
+	})
+
+	t.Run("a non-empty page says nothing", func(t *testing.T) {
+		full := map[string]interface{}{"findings": []interface{}{map[string]interface{}{}}}
+		assert.Equal(t, "", repoCaseNote(lc.Dict{"repo": []string{"Acme/API"}}, full))
+	})
+
+	t.Run("a response with no findings key at all says nothing", func(t *testing.T) {
+		assert.Equal(t, "", repoCaseNote(lc.Dict{"repo": []string{"Acme/API"}}, map[string]interface{}{}))
+	})
 }

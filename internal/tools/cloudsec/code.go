@@ -107,7 +107,7 @@ func registerCodeRepos() {
 func codeFindingParams(paging bool) []mcp.ToolOption {
 	params := []mcp.ToolOption{
 		mcp.WithArray("repo", mcp.WithStringItems(),
-			mcp.Description("Repository filter, keyed '<owner>/<name>' as cloudsec_code_repos returns them. Repeatable (OR within the key); at most 100 values are honored. REQUIRED unless facets=true — see the tool description for why")),
+			mcp.Description("Repository filter, keyed '<owner>/<name>' EXACTLY as cloudsec_code_repos and the 'repo' facet return it — the stored key is lower-cased, while a finding's own code.repo_name carries the platform's display casing and does NOT match as a filter. Repeatable (OR within the key); at most 100 values are honored. REQUIRED unless facets=true — see the tool description for why")),
 	}
 	params = append(params, findingSelectorParams(paging)...)
 	return params
@@ -141,7 +141,56 @@ func handleCodeFindings(ctx context.Context, args map[string]interface{}) (*mcp.
 	if errResult != nil {
 		return errResult, nil
 	}
-	return readGET(ctx, suffix, q)
+	if suffix != "findings" {
+		return readGET(ctx, suffix, q)
+	}
+
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return tools.ErrorResultf("failed to get organization: %v", err), nil
+	}
+	path := orgPath(org, suffix)
+	resp, err := getJSON(ctx, org, path, q)
+	if err != nil {
+		return tools.ErrorResultf("cloudsec request to %s failed: %s", path, describeErr(err)), nil
+	}
+	if note := repoCaseNote(q, resp); note != "" {
+		resp["note"] = note
+	}
+	return tools.SuccessResult(resp), nil
+}
+
+// repoCaseNote turns a silent empty page into a diagnosable one.
+//
+// The `repo` selector is matched EXACTLY against a lower-cased stored key, while a
+// finding's own `code.repo_name` carries the source-control platform's display casing —
+// so an agent that reads "refractionPOINT/lc-appsec-fixtures" off one finding and feeds
+// it straight back as a filter gets zero rows and no reason. (The /code/repos list and
+// the `repo` facet both return the lower-cased form, which is the one that matches.)
+//
+// The value is passed through VERBATIM regardless: silently rewriting a caller's filter
+// would be a worse failure than an unexplained empty page, because it would answer a
+// question nobody asked. This only annotates the empty result.
+func repoCaseNote(q lc.Dict, resp map[string]interface{}) string {
+	if findings, ok := resp["findings"].([]interface{}); !ok || len(findings) > 0 {
+		return ""
+	}
+	repos, ok := q["repo"].([]string)
+	if !ok {
+		return ""
+	}
+	var mixed []string
+	for _, r := range repos {
+		if lower := strings.ToLower(r); lower != r {
+			mixed = append(mixed, lower)
+		}
+	}
+	if len(mixed) == 0 {
+		return ""
+	}
+	return "no findings matched, and the 'repo' filter is matched EXACTLY against a lower-cased key: " +
+		"try " + strings.Join(mixed, ", ") + ". A finding's code.repo_name carries the platform's display casing, " +
+		"which is NOT the filter key — cloudsec_code_repos and the 'repo' facet return the one that matches."
 }
 
 // codeFindingsRequest is handleCodeFindings's pure half: it picks the route and builds
