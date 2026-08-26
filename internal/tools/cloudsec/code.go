@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -18,8 +19,9 @@ import (
 
 // The AppSec "code lane" surface: the repositories a connected source-control
 // organization exposes to Cloud Security, the findings scanning them produced, a local
-// scan an IDE agent can run against a working copy before anything is pushed, and the
-// reserved name for dependency AutoFix.
+// scan an IDE agent can run against a working copy before anything is pushed, and the one
+// tool here that WRITES — dependency AutoFix, which opens a pull request in the customer's
+// own repository.
 //
 // The read half is the SAME pipeline as the cloud half — a repository is a DataStore row
 // of kind `repo`, its findings are ordinary cs_findings rows — so these tools wrap the
@@ -773,48 +775,68 @@ func tailLines(s string, n int) string {
 }
 
 // ------------------------------------------------------------------
-// cloudsec_code_autofix (reserved)
+// cloudsec_code_autofix
 // ------------------------------------------------------------------
 
-// autofixReason is the machine-readable token a caller can branch on. It is a token
-// rather than prose so an agent can tell "this capability is not built" apart from "this
-// call failed", which are different things to retry.
-const autofixReason = "code_autofix_not_available"
+// autofixTimeout bounds the call. The route ACCEPTS and returns — the clone, the edit and
+// the pull request happen for minutes afterwards inside a sandbox — so this covers a
+// queue-and-acknowledge, not the work.
+const autofixTimeout = 60 * time.Second
+
+// findingIDRe is the shape of a finding id.
+//
+// It is checked here rather than left to the gateway for one reason that matters more for
+// an agent than for a human: a model asked to "fix this" will reach for whatever string is
+// nearest, and a whole finding OBJECT or a CVE id sent as `finding_id` would come back as
+// "no finding with that id" — which reads as "it was already fixed" and is the wrong thing
+// to learn. Refusing it here says what a finding id looks like and where to get one.
+var findingIDRe = regexp.MustCompile(`^fnd_[0-9a-f]{32}$`)
 
 func registerCodeAutofix() {
 	register(toolDef{
 		name: "cloudsec_code_autofix",
-		description: "RESERVED — NOT AVAILABLE YET. Named now so the tool surface is stable, and it returns a structured refusal on every call rather than doing anything. " +
-			"When it ships it will open a pull request bumping the manifest/lockfile for a dependency finding that carries a fixed_version, using a separate, " +
-			"opt-in, write-scoped source-control credential that does not exist yet either (the read connector this organization uses is read-only, permanently). " +
-			"Until then the remediation path for a dependency finding is the fixed_version on the finding itself: call cloudsec_code_findings, read " +
-			"'code.fixed_version' (or the vulnerability evidence), make the bump yourself, and cloudsec_code_scan_local will confirm it before you push. " +
-			"Do not retry this tool; nothing about the organization's configuration will change its answer. " + codeLaneNote,
+		description: "Open a PULL REQUEST in the customer's repository raising the vulnerable dependency a finding is about. THIS WRITES TO THEIR SOURCE CONTROL — ask before calling it. " +
+			"The finding id is the only input that decides anything: the backend resolves it against the dependency rows its own scan produced and raises THAT package to THAT " +
+			"advisory's fixed version, so there is deliberately no way to name a package or a version here. It ACCEPTS and returns; the pull request appears minutes later and IS " +
+			"the result — this response only says the request was queued, so do not report a pull request as opened on the strength of it. " +
+			"Each of these is a quiet no-op rather than an error: no Code Actions App configured, or one lacking 'Contents: Read and write' (the write App is separate and opt-in — " +
+			"the read-only connector is never used to write); a MALICIOUS package, where the remediation is removal and credential rotation rather than an upgrade; a finding with no " +
+			"published fixed version; an ecosystem other than npm, pip, go or maven; a repository outside the code_scanning policy scope or over the free-tier quota; a package that " +
+			"already has an AutoFix pull request open (one per repository and package at a time); and a connection at its daily AutoFix limit. " +
+			"For npm and go the LOCKFILE IS NOT REGENERATED — the scanning sandbox has no package-registry access by design — and the pull request itself says so and names the command " +
+			"to run; pip (requirements.txt) and maven have no lockfile, so those changes are complete. Read the finding first with cloudsec_code_findings: 'code.fixed_version' is what " +
+			"will be applied, and if you would rather make the change locally, cloudsec_code_scan_local confirms it before you push. " + codeLaneNote,
+		// A write, and not a destructive one: it creates a branch and a pull request and
+		// changes nothing that exists. Marking it destructive would put it behind the
+		// confirmation an irreversible action deserves and devalue that signal.
 		readOnly:    false,
 		destructive: false,
 		params: []mcp.ToolOption{
 			mcp.WithString("finding_id",
-				mcp.Description("The dependency finding (fnd_...) a fix would be opened for. Accepted and echoed back so a caller can see the request was understood; nothing is done with it")),
+				mcp.Required(),
+				mcp.Description("The dependency (SCA) finding to fix — 'fnd_' followed by 32 hexadecimal characters, exactly as cloudsec_code_findings returns it in 'finding_id'. Not a CVE id, not a package name, not the finding object")),
 			mcp.WithString("repo",
-				mcp.Description("Repository key '<owner>/<name>'. Same: accepted, echoed, unused")),
+				mcp.Description("Repository key '<owner>/<name>' as cloudsec_code_repos returns it. Optional and only a SEARCH HINT — the finding id is what is acted on — but worth passing: without it the backend searches the in-scope repositories")),
+			mcp.WithString("provider",
+				mcp.Description("Source-control provider the repository belongs to; defaults to 'github'")),
 		},
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			payload := map[string]interface{}{
-				"error":  "cloudsec_code_autofix is reserved and not available yet",
-				"reason": autofixReason,
-				"detail": "Dependency AutoFix pull requests are not built. This tool exists so the code-lane tool surface is stable and so " +
-					"a caller gets one clear answer instead of a guess; it will never open a pull request in this build.",
-				"remediation": "Read the finding's fixed_version with cloudsec_code_findings, apply the bump yourself, and verify it with " +
-					"cloudsec_code_scan_local before pushing.",
-				"retryable": false,
+			findingID := strings.ToLower(strings.TrimSpace(argString(args, "finding_id")))
+			if findingID == "" {
+				return tools.ErrorResultf("finding_id is required: the id of the dependency finding to fix, as cloudsec_code_findings returns it"), nil
 			}
-			if v := argString(args, "finding_id"); v != "" {
-				payload["finding_id"] = v
+			if !findingIDRe.MatchString(findingID) {
+				return tools.ErrorResultf(
+					"%q is not a finding id. A finding id is 'fnd_' followed by 32 hexadecimal characters and comes from cloudsec_code_findings "+
+						"(the 'finding_id' field) — not a CVE id, a package name or the finding object", findingID), nil
 			}
-			if v := argString(args, "repo"); v != "" {
-				payload["repo"] = v
+			body := map[string]interface{}{"finding_id": findingID}
+			for _, k := range []string{"repo", "provider"} {
+				if v := strings.TrimSpace(argString(args, k)); v != "" {
+					body[k] = v
+				}
 			}
-			return tools.ErrorResult(tools.ToJSON(payload)), nil
+			return callPOST(ctx, "code/autofix", body, autofixTimeout)
 		},
 	})
 }

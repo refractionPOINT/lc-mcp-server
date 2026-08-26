@@ -305,27 +305,42 @@ func stubCodeScanRunner(t *testing.T, fn func(context.Context, localScanSpec) ([
 // cloudsec_code_autofix
 // ------------------------------------------------------------------
 
-// The stub's whole value is that its refusal is machine-readable: an agent has to be
-// able to tell "this capability does not exist" from "this call failed", because only
-// one of the two is worth retrying.
-func TestCodeAutofixRefusesStructurally(t *testing.T) {
+// The tool WRITES to a customer's repository, so the input it is given has to be the one
+// thing that authorizes the write. An agent asked to "fix this" will reach for whatever
+// string is nearest — a CVE id, a package name, the whole finding object — and every one of
+// those would come back from the gateway as "no finding with that id", which reads as "it
+// was already fixed" and is the wrong thing for a model to learn.
+func TestCodeAutofixRefusesAnythingThatIsNotAFindingID(t *testing.T) {
 	reg, exists := tools.GetTool("cloudsec_code_autofix")
 	require.True(t, exists)
 
-	result, err := reg.Handler(context.Background(), map[string]interface{}{
-		"finding_id": "fnd_123", "repo": "acme/api",
-	})
-	require.NoError(t, err)
-	require.True(t, result.IsError)
+	for _, bad := range []string{
+		"", "   ", "fnd_123", "CVE-2021-23337", "lodash",
+		"fnd_" + strings.Repeat("z", 32), "fnd_" + strings.Repeat("a", 31),
+		`{"finding_id":"fnd_` + strings.Repeat("a", 32) + `"}`,
+	} {
+		result, err := reg.Handler(context.Background(), map[string]interface{}{"finding_id": bad})
+		require.NoError(t, err, bad)
+		require.True(t, result.IsError, "finding_id %q was accepted", bad)
+		// The refusal has to say what a finding id looks like AND where to get one;
+		// "invalid input" leaves an agent guessing at the same wrong string again.
+		assert.Contains(t, codeResultText(result), "cloudsec_code_findings", bad)
+	}
+}
 
-	var payload map[string]interface{}
-	require.NoError(t, json.Unmarshal([]byte(codeResultText(result)), &payload))
-	assert.Equal(t, autofixReason, payload["reason"])
-	assert.Equal(t, false, payload["retryable"])
-	assert.Equal(t, "fnd_123", payload["finding_id"])
-	assert.Equal(t, "acme/api", payload["repo"])
-	// It must point somewhere real, or a caller is simply stuck.
-	assert.Contains(t, payload["remediation"], "cloudsec_code_findings")
+// The description has to carry the two things a caller cannot discover from the response,
+// because the response is only "accepted": that the pull request is the actual result, and
+// that for npm and go the lockfile is NOT regenerated. An agent that reports "fixed" on the
+// strength of an accepted call, or that believes an npm bump changed what installs, is
+// worse than no tool.
+func TestCodeAutofixDescriptionCarriesWhatTheResponseCannot(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_autofix")
+	require.True(t, exists)
+	for _, want := range []string{
+		"WRITES", "queued", "lockfile", "MALICIOUS", "fixed version",
+	} {
+		assert.Contains(t, reg.Description, want)
+	}
 }
 
 // Every code tool's honest empty answer is indistinguishable from "the lane was never
