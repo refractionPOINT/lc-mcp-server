@@ -383,3 +383,25 @@ func TestRepoCaseNote(t *testing.T) {
 		assert.Equal(t, "", repoCaseNote(lc.Dict{"repo": []string{"Acme/API"}}, map[string]interface{}{}))
 	})
 }
+
+// The repository a finding belongs to is an identity, so a remote that does not name a
+// hosted repository must yield nothing rather than a plausible guess: "/home/me/src/api"
+// would produce the wrong-but-believable key "src/api".
+func TestRepoKeyFromRemote(t *testing.T) {
+	for remote, want := range map[string]string{
+		"https://github.com/acme/api.git":      "acme/api",
+		"https://github.com/acme/api/":         "acme/api",
+		"git@github.com:acme/api.git":          "acme/api",
+		"ssh://git@github.com:22/acme/api.git": "acme/api",
+		"https://user:tok@github.com/acme/api": "acme/api",
+		"https://gitlab.example.com/g/sub/api": "sub/api",
+		"/home/me/src/api":                     "",
+		"file:///home/me/src/api":              "",
+		"../sibling/api":                       "",
+		"https://github.com/acme":              "",
+		"":                                     "",
+		"   ":                                  "",
+	} {
+		assert.Equal(t, want, repoKeyFromRemote(remote), remote)
+	}
+}

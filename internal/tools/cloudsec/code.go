@@ -315,6 +315,16 @@ func handleCodeScanLocal(ctx context.Context, args map[string]interface{}) (*mcp
 	if errResult != nil {
 		return errResult, nil
 	}
+	// Filled from the checkout when the caller did not say. This process is the one
+	// that pushes, so these have to be resolved here: what the CLI infers stays inside
+	// its own report, while the commit and repository that land on a finding are the
+	// ones sent from here.
+	if spec.Commit == "" {
+		spec.Commit = gitHead(ctx, spec.Path)
+	}
+	if spec.Repo == "" {
+		spec.Repo = gitRepoKey(ctx, spec.Path)
+	}
 
 	ingest, _ := argBool(args, "ingest")
 	if ingest && spec.Repo == "" {
@@ -657,3 +667,100 @@ func registerCodeAutofix() {
 // tool's honest empty answer ("no repositories", "no findings") is indistinguishable
 // from "the lane was never enabled", which is the likelier cause by far.
 const codeLaneNote = `The code lane is OPT-IN per organization: it runs only where a "code_scanning" record exists in the "cloudsec_policy" hive (read/write it with the generic hive tools) and a source-control provider is connected in the "cloudsec_provider" hive. An empty answer from a code tool usually means one of those two is missing, NOT that the code is clean.`
+
+// ------------------------------------------------------------------
+// reading the checkout
+// ------------------------------------------------------------------
+
+// The commit and the repository key are resolved HERE rather than left to the CLI,
+// even though the CLI resolves them too, for one reason: this process is the one that
+// PUSHES. The CLI runs with --no-ingest, so whatever it infers stays inside its own
+// report; the `commit` and `repo` that land on the finding are the ones this process
+// sends. Reporting an empty commit while the document carries one — which is what
+// happened the first time this ran against a real clone — is a finding labelled with
+// the wrong checkout.
+
+// gitHead is the checked-out revision, or "".
+//
+// A directory that is not a git working tree is a perfectly good thing to scan; it just
+// cannot say which revision it is, and a fabricated one would mislabel every finding.
+func gitHead(ctx context.Context, root string) string {
+	return gitOutput(ctx, root, "rev-parse", "HEAD")
+}
+
+// gitRepoKey is the '<owner>/<name>' key from the checkout's origin remote, or "".
+func gitRepoKey(ctx context.Context, root string) string {
+	return repoKeyFromRemote(gitOutput(ctx, root, "config", "--get", "remote.origin.url"))
+}
+
+// repoKeyFromRemote parses a remote URL into the repository key, mirroring the CLI's
+// rules (limacharlie/commands/cloudsec.py _git_repo_key) so a local scan and a CLI scan
+// of the same checkout attribute their findings to the same node.
+//
+// It is read from the REMOTE, never from the directory name: the directory is whatever
+// the person cloned it as, and the repository a finding belongs to is an identity. A
+// remote that names no hosted repository — a local path, a file:// clone — is refused
+// rather than parsed, because "/home/me/src/api" would yield the plausible and WRONG
+// key "src/api", which is exactly the guess the ingest guard exists to prevent.
+func repoKeyFromRemote(raw string) string {
+	u := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if u == "" {
+		return ""
+	}
+	u = strings.TrimSuffix(u, ".git")
+
+	var tail string
+	switch {
+	case strings.Contains(u, "://"):
+		parts := strings.SplitN(u, "://", 2)
+		scheme, rest := strings.ToLower(parts[0]), parts[1]
+		if scheme == "file" || !strings.Contains(rest, "/") {
+			return ""
+		}
+		host, t, _ := strings.Cut(rest, "/")
+		// Strip any credentials before judging the host.
+		if i := strings.LastIndex(host, "@"); i >= 0 {
+			host = host[i+1:]
+		}
+		host, _, _ = strings.Cut(host, ":") // drop an explicit port
+		if !strings.Contains(host, ".") && strings.ToLower(host) != "localhost" {
+			return ""
+		}
+		tail = t
+	case strings.Contains(u, ":"):
+		// scp-style: [user@]host:owner/name
+		host, t, _ := strings.Cut(u, ":")
+		if i := strings.LastIndex(host, "@"); i >= 0 {
+			host = host[i+1:]
+		}
+		if !strings.Contains(host, ".") {
+			return ""
+		}
+		tail = t
+	default:
+		return ""
+	}
+
+	var segments []string
+	for _, p := range strings.Split(tail, "/") {
+		if p != "" {
+			segments = append(segments, p)
+		}
+	}
+	if len(segments) < 2 {
+		return ""
+	}
+	return segments[len(segments)-2] + "/" + segments[len(segments)-1]
+}
+
+// gitOutput runs one git command in root and returns its trimmed stdout, or "" for any
+// failure. Every caller treats "" as "the checkout did not say", which is a real answer.
+func gitOutput(ctx context.Context, root string, args ...string) string {
+	cmdCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cmdCtx, "git", append([]string{"-C", root}, args...)...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
