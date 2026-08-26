@@ -137,6 +137,16 @@ func registerCodeFindings() {
 }
 
 func handleCodeFindings(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	suffix, q, errResult := codeFindingsRequest(args)
+	if errResult != nil {
+		return errResult, nil
+	}
+	return readGET(ctx, suffix, q)
+}
+
+// codeFindingsRequest is handleCodeFindings's pure half: it picks the route and builds
+// the query, so the scoping rule is testable without a gateway.
+func codeFindingsRequest(args map[string]interface{}) (string, lc.Dict, *mcp.CallToolResult) {
 	facets, _ := argBool(args, "facets")
 	repos, _ := argStrings(args, "repo")
 	repos = nonEmpty(repos)
@@ -146,10 +156,10 @@ func handleCodeFindings(ctx context.Context, args map[string]interface{}) (*mcp.
 		// selector, so dropping the constraint does not return "all code findings" —
 		// it returns the whole estate's worklist, cloud findings included, under a
 		// tool named for the code lane.
-		return tools.ErrorResult(
+		return "", nil, tools.ErrorResult(
 			"cloudsec_code_findings needs at least one 'repo' to list: the findings backend has no 'any repository' selector, " +
 				"so an unscoped list would return the organization's cloud findings as well. " +
-				"Call this tool with facets=true, or call cloudsec_code_repos, to get the repository keys first."), nil
+				"Call this tool with facets=true, or call cloudsec_code_repos, to get the repository keys first.")
 	}
 
 	q := lc.Dict{}
@@ -158,9 +168,9 @@ func handleCodeFindings(ctx context.Context, args map[string]interface{}) (*mcp.
 		q["repo"] = repos
 	}
 	if facets {
-		return readGET(ctx, "findings/facets", q)
+		return "findings/facets", q, nil
 	}
-	return readGET(ctx, "findings", q)
+	return "findings", q, nil
 }
 
 // nonEmpty drops blank elements from a repeatable filter.
@@ -290,18 +300,7 @@ func handleCodeScanLocal(ctx context.Context, args map[string]interface{}) (*mcp
 			len(document), maxCodeIngestBytes), nil
 	}
 
-	body := map[string]interface{}{
-		"repo": spec.Repo,
-		// The scanner's own document. Base64 rather than decoded and re-encoded: it is a
-		// gzip stream, which JSON cannot carry, and re-parsing megabytes to send the same
-		// bytes buys nothing.
-		"source":       "report",
-		"document_b64": base64.StdEncoding.EncodeToString(document),
-	}
-	if spec.Commit != "" {
-		body["commit"] = spec.Commit
-	}
-	addScalarsTo(body, args, "ref", "provider")
+	body := codeIngestBody(spec, args, document)
 
 	org, err := tools.GetOrganization(ctx)
 	if err != nil {
@@ -315,6 +314,28 @@ func handleCodeScanLocal(ctx context.Context, args map[string]interface{}) (*mcp
 	out["report_ingested"] = true
 	out["ingest"] = resp
 	return tools.SuccessResult(out), nil
+}
+
+// codeIngestBody builds the /code/ingest request for a report this process just
+// produced. It is the same body the SDK sends (limacharlie/sdk/cloudsec.py
+// ingest_code_results), so a report pushed from here lands exactly where a report
+// pushed by the CLI would.
+func codeIngestBody(spec localScanSpec, args map[string]interface{}, document []byte) map[string]interface{} {
+	body := map[string]interface{}{
+		"repo": spec.Repo,
+		// `report` and not `sarif`/`cyclonedx`: this is the scanner's own document, which
+		// is loss-free, and its provenance token is the one that lets a local push update
+		// the hosted scan's rows instead of duplicating them.
+		"source": "report",
+		// Base64 rather than decoded and re-encoded: it is a gzip stream, which JSON
+		// cannot carry, and re-parsing megabytes to send the same bytes buys nothing.
+		"document_b64": base64.StdEncoding.EncodeToString(document),
+	}
+	if spec.Commit != "" {
+		body["commit"] = spec.Commit
+	}
+	addScalarsTo(body, args, "ref", "provider")
+	return body
 }
 
 // addScalarsTo is addScalars for a plain JSON body rather than a query Dict.
