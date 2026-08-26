@@ -21,7 +21,7 @@ This server bridges AI assistants and the LimaCharlie security platform through 
 
 ## Features
 
-- **339 MCP Tools** across 13 specialized profiles
+- **343 MCP Tools** across 13 specialized profiles
 - **Multi-Tenant Architecture** with strict credential isolation
 - **Dual Transport Modes**: STDIO (local) and HTTP (cloud with OAuth 2.1)
 - **AI-Powered Generation**: Automatic rule and query creation using Claude (default: Claude Sonnet 4.6)
@@ -135,9 +135,9 @@ The server organizes tools into profiles for different use cases:
 | **ai_powered** | 18 | AI-assisted content generation | Auto-generate rules/queries; AI sessions, usage, memory |
 | **investigation_management** | 20 | Case management | Cases, notes, entities, detections, telemetry, artifacts |
 | **api_access** | 1 | Generic API escape-hatch | Raw LimaCharlie API calls |
-| **cloud_security** | 49 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes |
-| **cloud_security_readonly** | 40 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
-| **all** | 339 | All profiles combined | Full platform access |
+| **cloud_security** | 53 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes, AppSec code lane |
+| **cloud_security_readonly** | 42 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
+| **all** | 343 | All profiles combined | Full platform access |
 
 ## Configuration
 
@@ -195,7 +195,20 @@ export SDK_CACHE_TTL="5m"  # Cache TTL (e.g., "5m", "1h", "30s")
 # AI-Powered Tools (requires Anthropic Claude)
 export ANTHROPIC_KEY="your-anthropic-api-key"
 export LLM_YAML_RETRY_COUNT="10"  # Validation retry count
+
+# Gateway override (staging). Repoints EVERY LimaCharlie REST call this process makes.
+# Server-level and read once at startup, never a per-request argument. A value that is
+# not an http(s) URL is ignored and production is used.
+export LC_API_URL="https://api.limacharlie.io"
 ```
+
+### Cloud Security: the AppSec code lane
+
+`cloudsec_code_repos`, `cloudsec_code_findings`, `cloudsec_code_scan_local` and the reserved
+`cloudsec_code_autofix` expose repository scanning to an IDE agent — including a scan of the working
+copy on your own machine, before anything is pushed. Setup for Claude Code and Cursor, the opt-in
+switches the lane needs, and why `cloudsec_code_findings` requires a repository:
+[docs/CLOUD-SECURITY-CODE.md](docs/CLOUD-SECURITY-CODE.md).
 
 ## Usage Examples
 
@@ -271,7 +284,7 @@ Claude uses: add_tag
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │   Auth      │  │     Tools    │  │   SDK Cache  │     │
 │  │   Context   │  │   Registry   │  │   (Thread-   │     │
-│  │   Isolation │  │   (339)      │  │    Safe)     │     │
+│  │   Isolation │  │   (343)      │  │    Safe)     │     │
 │  └─────────────┘  └──────────────┘  └──────────────┘     │
 │                                                             │
 └────────────────────────┬────────────────────────────────────┘
@@ -328,7 +341,7 @@ lc-mcp-server/
 │   │   ├── state/           # OAuth state management
 │   │   └── token/           # Token encryption and storage
 │   │
-│   └── tools/               # MCP tool implementations (339 tools)
+│   └── tools/               # MCP tool implementations (343 tools)
 │       ├── registry.go      # Tool registration system
 │       ├── core/            # Core + fleet sensor ops (9 tools)
 │       ├── historical/      # Historical data & LCQL (13 tools)
