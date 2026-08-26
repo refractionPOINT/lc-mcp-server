@@ -11,12 +11,21 @@ import (
 	"time"
 
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 )
 
-// lcAPIRoot is the LimaCharlie REST API root, mirroring the SDK's own default
-// (rootURL "https://api.limacharlie.io" + API version "v1"). The MCP server
-// never sets lc.ClientOptions.URL, so there is no configured override to read.
-const lcAPIRoot = "https://api.limacharlie.io/v1/"
+// lcAPIRoot is the LimaCharlie REST API root for this process: whatever
+// auth.APIRoot() resolved (the production gateway unless the operator set
+// LC_API_URL), plus the API version.
+//
+// It is READ, not hardcoded, because it is the same value the SDK client is
+// constructed with. A hardcoded root here meant that pointing the server at a
+// staging gateway moved every other call and left this one talking to production
+// with the same credential — one route silently answering from a different estate
+// is worse than no override at all.
+func lcAPIRoot() string {
+	return auth.APIRoot() + "/v1/"
+}
 
 // jsonPostTimeout bounds a single PostJSON attempt.
 const jsonPostTimeout = 2 * time.Minute
@@ -42,7 +51,7 @@ func PostJSON(ctx context.Context, org *lc.Organization, path string, body inter
 		return fmt.Errorf("failed to marshal request body: %w", err)
 	}
 
-	fullURL := lcAPIRoot + strings.TrimPrefix(path, "/")
+	fullURL := lcAPIRoot() + strings.TrimPrefix(path, "/")
 
 	status, respBody, err := postJSONOnce(ctx, org.GetCurrentJWT(), fullURL, raw)
 	if err != nil {
