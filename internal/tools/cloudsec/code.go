@@ -249,12 +249,14 @@ func emptyRepoPageNote(ctx context.Context, org *lc.Organization, q lc.Dict, res
 	if name == "" {
 		return ""
 	}
-	lookup, err := getJSON(ctx, org, orgPath(org, "code/repos"), lc.Dict{"q": name, "limit": 20})
-	if err != nil {
-		return ""
-	}
-	known := repoKeysOf(lookup)
+	known, complete := lookupRepoKeys(ctx, org, name)
 	if len(known) == 0 {
+		if !complete {
+			// The walk did not finish, so "no such repository" is not something this
+			// knows. Saying it anyway would be a confident wrong answer about the
+			// caller's own estate.
+			return ""
+		}
 		return "no findings matched, and no repository whose key contains " + name +
 			" is in this organization's collected inventory — check the source-control connection and the code_scanning policy scope."
 	}
@@ -269,6 +271,43 @@ func emptyRepoPageNote(ctx context.Context, org *lc.Organization, q lc.Dict, res
 	return "no findings matched, and '" + asked + "' is not the stored key. The 'repo' filter is matched EXACTLY, and the owner segment carries the casing the " +
 		"source-control connection was configured with (a finding's code.repo_name is the platform's display casing, which can differ). This organization has: " +
 		strings.Join(known, ", ")
+}
+
+// maxRepoLookupPages bounds the walk emptyRepoPageNote does. Four pages of 500 covers an
+// estate several times larger than any we have; past it the note says nothing rather than
+// spending more of the caller's latency on a diagnostic.
+const maxRepoLookupPages = 4
+
+// lookupRepoKeys walks /code/repos for a name fragment, returning the matching keys and
+// whether the walk COMPLETED.
+//
+// The page size is the route's maximum on purpose. `q` is applied WITHIN a keyset page,
+// not across the walk, so a small limit makes a repository that exists look absent — a
+// 20-row lookup on this estate returned nothing for a repository whose findings were on
+// screen at the time. The completion flag exists for the same reason: a truncated walk
+// can only report what it saw, never that something is missing.
+func lookupRepoKeys(ctx context.Context, org *lc.Organization, name string) ([]string, bool) {
+	var keys []string
+	cursor := ""
+	for page := 0; page < maxRepoLookupPages; page++ {
+		q := lc.Dict{"q": name, "limit": maxCodeRepoLimit}
+		if cursor != "" {
+			q["cursor"] = cursor
+		}
+		resp, err := getJSON(ctx, org, orgPath(org, "code/repos"), q)
+		if err != nil {
+			return keys, false
+		}
+		keys = append(keys, repoKeysOf(resp)...)
+		next, _ := resp["next_cursor"].(string)
+		if next == "" {
+			return keys, true
+		}
+		// A page may be SHORT while next_cursor is set: the cursor, not the page
+		// length, says whether the walk is done.
+		cursor = next
+	}
+	return keys, false
 }
 
 // repoKeysOf pulls the `repo` keys out of a /code/repos payload.
