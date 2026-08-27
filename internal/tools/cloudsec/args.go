@@ -243,7 +243,11 @@ func addInt(dst lc.Dict, args map[string]interface{}, key string, max int) {
 func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) {
 	addStrings(dst, args, "severity", "finding_class", "status", "account", "owner")
 	addTriState(dst, args, "reachable", "kev")
-	addScalars(dst, args, "q", "sort", "order")
+	// `source` is a SCALAR here, deliberately: the AppSec code lane's producer
+	// vocabulary already spends its multi-value case on `both`. It is NOT the `source`
+	// of addIdentitySelector, which is a repeatable producing-SWEEP filter — the two
+	// share a word and nothing else, and they never reach the same route.
+	addScalars(dst, args, "q", "sort", "order", "source")
 	if paging {
 		addScalars(dst, args, "cursor")
 		addInt(dst, args, "limit", maxPageLimit)

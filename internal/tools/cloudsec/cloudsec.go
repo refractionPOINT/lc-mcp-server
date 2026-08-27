@@ -163,6 +163,17 @@ func findingSelectorParams(paging bool) []mcp.ToolOption {
 			mcp.Description("Restrict to findings on internet-reachable (or not reachable) resources. Omit entirely for no constraint — absent is not false")),
 		mcp.WithBoolean("kev",
 			mcp.Description("Restrict to findings carrying a CISA KEV vulnerability (or not). Omit for no constraint")),
+		mcp.WithString("source",
+			mcp.Description("AppSec code-lane PRODUCER filter — which scanner found the finding. "+
+				"'hosted' = the scan LimaCharlie ran; 'ingest' = a document the customer's own pipeline pushed (SARIF, CycloneDX, or a local scan); "+
+				"'other' = a producer that is neither, today the source control's own detectors; "+
+				"'none' = no code provenance at all, which on a cloud estate is nearly every finding. "+
+				"'both' (and omitting it) applies no filter. A SCALAR, not a list — 'both' is what a multi-value selection would mean. "+
+				"Applied inside the server's paged query, so cloudsec_get_finding_facets counts under it describe the same set this lists. "+
+				"The 'source' facet's values sum to its total only on an UNFILTERED read — like every dimension it is counted with its own filter excluded while the total applies it — so compute a share without a source filter set. "+
+				"The facet key is ABSENT (never zeroed) if the server has that dimension turned off. "+
+				"An unrecognised value is REJECTED with an error naming it, not silently ignored. "+
+				"NOTE this is unrelated to the 'source' on the identity tools, which names a producing cloud sweep")),
 		mcp.WithString("q",
 			mcp.Description("Free-text filter over the findings")),
 		mcp.WithString("sort",
