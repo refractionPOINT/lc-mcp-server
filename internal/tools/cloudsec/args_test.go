@@ -199,6 +199,38 @@ func TestAddFindingSelectorPagingSplit(t *testing.T) {
 	assert.Equal(t, "bucket", noPaging["q"])
 }
 
+// The AppSec code lane's producer selector reaches BOTH findings routes and stays a
+// SCALAR. The scalar half is what a reviewer would get wrong: the sibling `source` on
+// the identity tools is a repeatable array, so forwarding this one as a list would put
+// a []string where the gateway reads a scalar and the filter would vanish — a silently
+// unfiltered read under an active-looking selection.
+func TestAddFindingSelectorForwardsTheProducerScalar(t *testing.T) {
+	for _, paging := range []bool{true, false} {
+		dst := lc.Dict{}
+		addFindingSelector(dst, map[string]interface{}{"source": "hosted"}, paging)
+		assert.Equal(t, "hosted", dst["source"])
+	}
+
+	// Absent means unconstrained, and must not reach the wire at all: an empty value
+	// is an unrecognised producer at the backend, which matches nothing.
+	dst := lc.Dict{}
+	addFindingSelector(dst, map[string]interface{}{"severity": []interface{}{"HIGH"}}, false)
+	assert.NotContains(t, dst, "source")
+
+	// 'both' travels rather than being resolved locally — the server is what treats it
+	// as no constraint, and only one place should know that.
+	both := lc.Dict{}
+	addFindingSelector(both, map[string]interface{}{"source": "both"}, false)
+	assert.Equal(t, "both", both["source"])
+
+	// The identity selector's `source` is the repeatable producing-SWEEP filter. Same
+	// word, different shape, different routes — pinned so a future tidy-up cannot
+	// merge them.
+	ident := lc.Dict{}
+	addIdentitySelector(ident, map[string]interface{}{"source": []interface{}{"okta", "gcp"}})
+	assert.Equal(t, []string{"okta", "gcp"}, ident["source"])
+}
+
 func TestAddInventorySelectorKeepsPlacementScalar(t *testing.T) {
 	dst := lc.Dict{}
 	addInventorySelector(dst, map[string]interface{}{
