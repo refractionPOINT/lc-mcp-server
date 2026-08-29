@@ -119,7 +119,9 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 	switch dataset {
 	case "findings":
 		suffix = "findings"
-		addFindingSelector(query, args, false)
+		if errResult := addFindingSelector(query, args, false); errResult != nil {
+			return errResult, nil
+		}
 	case "inventory":
 		suffix = "inventory"
 		addInventorySelector(query, args)

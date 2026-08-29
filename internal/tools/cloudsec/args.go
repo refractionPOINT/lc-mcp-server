@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
 // Gateway caps worth mirroring client-side so a request is not silently reshaped
@@ -240,14 +242,102 @@ func addInt(dst lc.Dict, args map[string]interface{}, key string, max int) {
 // addCloudSecFindingParams (endpoint_cloudsec.go:296-328). paging=false is for the
 // CSV export, which walks the full filtered set server-side and ignores cursor/limit
 // (endpoint_cloudsec_export.go:80-86).
-func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) {
+func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) *mcp.CallToolResult {
 	addStrings(dst, args, "severity", "finding_class", "status", "account", "owner")
+	// `repo` is validated and case-folded rather than forwarded raw, so it is the one
+	// selector here that can refuse the call. The error travels up through every caller
+	// — the list, the facets, the causes rollup and the CSV export — because they are
+	// meant to describe the same filtered set, and a selector that only some of them
+	// applied would make the counts disagree with the rows.
+	repos, errResult := findingRepoValues(args)
+	if errResult != nil {
+		return errResult
+	}
+	if len(repos) > 0 {
+		dst["repo"] = repos
+	}
 	addTriState(dst, args, "reachable", "kev")
 	addScalars(dst, args, "q", "sort", "order")
 	if paging {
 		addScalars(dst, args, "cursor")
 		addInt(dst, args, "limit", maxPageLimit)
 	}
+	return nil
+}
+
+// findingRepoValues extracts the AppSec code lane's `repo` selector for the findings
+// routes: `<owner>/<name>`, case-folded, or an error result the caller must return.
+//
+// It FOLDS because the backend matches the key exactly (`repo IN UNNEST(@f_repo)`,
+// legion_graph findingstore/store.go) against a column projected off the finding's
+// subject urn — and that urn's owner and name segments are ASCII-lower-cased when it is
+// built (go-cloudsec model.BuildRepoURN / FoldRepoSegment, v1.46.0), so ONE repository is
+// one node however its three producers spelled it. The DISPLAY name is untouched by that
+// fold, so the spelling a caller reads off a finding, an SCM page, or a hive record is
+// routinely not the spelling stored in the column. Folding here is what stops
+// `Acme/API` from being a syntactically perfect filter that silently matches nothing.
+//
+// The fold is ASCII-only, deliberately, because that is the rule the backend applied:
+// strings.ToLower would also fold non-ASCII (`İ` becomes two runes), producing a key no
+// urn ever carried — a different wrong answer, not a safer one.
+//
+// It REJECTS rather than drops, because dropping is the dangerous half. `repo` has no
+// "any repository" value: a finding with no repository is every cloud finding in the
+// estate, so a value silently discarded here does not narrow the read differently, it
+// removes the code-lane scoping entirely and hands back the whole worklist under an
+// active-looking filter. A supplied-but-unusable `repo` therefore ends the call locally,
+// naming the value, with no request sent.
+func findingRepoValues(args map[string]interface{}) ([]string, *mcp.CallToolResult) {
+	raw, present := args["repo"]
+	if !present {
+		return nil, nil
+	}
+	values, ok := argStrings(args, "repo")
+	if !ok {
+		// Present but not a string or a list of them (a number, a bool, an object). The
+		// same shape the sibling `source` selector was caught fail-open on: absent means
+		// unconstrained, so a value that decodes to nothing has to be an error here.
+		return nil, tools.ErrorResultf(
+			"the 'repo' filter must be a repository key '<owner>/<name>' or a list of them, not %T. "+
+				"Call cloudsec_get_finding_facets (or cloudsec_code_repos) for the keys this organization has.", raw)
+	}
+	if len(values) == 0 {
+		return nil, tools.ErrorResult(
+			"the 'repo' filter was supplied with no repository. Omit it to read every finding, " +
+				"or pass repository keys '<owner>/<name>' — there is no 'any repository' value, " +
+				"since a finding with no repository is a cloud finding.")
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		key := strings.TrimSpace(v)
+		owner, name, hasSlash := strings.Cut(key, "/")
+		if owner == "" || name == "" || !hasSlash || strings.Contains(name, "/") {
+			return nil, tools.ErrorResultf(
+				"%q is not a repository key: 'repo' takes '<owner>/<name>' exactly as cloudsec_code_repos "+
+					"and the 'repo' facet return it. An empty or malformed value selects no rows, and dropping it "+
+					"would widen the read to the whole estate, so the call stops here.", v)
+		}
+		out = append(out, foldRepoKey(key))
+	}
+	return out, nil
+}
+
+// foldRepoKey is the client-side copy of go-cloudsec model.FoldRepoSegment applied to a
+// whole `<owner>/<name>` key: ASCII upper-case letters lower-cased, every other byte left
+// alone. Copied rather than imported because this server depends on the LimaCharlie SDK,
+// not on the Cloud Security model package; it is eleven bytes of rule, and the comment on
+// findingRepoValues names the original so the two can be compared.
+func foldRepoKey(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // addIdentitySelector layers the merged-identity cross-filter shared by
