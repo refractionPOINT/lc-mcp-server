@@ -104,11 +104,6 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		limitBytes = n
 	}
 
-	org, err := tools.GetOrganization(ctx)
-	if err != nil {
-		return tools.ErrorResultf("failed to get organization: %v", err), nil
-	}
-
 	var (
 		suffix string
 		method = http.MethodGet
@@ -144,6 +139,15 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		body = encoded
 	default:
 		return tools.ErrorResultf("unknown dataset %q: expected 'findings', 'inventory', 'compliance' or 'query'", dataset), nil
+	}
+
+	// Resolved AFTER the selectors, so every local refusal above — an unknown dataset,
+	// an ambiguous query body, a malformed `repo` — is reported as the thing that is
+	// actually wrong rather than as whatever the credential lookup happens to say. It is
+	// needed from here on and not before.
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return tools.ErrorResultf("failed to get organization: %v", err), nil
 	}
 
 	values := queryValues(query)
