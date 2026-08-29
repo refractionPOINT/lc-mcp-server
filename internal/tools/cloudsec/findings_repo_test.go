@@ -105,6 +105,14 @@ func TestFindingRepoValuesFoldsToTheStoredKey(t *testing.T) {
 		assert.Equal(t, []string{"Équipe/Ünicode-repo"}, got)
 	})
 
+	t.Run("each segment is trimmed, not just the whole key", func(t *testing.T) {
+		// "acme / api" survives a whole-key trim with both halves non-empty and no inner
+		// slash, so it would pass every shape check and then match zero rows silently.
+		got, errResult := findingRepoValues(map[string]interface{}{"repo": "Acme / API"})
+		require.Nil(t, errResult)
+		assert.Equal(t, []string{"acme/api"}, got)
+	})
+
 	t.Run("absent leaves the dimension unconstrained", func(t *testing.T) {
 		got, errResult := findingRepoValues(map[string]interface{}{"severity": []interface{}{"HIGH"}})
 		require.Nil(t, errResult)
@@ -139,11 +147,55 @@ func TestFindingRepoValuesRejectsRatherThanWidens(t *testing.T) {
 		})
 	}
 
+	// argStrings drops an element it cannot turn into a scalar, which for this selector
+	// is a PARTIAL application: the read runs scoped to fewer repositories than were
+	// asked for and nothing in the response says so.
+	t.Run("an unusable element is not silently skipped", func(t *testing.T) {
+		got, errResult := findingRepoValues(map[string]interface{}{
+			"repo": []interface{}{"acme/api", map[string]interface{}{"owner": "acme", "name": "web"}},
+		})
+		require.NotNil(t, errResult)
+		assert.Nil(t, got)
+		assert.Contains(t, resultText(errResult), "not repository keys")
+	})
+
 	// The control: the same shapes minus the defect are accepted, so the assertions
 	// above are testing the validation and not something that refuses everything.
 	got, errResult := findingRepoValues(map[string]interface{}{"repo": []interface{}{"acme/api"}})
 	require.Nil(t, errResult)
 	assert.Equal(t, []string{"acme/api"}, got)
+}
+
+// `repo` is declarable on every export dataset because it arrives through the shared
+// findings selector, but only the findings walk has the column. Ignoring it there would
+// export the whole estate under a filter the caller believes it applied — the same
+// silent widening the findings path refuses.
+func TestExportRefusesARepoOnADatasetThatHasNone(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_export_csv")
+	require.True(t, exists)
+
+	for _, dataset := range []string{"inventory", "compliance", "query"} {
+		t.Run(dataset, func(t *testing.T) {
+			res, err := reg.Handler(context.Background(), map[string]interface{}{
+				"dataset": dataset,
+				"repo":    []interface{}{"acme/api"},
+			})
+			require.NoError(t, err)
+			text := resultText(res)
+			assert.Contains(t, text, "'repo' filter applies only to dataset=findings")
+			assert.NotContains(t, text, "failed to get organization",
+				"the refusal must precede the credential lookup")
+		})
+	}
+
+	// The control: the same repo on the dataset that HAS the column is accepted and the
+	// call proceeds into the request path.
+	res, err := reg.Handler(context.Background(), map[string]interface{}{
+		"dataset": "findings",
+		"repo":    []interface{}{"acme/api"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resultText(res), "organization")
 }
 
 // The selector must reach the WIRE in the repeated-key form the gateway's filters read,

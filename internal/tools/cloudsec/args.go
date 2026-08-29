@@ -298,8 +298,19 @@ func findingRepoValues(args map[string]interface{}) ([]string, *mcp.CallToolResu
 		// same shape the sibling `source` selector was caught fail-open on: absent means
 		// unconstrained, so a value that decodes to nothing has to be an error here.
 		return nil, tools.ErrorResultf(
-			"the 'repo' filter must be a repository key '<owner>/<name>' or a list of them, not %T. "+
-				"Call cloudsec_get_finding_facets (or cloudsec_code_repos) for the keys this organization has.", raw)
+			"the 'repo' filter must be a repository key '<owner>/<name>' or a list of them, not %T. %s", raw, repoKeySourceNote)
+	}
+	// argStrings SKIPS an element it cannot turn into a scalar (a null, an object, a
+	// nested array) rather than failing, which is right for the dimensions where dropping
+	// a junk element still leaves a narrower read. It is wrong here: a list of two whose
+	// second element is an object would run scoped to ONE repository while the caller
+	// believes it selected two, and the response says nothing about the difference. A
+	// partially-applied selector is exactly what this function refuses to produce.
+	if list, isList := raw.([]interface{}); isList && len(list) != len(values) {
+		return nil, tools.ErrorResultf(
+			"the 'repo' filter holds %d values but %d of them are not repository keys (a null, an object or a nested list). "+
+				"Applying only the rest would scope the read to fewer repositories than asked for without saying so, so the call stops here. %s",
+			len(list), len(list)-len(values), repoKeySourceNote)
 	}
 	if len(values) == 0 {
 		return nil, tools.ErrorResult(
@@ -309,18 +320,30 @@ func findingRepoValues(args map[string]interface{}) ([]string, *mcp.CallToolResu
 	}
 	out := make([]string, 0, len(values))
 	for _, v := range values {
-		key := strings.TrimSpace(v)
-		owner, name, hasSlash := strings.Cut(key, "/")
-		if owner == "" || name == "" || !hasSlash || strings.Contains(name, "/") {
+		// Each SEGMENT is trimmed, not just the key: `"acme / api"` survives a whole-key
+		// trim with both halves non-empty and no inner slash, so it would pass every
+		// check below and then match zero rows — the silent miss this validator exists to
+		// prevent. The backend's own parser for this key trims the halves after the cut
+		// (legion_cloudsec_host service/codescan_ingest.go, splitRepoKey); same rule here.
+		owner, name, hasSlash := strings.Cut(v, "/")
+		owner, name = strings.TrimSpace(owner), strings.TrimSpace(name)
+		if !hasSlash || owner == "" || name == "" || strings.Contains(name, "/") {
 			return nil, tools.ErrorResultf(
-				"%q is not a repository key: 'repo' takes '<owner>/<name>' exactly as cloudsec_code_repos "+
-					"and the 'repo' facet return it. An empty or malformed value selects no rows, and dropping it "+
-					"would widen the read to the whole estate, so the call stops here.", v)
+				"%q is not a repository key: 'repo' takes '<owner>/<name>'. An empty or malformed value selects no rows, "+
+					"and dropping it would widen the read to the whole estate, so the call stops here. %s", v, repoKeySourceNote)
 		}
-		out = append(out, foldRepoKey(key))
+		out = append(out, foldRepoKey(owner)+"/"+foldRepoKey(name))
 	}
 	return out, nil
 }
+
+// repoKeySourceNote tells a refused caller where the keys come from. The findings facet
+// is named first and unconditionally because it is served by this package's own
+// cloudsec_get_finding_facets; the code-lane tools are named as a maybe because they are
+// a separate, not-yet-merged surface, and sending a model after a tool that is not
+// registered is a worse answer than a slightly longer sentence.
+const repoKeySourceNote = "Call cloudsec_get_finding_facets and read its 'repo' facet for the keys this organization has " +
+	"(the cloudsec_code_* tools list them too, where that surface is available)."
 
 // foldRepoKey is the client-side copy of go-cloudsec model.FoldRepoSegment applied to a
 // whole `<owner>/<name>` key: ASCII upper-case letters lower-cased, every other byte left
