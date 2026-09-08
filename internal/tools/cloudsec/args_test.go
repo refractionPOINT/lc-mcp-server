@@ -211,8 +211,12 @@ func TestAddFindingSelectorForwardsTheProducerScalar(t *testing.T) {
 		assert.Equal(t, "hosted", dst["source"])
 	}
 
-	// Absent means unconstrained, and must not reach the wire at all: an empty value
-	// is an unrecognised producer at the backend, which matches nothing.
+	// Absent means unconstrained, and must not reach the wire at all. Note the reason
+	// is the opposite of the intuitive one: the backend reads an empty `source` as
+	// UNCONSTRAINED, not as an unrecognised producer matching nothing (legion_graph
+	// service/actor.go trims to "" and returns no filter; findingstore/store.go treats
+	// "" and `both` alike). So an empty value that reached the wire would widen the
+	// read to the whole estate, which is why it is refused rather than forwarded.
 	dst := lc.Dict{}
 	addFindingSelector(dst, map[string]interface{}{"severity": []interface{}{"HIGH"}}, false)
 	assert.NotContains(t, dst, "source")
@@ -229,6 +233,42 @@ func TestAddFindingSelectorForwardsTheProducerScalar(t *testing.T) {
 	ident := lc.Dict{}
 	addIdentitySelector(ident, map[string]interface{}{"source": []interface{}{"okta", "gcp"}})
 	assert.Equal(t, []string{"okta", "gcp"}, ident["source"])
+}
+
+// A `source` the wire cannot carry has to END the call. Dropping it is the dangerous
+// half: absent means unconstrained, so a silently discarded value does not narrow the
+// read differently, it returns the whole worklist under a filter the caller believes it
+// applied. legion_graph guards the same shape, but that guard can never fire — nothing
+// would reach the wire to trip it.
+func TestFindingSourceRefusesShapesTheWireCannotCarry(t *testing.T) {
+	for name, bad := range map[string]interface{}{
+		"an object":       map[string]interface{}{"eq": "hosted"},
+		"a number":        float64(3),
+		"a bool":          true,
+		"an empty list":   []interface{}{},
+		"an empty string": "",
+		"whitespace":      "   ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dst := lc.Dict{}
+			res := addFindingSelector(dst, map[string]interface{}{"source": bad}, false)
+			assert.NotNil(t, res, "a %s must refuse rather than read the whole estate", name)
+			assert.NotContains(t, dst, "source")
+		})
+	}
+
+	// The control: a one-element array is NOT a bad shape. The same dimension is
+	// repeatable on the sibling routes, so a model legitimately arrives holding
+	// ["hosted"]; argScalar unwraps it rather than refusing.
+	wrapped := lc.Dict{}
+	assert.Nil(t, addFindingSelector(wrapped, map[string]interface{}{"source": []interface{}{"hosted"}}, false))
+	assert.Equal(t, "hosted", wrapped["source"])
+
+	// And the plain scalar still works, so the assertions above test the validation
+	// rather than something that refuses everything.
+	plain := lc.Dict{}
+	assert.Nil(t, addFindingSelector(plain, map[string]interface{}{"source": "ingest"}, false))
+	assert.Equal(t, "ingest", plain["source"])
 }
 
 func TestAddInventorySelectorKeepsPlacementScalar(t *testing.T) {

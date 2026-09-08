@@ -257,16 +257,56 @@ func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) *
 		dst["repo"] = repos
 	}
 	addTriState(dst, args, "reachable", "kev")
-	// `source` is a SCALAR here, deliberately: the AppSec code lane's producer
-	// vocabulary already spends its multi-value case on `both`. It is NOT the `source`
-	// of addIdentitySelector, which is a repeatable producing-SWEEP filter — the two
-	// share a word and nothing else, and they never reach the same route.
-	addScalars(dst, args, "q", "sort", "order", "source")
+	source, errResult := findingSourceValue(args)
+	if errResult != nil {
+		return errResult
+	}
+	if source != "" {
+		dst["source"] = source
+	}
+	addScalars(dst, args, "q", "sort", "order")
 	if paging {
 		addScalars(dst, args, "cursor")
 		addInt(dst, args, "limit", maxPageLimit)
 	}
 	return nil
+}
+
+// findingSourceValue extracts the AppSec code lane's producer selector, or an error
+// result the caller must return.
+//
+// `source` is a SCALAR here, deliberately: the producer vocabulary already spends its
+// multi-value case on `both` (legion_graph findingstore/source.go, SourceSelectorValues).
+// It is NOT the `source` of addIdentitySelector, which is a repeatable producing-SWEEP
+// filter — the two share a word and nothing else, and they never reach the same route.
+// The gateway reads this one with q.Get (endpoint_cloudsec.go, the scalar group), so a
+// []string arriving here would be a shape the wire cannot carry.
+//
+// It REJECTS rather than drops for the same reason findingRepoValues does. Absent means
+// unconstrained, so a supplied-but-unusable value that is quietly discarded does not
+// narrow the read differently — it removes the producer scoping entirely and returns the
+// whole worklist under an active-looking filter. legion_graph guards this shape too
+// (service/actor.go, "source must be a single string"), but that guard can never fire:
+// nothing would reach the wire to trip it.
+//
+// A one-element array IS accepted, via argScalar, because a model holding ["hosted"] for
+// a parameter its siblings declare as an array is asking for something unambiguous.
+func findingSourceValue(args map[string]interface{}) (string, *mcp.CallToolResult) {
+	raw, present := args["source"]
+	if !present {
+		return "", nil
+	}
+	v := strings.TrimSpace(argScalar(args, "source"))
+	if v == "" {
+		// Present but unusable: a number, a bool, an object, an empty list, or an
+		// explicitly empty string. Note the backend treats an empty `source` as
+		// UNCONSTRAINED rather than as an unrecognised producer, so letting this through
+		// would read the whole estate rather than nothing — the silent-widening failure.
+		return "", tools.ErrorResultf(
+			"the 'source' filter must be one of %s, not %#v. Omit it to read every producer; "+
+				"an empty value is not 'no producer', it is no filter at all.", findingSourceValues, raw)
+	}
+	return v, nil
 }
 
 // findingRepoValues extracts the AppSec code lane's `repo` selector for the findings
@@ -346,6 +386,11 @@ func findingRepoValues(args map[string]interface{}) ([]string, *mcp.CallToolResu
 // cloudsec_get_finding_facets; the code-lane tools are named as a maybe because they are
 // a separate, not-yet-merged surface, and sending a model after a tool that is not
 // registered is a worse answer than a slightly longer sentence.
+// findingSourceValues is the producer vocabulary the gateway forwards and legion_graph
+// validates (findingstore/source.go, SourceSelectorValues). Named here so the local
+// refusal can list it without the caller having to make a round trip to learn it.
+const findingSourceValues = "'hosted', 'ingest', 'other', 'none' or 'both'"
+
 const repoKeySourceNote = "Call cloudsec_get_finding_facets and read its 'repo' facet for the keys this organization has " +
 	"(the cloudsec_code_* tools list them too, where that surface is available)."
 
