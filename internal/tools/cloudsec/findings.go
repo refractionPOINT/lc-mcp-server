@@ -21,7 +21,9 @@ func registerFindings() {
 		params:   findingSelectorParams(true),
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
-			addFindingSelector(q, args, true)
+			if errResult := addFindingSelector(q, args, true); errResult != nil {
+				return errResult, nil
+			}
 			return readGET(ctx, "findings", q)
 		},
 	})
@@ -30,7 +32,10 @@ func registerFindings() {
 		name: "cloudsec_get_finding_facets",
 		description: "Get the cross-filtered facet counts and total for the findings worklist under the same selectors as cloudsec_list_findings: " +
 			"each dimension is counted against the OTHER active filters, so a value's count is exactly how many rows selecting it would list. " +
-			"The 'owner' facet keys the unassigned bucket under the empty string and is capped at the top 50 owners; 'owner_truncated' reports whether any were dropped.",
+			"The 'owner' facet keys the unassigned bucket under the empty string and is capped at the top 50 owners; 'owner_truncated' reports whether any were dropped. " +
+			"The 'repo' facet counts the AppSec code lane's repositories by their '<owner>/<name>' key; it OMITS every finding with no repository (there is no empty bucket, so its counts do not sum to the total), " +
+			"is capped at the top 200 by count with any actively-filtered repository pinned into it, and 'repo_truncated' reports whether any were dropped. " +
+			"It is the way to discover the repository keys the 'repo' filter takes without paging the worklist.",
 		readOnly: true,
 		params: append(findingSelectorParams(false),
 			mcp.WithArray("owner_pin", mcp.WithStringItems(),
@@ -38,7 +43,9 @@ func registerFindings() {
 		),
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
-			addFindingSelector(q, args, false)
+			if errResult := addFindingSelector(q, args, false); errResult != nil {
+				return errResult, nil
+			}
 			addStrings(q, args, "owner_pin")
 			return readGET(ctx, "findings/facets", q)
 		},
@@ -110,7 +117,9 @@ func registerFindings() {
 		),
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
-			addFindingSelector(q, args, false)
+			if errResult := addFindingSelector(q, args, false); errResult != nil {
+				return errResult, nil
+			}
 			addInt(q, args, "limit", maxCauseLimit)
 			if cause := argString(args, "cause"); cause != "" {
 				if len(cause) > maxCauseKeyLen {

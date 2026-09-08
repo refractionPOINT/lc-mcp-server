@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
 // Gateway caps worth mirroring client-side so a request is not silently reshaped
@@ -240,14 +242,125 @@ func addInt(dst lc.Dict, args map[string]interface{}, key string, max int) {
 // addCloudSecFindingParams (endpoint_cloudsec.go:296-328). paging=false is for the
 // CSV export, which walks the full filtered set server-side and ignores cursor/limit
 // (endpoint_cloudsec_export.go:80-86).
-func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) {
+func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) *mcp.CallToolResult {
 	addStrings(dst, args, "severity", "finding_class", "status", "account", "owner")
+	// `repo` is validated and case-folded rather than forwarded raw, so it is the one
+	// selector here that can refuse the call. The error travels up through every caller
+	// — the list, the facets, the causes rollup and the CSV export — because they are
+	// meant to describe the same filtered set, and a selector that only some of them
+	// applied would make the counts disagree with the rows.
+	repos, errResult := findingRepoValues(args)
+	if errResult != nil {
+		return errResult
+	}
+	if len(repos) > 0 {
+		dst["repo"] = repos
+	}
 	addTriState(dst, args, "reachable", "kev")
 	addScalars(dst, args, "q", "sort", "order")
 	if paging {
 		addScalars(dst, args, "cursor")
 		addInt(dst, args, "limit", maxPageLimit)
 	}
+	return nil
+}
+
+// findingRepoValues extracts the AppSec code lane's `repo` selector for the findings
+// routes: `<owner>/<name>`, case-folded, or an error result the caller must return.
+//
+// It FOLDS because the backend matches the key exactly (`repo IN UNNEST(@f_repo)`,
+// legion_graph findingstore/store.go) against a column projected off the finding's
+// subject urn — and that urn's owner and name segments are ASCII-lower-cased when it is
+// built (go-cloudsec model.BuildRepoURN / FoldRepoSegment, v1.46.0), so ONE repository is
+// one node however its three producers spelled it. The DISPLAY name is untouched by that
+// fold, so the spelling a caller reads off a finding, an SCM page, or a hive record is
+// routinely not the spelling stored in the column. Folding here is what stops
+// `Acme/API` from being a syntactically perfect filter that silently matches nothing.
+//
+// The fold is ASCII-only, deliberately, because that is the rule the backend applied:
+// strings.ToLower would also fold non-ASCII (`İ` becomes two runes), producing a key no
+// urn ever carried — a different wrong answer, not a safer one.
+//
+// It REJECTS rather than drops, because dropping is the dangerous half. `repo` has no
+// "any repository" value: a finding with no repository is every cloud finding in the
+// estate, so a value silently discarded here does not narrow the read differently, it
+// removes the code-lane scoping entirely and hands back the whole worklist under an
+// active-looking filter. A supplied-but-unusable `repo` therefore ends the call locally,
+// naming the value, with no request sent.
+func findingRepoValues(args map[string]interface{}) ([]string, *mcp.CallToolResult) {
+	raw, present := args["repo"]
+	if !present {
+		return nil, nil
+	}
+	values, ok := argStrings(args, "repo")
+	if !ok {
+		// Present but not a string or a list of them (a number, a bool, an object). The
+		// same shape the sibling `source` selector was caught fail-open on: absent means
+		// unconstrained, so a value that decodes to nothing has to be an error here.
+		return nil, tools.ErrorResultf(
+			"the 'repo' filter must be a repository key '<owner>/<name>' or a list of them, not %T. %s", raw, repoKeySourceNote)
+	}
+	// argStrings SKIPS an element it cannot turn into a scalar (a null, an object, a
+	// nested array) rather than failing, which is right for the dimensions where dropping
+	// a junk element still leaves a narrower read. It is wrong here: a list of two whose
+	// second element is an object would run scoped to ONE repository while the caller
+	// believes it selected two, and the response says nothing about the difference. A
+	// partially-applied selector is exactly what this function refuses to produce.
+	if list, isList := raw.([]interface{}); isList && len(list) != len(values) {
+		return nil, tools.ErrorResultf(
+			"the 'repo' filter holds %d values but %d of them are not repository keys (a null, an object or a nested list). "+
+				"Applying only the rest would scope the read to fewer repositories than asked for without saying so, so the call stops here. %s",
+			len(list), len(list)-len(values), repoKeySourceNote)
+	}
+	if len(values) == 0 {
+		return nil, tools.ErrorResult(
+			"the 'repo' filter was supplied with no repository. Omit it to read every finding, " +
+				"or pass repository keys '<owner>/<name>' — there is no 'any repository' value, " +
+				"since a finding with no repository is a cloud finding.")
+	}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		// Each SEGMENT is trimmed, not just the key: `"acme / api"` survives a whole-key
+		// trim with both halves non-empty and no inner slash, so it would pass every
+		// check below and then match zero rows — the silent miss this validator exists to
+		// prevent. The backend's own parser for this key trims the halves after the cut
+		// (legion_cloudsec_host service/codescan_ingest.go, splitRepoKey); same rule here.
+		owner, name, hasSlash := strings.Cut(v, "/")
+		owner, name = strings.TrimSpace(owner), strings.TrimSpace(name)
+		if !hasSlash || owner == "" || name == "" || strings.Contains(name, "/") {
+			return nil, tools.ErrorResultf(
+				"%q is not a repository key: 'repo' takes '<owner>/<name>'. An empty or malformed value selects no rows, "+
+					"and dropping it would widen the read to the whole estate, so the call stops here. %s", v, repoKeySourceNote)
+		}
+		out = append(out, foldRepoKey(owner)+"/"+foldRepoKey(name))
+	}
+	return out, nil
+}
+
+// repoKeySourceNote tells a refused caller where the keys come from. The findings facet
+// is named first and unconditionally because it is served by this package's own
+// cloudsec_get_finding_facets; the code-lane tools are named as a maybe because they are
+// a separate, not-yet-merged surface, and sending a model after a tool that is not
+// registered is a worse answer than a slightly longer sentence.
+const repoKeySourceNote = "Call cloudsec_get_finding_facets and read its 'repo' facet for the keys this organization has " +
+	"(the cloudsec_code_* tools list them too, where that surface is available)."
+
+// foldRepoKey is the client-side copy of go-cloudsec model.FoldRepoSegment applied to a
+// whole `<owner>/<name>` key: ASCII upper-case letters lower-cased, every other byte left
+// alone. Copied rather than imported because this server depends on the LimaCharlie SDK,
+// not on the Cloud Security model package; it is eleven bytes of rule, and the comment on
+// findingRepoValues names the original so the two can be compared.
+func foldRepoKey(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 // addIdentitySelector layers the merged-identity cross-filter shared by

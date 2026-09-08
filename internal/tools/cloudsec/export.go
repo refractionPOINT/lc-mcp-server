@@ -76,6 +76,11 @@ func registerExport() {
 			mcp.Description("Free-text filter: over the findings for dataset=findings, over the resource's identifying fields for dataset=inventory")),
 		mcp.WithString("sort",
 			mcp.Description("Page order. dataset=findings: 'lc_risk' (default) | 'severity' | 'first_seen'. dataset=inventory: 'urn' (default) | 'risk' with type=Identity | 'last_seen' with type=ThirdPartyAsset")),
+		mcp.WithArray("repo", mcp.WithStringItems(),
+			mcp.Description("dataset=findings ONLY: source-repository filter, keyed '<owner>/<name>' as the 'repo' facet of cloudsec_get_finding_facets returns it. "+
+				"LOWER-CASED here before it is sent, since the stored key is the repository urn's case-folded owner/name and the backend matches it exactly. "+
+				"Supplying it on any other dataset is REJECTED rather than ignored — those rows have no repository, so dropping it would export the whole estate. "+
+				"Repeatable; at most 100 values are honored")),
 	)
 
 	register(toolDef{
@@ -104,9 +109,17 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		limitBytes = n
 	}
 
-	org, err := tools.GetOrganization(ctx)
-	if err != nil {
-		return tools.ErrorResultf("failed to get organization: %v", err), nil
+	// `repo` reaches this tool's schema through the findings selector, so it is
+	// declarable on any dataset — but only the findings walk has the column. Refused
+	// rather than dropped for the reason findingRepoValues refuses: an ignored `repo`
+	// does not export a narrower set, it exports the whole estate under a filter the
+	// caller believes it applied. The other shared findings selectors predate this and
+	// are still dropped; this is the one whose whole point is that it must not be.
+	if _, scoped := args["repo"]; scoped && dataset != "findings" {
+		return tools.ErrorResultf(
+			"the 'repo' filter applies only to dataset=findings — a %s row has no repository, "+
+				"so exporting one under a repository filter would return the whole estate. "+
+				"Drop 'repo', or export dataset=findings.", dataset), nil
 	}
 
 	var (
@@ -119,7 +132,9 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 	switch dataset {
 	case "findings":
 		suffix = "findings"
-		addFindingSelector(query, args, false)
+		if errResult := addFindingSelector(query, args, false); errResult != nil {
+			return errResult, nil
+		}
 	case "inventory":
 		suffix = "inventory"
 		addInventorySelector(query, args)
@@ -142,6 +157,15 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		body = encoded
 	default:
 		return tools.ErrorResultf("unknown dataset %q: expected 'findings', 'inventory', 'compliance' or 'query'", dataset), nil
+	}
+
+	// Resolved AFTER the selectors, so every local refusal above — an unknown dataset,
+	// an ambiguous query body, a malformed `repo` — is reported as the thing that is
+	// actually wrong rather than as whatever the credential lookup happens to say. It is
+	// needed from here on and not before.
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return tools.ErrorResultf("failed to get organization: %v", err), nil
 	}
 
 	values := queryValues(query)
