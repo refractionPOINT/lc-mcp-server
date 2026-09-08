@@ -12,14 +12,14 @@ import (
 	"time"
 
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 )
 
 const (
-	// defaultAPIRoot mirrors the SDK's own rootURL/currentAPIVersion (client.go:22-23).
-	// The MCP never overrides ClientOptions.URL, so the SDK reads and the raw requests
-	// below always talk to the same gateway.
-	defaultAPIRoot = "https://api.limacharlie.io"
-	apiVersion     = "v1"
+	// apiVersion mirrors the SDK's own currentAPIVersion (client.go:23). The base URL is
+	// NOT duplicated here: auth.APIRoot() owns it and feeds ClientOptions.URL as well, so
+	// the SDK reads and the raw requests below cannot end up on different gateways.
+	apiVersion = "v1"
 
 	// defaultTimeout covers the gateway's own 20s cloudsec RPC budget plus transport.
 	defaultTimeout = 45 * time.Second
@@ -44,11 +44,15 @@ const extGateNote = `Requires the "ext-cloud-security" extension: a 403 saying c
 // no other way to discover them.
 const hiveNote = `Provider/policy/query CONFIGURATION lives in the "cloudsec_provider", "cloudsec_policy" and "cloudsec_query" hives — read/write it with the generic hive tools (list_rules / get_rule / set_rule / delete_rule with hive_name), not through this tool.`
 
-// apiRoot returns the gateway base URL. It is deliberately not overridable: the
-// package's GET reads go through the SDK (which resolves its own hardcoded root),
-// so an override here would split reads and writes across two gateways.
+// apiRoot returns the gateway base URL these raw calls target.
+//
+// It reads the SAME value the SDK client is constructed with
+// (auth.AuthContext.GetClientOptions sets ClientOptions.URL from it), which is what
+// makes an override safe: this package's GET reads go through the SDK and its POSTs
+// come through here, and an override honored by only one of the two would split reads
+// and writes across two gateways. One knob, both halves.
 func apiRoot() string {
-	return defaultAPIRoot
+	return auth.APIRoot()
 }
 
 // httpClient is shared; each call carries its own context deadline.
