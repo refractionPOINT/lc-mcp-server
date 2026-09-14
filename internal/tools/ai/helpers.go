@@ -652,6 +652,28 @@ func detectPlatform(ctx context.Context, org *lc.Organization, userQuery string)
 	return ""
 }
 
+// Platform detection is a hint: an organization may not ingest the guessed
+// platform. Empty results must fall back just like unsupported platform filters.
+type eventSchemaSource interface {
+	GetSchemasForPlatform(string) (*lc.Schemas, error)
+	GetSchemas() (*lc.Schemas, error)
+}
+
+func eventSelectionSchemas(org eventSchemaSource, platform string) (*lc.Schemas, error) {
+	if platform != "" {
+		schemas, err := org.GetSchemasForPlatform(platform)
+		if err == nil && schemas != nil {
+			for _, event := range schemas.EventTypes {
+				if strings.HasPrefix(event, "evt:") {
+					return schemas, nil
+				}
+			}
+		}
+		slog.Debug("Platform has no usable event schemas; using organization schemas", "platform", platform, "error", err)
+	}
+	return org.GetSchemas()
+}
+
 // selectRelevantEvents uses AI to select relevant event types for a query
 // Returns a list of event type names that are relevant to the query
 func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery string, platform string) []string {
@@ -659,22 +681,13 @@ func selectRelevantEvents(ctx context.Context, org *lc.Organization, userQuery s
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	// Get schemas based on platform
-	var schemas *lc.Schemas
-	var err error
-
-	if platform != "" {
-		schemas, err = org.GetSchemasForPlatform(platform)
-		if err != nil {
-			slog.Warn("Failed to fetch platform schemas, falling back to all schemas", "platform", platform, "error", err)
-			schemas, err = org.GetSchemas()
-		}
-	} else {
-		schemas, err = org.GetSchemas()
-	}
-
-	if err != nil || schemas == nil || len(schemas.EventTypes) == 0 {
+	schemas, err := eventSelectionSchemas(org, platform)
+	if err != nil {
 		slog.Warn("Failed to fetch schemas for event selection", "error", err)
+		return nil
+	}
+	if schemas == nil || len(schemas.EventTypes) == 0 {
+		slog.Info("No schemas available for event selection", "platform", platform)
 		return nil
 	}
 
