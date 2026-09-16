@@ -472,6 +472,8 @@ cloud_security:
   # AppSec code lane (repository scanning)
   - cloudsec_code_repos
   - cloudsec_code_findings
+  - cloudsec_code_capabilities
+  - cloudsec_code_fixes
   - cloudsec_code_scan_local
   - cloudsec_code_autofix
 
@@ -533,3 +535,5 @@ cloud_security_readonly:
   # a report (ingest=true), and cloudsec_code_autofix because it is a declared non-read.
   - cloudsec_code_repos
   - cloudsec_code_findings
+  - cloudsec_code_capabilities
+  - cloudsec_code_fixes

@@ -63,6 +63,8 @@ var codeFindingClasses = []string{
 func registerCode() {
 	registerCodeRepos()
 	registerCodeFindings()
+	registerCodeCapabilities()
+	registerCodeFixes()
 	registerCodeScanLocal()
 	registerCodeAutofix()
 }
@@ -103,6 +105,74 @@ func registerCodeRepos() {
 			addTriState(q, args, "has_findings")
 			addInt(q, args, "limit", maxCodeRepoLimit)
 			return readGET(ctx, "code/repos", q)
+		},
+	})
+}
+
+// ------------------------------------------------------------------
+// cloudsec_code_capabilities
+// ------------------------------------------------------------------
+
+func registerCodeCapabilities() {
+	register(toolDef{
+		name: "cloudsec_code_capabilities",
+		description: "What each connected GITHUB source-control organization may actually DO for the AppSec code lane: repository scanning, PR checks, PR comments, " +
+			"and dependency AutoFix pull requests, detected from the App installation itself rather than inferred from a hive record. " +
+			"Only GitHub connections are covered — a GitLab or Bitbucket connection scans with its own read-only token and has no write plane to detect (no PR checks, " +
+			"no PR comments, no AutoFix), so it never appears here, not even as an 'unknown' entry; use cloudsec_get_provider_manifests for what those connections collect. " +
+			"Returns one entry per connection under 'connections': 'connection' (the cloudsec_provider record name), 'org', 'provider', 'mode' ('unified' | 'separate_actions_app'), " +
+			"'scan_app_id'/'actions_app_id' (the App ids behind the two planes — the same id in unified mode), 'repository_selection' ('all' | 'selected', the ACTIONS installation's own selection), " +
+			"'repository' (set only when narrowed to one, per 'repository_selection: selected'), 'suspended', 'verified_at' (RFC3339 UTC, empty if the installation could never be read), " +
+			"and 'capabilities' — one row per capability id " +
+			"(repo_scanning | pr_checks | pr_comments | fix_pull_requests) carrying 'state' (available | unavailable | unknown), the 'needs' permissions, and — when unavailable — " +
+			"'missing' permissions plus a machine-readable 'reason' (missing_permissions | installation_suspended | verification_unavailable | repository_not_in_installation | " +
+			"installation_not_found) and a human 'detail'. 'unknown' means the installation could not be read (rate limit, revoked key) — it is NOT a denial, and a capability " +
+			"reading 'available' means the control MAY be offered — it does NOT mean anything fires on its own: a 'pr_checks' capability of 'available' says the connection " +
+			"COULD publish a check run, not that any webhook is wired to trigger one. A connection whose installation could not be read still appears, with every capability 'unknown', " +
+			"rather than being dropped from the list. " + codeLaneNote,
+		readOnly: true,
+		params: []mcp.ToolOption{
+			mcp.WithString("repo",
+				mcp.Description("Narrow to the one connection covering a single repository ('<owner>/<name>' as cloudsec_code_repos returns it). Omit to list every GitHub connection")),
+		},
+		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			q := lc.Dict{}
+			addScalars(q, args, "repo")
+			return readGET(ctx, "code/capabilities", q)
+		},
+	})
+}
+
+// ------------------------------------------------------------------
+// cloudsec_code_fixes
+// ------------------------------------------------------------------
+
+// maxCodeFixLimit is the /code/fixes page cap the backend enforces server-side; its own
+// default absent a limit is 5.
+const maxCodeFixLimit = 20
+
+func registerCodeFixes() {
+	register(toolDef{
+		name: "cloudsec_code_fixes",
+		description: "The dependency-upgrade queue: open code (SCA) findings grouped by the single package upgrade that would close them, ranked so the highest-leverage " +
+			"fix leads. Each entry under 'fixes' carries a 'key' (identical to 'cause_key' — the same value under two names, since 'cause_key' is what cloudsec_list_finding_causes " +
+			"calls it), a 'title', the package 'ecosystem' and 'package' name, the 'fixed_version', how many findings " +
+			"and repositories it closes ('finding_count', 'repository_count'), the 'top_severity' among them, and a 'representative_finding_id' usable with cloudsec_code_autofix. " +
+			"'distinct' is the total number of fixes matching the scope, which may exceed the page returned. 'scope' and 'caveat' describe exactly what population this counts " +
+			"and its caveats — read them rather than assuming they match cloudsec_code_findings' filters, since this rollup takes none of the findings selectors. " +
+			"Keyset-paginated: pass the response's 'next_cursor' back as 'cursor'. A page may be SHORT while 'next_cursor' is set. " + codeLaneNote,
+		readOnly: true,
+		params: []mcp.ToolOption{
+			mcp.WithString("cursor",
+				mcp.Description("Opaque keyset token returned as 'next_cursor' by a previous page; omit for the first page")),
+			mcp.WithNumber("limit",
+				mcp.Description(fmt.Sprintf("Maximum number of fixes for this page (backend default 5, max %d — a larger ask is reduced to that)", maxCodeFixLimit))),
+		},
+		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			q := lc.Dict{}
+			addScalars(q, args, "cursor")
+			addInt(q, args, "limit", maxCodeFixLimit)
+			return readGET(ctx, "code/fixes", q)
 		},
 	})
 }
@@ -872,6 +942,14 @@ func gitRepoKey(ctx context.Context, root string) string {
 // remote that names no hosted repository — a local path, a file:// clone — is refused
 // rather than parsed, because "/home/me/src/api" would yield the plausible and WRONG
 // key "src/api", which is exactly the guess the ingest guard exists to prevent.
+//
+// The key keeps the remote's FULL path (host and ".git" stripped), not just its last two
+// segments. A flat-owner remote (GitHub, Bitbucket) is already exactly "owner/name", but
+// a GitLab repository nested under a group/subgroup namespace publishes that whole path
+// as its key ("acme/platform/backend", not "platform/backend") — go-cloudsec's
+// model.SplitRepoKey reads a nested-owner provider's key by cutting on the LAST '/', so
+// dropping a leading segment here would silently attribute a finding to a DIFFERENT,
+// but still plausible-looking, repository.
 func repoKeyFromRemote(raw string) string {
 	u := strings.TrimRight(strings.TrimSpace(raw), "/")
 	if u == "" {
@@ -920,7 +998,7 @@ func repoKeyFromRemote(raw string) string {
 	if len(segments) < 2 {
 		return ""
 	}
-	return segments[len(segments)-2] + "/" + segments[len(segments)-1]
+	return strings.Join(segments, "/")
 }
 
 // gitOutput runs one git command in root and returns its trimmed stdout, or "" for any

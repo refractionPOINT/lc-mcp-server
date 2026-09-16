@@ -162,6 +162,7 @@ func findingSelectorParams(paging bool) []mcp.ToolOption {
 			mcp.Description("Owner filter. Repeatable. An EMPTY STRING element selects the unassigned bucket, so [\"\"] means 'findings with no owner'")),
 		mcp.WithArray("repo", mcp.WithStringItems(),
 			mcp.Description("Source-repository filter — the AppSec code lane's subject selector, keyed '<owner>/<name>' exactly as the 'repo' facet of cloudsec_get_finding_facets returns it (the cloudsec_code_* tools return the same key, where that surface is available). "+
+				"A GitLab repository nested under a group/subgroup namespace carries that WHOLE path as its key ('group/subgroup/name', not just 'subgroup/name') — pass it unmodified. "+
 				"The value is LOWER-CASED here before it is sent: the stored key is the repository urn's case-folded owner/name (ASCII only), and the backend matches it EXACTLY, "+
 				"so 'Acme/API' travels as 'acme/api' and a display-cased name still selects the right rows. "+
 				"Only findings whose subject IS a repository carry the key, so this filter excludes every cloud finding by construction. "+

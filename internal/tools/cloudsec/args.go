@@ -312,14 +312,23 @@ func findingSourceValue(args map[string]interface{}) (string, *mcp.CallToolResul
 // findingRepoValues extracts the AppSec code lane's `repo` selector for the findings
 // routes: `<owner>/<name>`, case-folded, or an error result the caller must return.
 //
-// It FOLDS because the backend matches the key exactly (`repo IN UNNEST(@f_repo)`,
-// legion_graph findingstore/store.go) against a column projected off the finding's
-// subject urn — and that urn's owner and name segments are ASCII-lower-cased when it is
-// built (go-cloudsec model.BuildRepoURN / FoldRepoSegment, v1.46.0), so ONE repository is
-// one node however its three producers spelled it. The DISPLAY name is untouched by that
-// fold, so the spelling a caller reads off a finding, an SCM page, or a hive record is
-// routinely not the spelling stored in the column. Folding here is what stops
-// `Acme/API` from being a syntactically perfect filter that silently matches nothing.
+// The key is not always two segments. A flat-owner provider (GitHub, Bitbucket) always
+// is, but a GitLab repository nested under a group/subgroup namespace publishes its
+// WHOLE namespace path as the key (`acme/platform/backend`, not `platform/backend`) —
+// go-cloudsec's model.SplitRepoKey reads a nested-owner provider's key by cutting on the
+// LAST '/', not the first, which is exactly why this function does not itself try to
+// find the owner/name boundary: the backend compares the folded string whole
+// (`repo IN UNNEST(@f_repo)`), so validating the key's overall SHAPE is enough, and
+// guessing a two-segment split here would refuse a perfectly good GitLab key.
+//
+// It FOLDS because the backend matches that key exactly against a column projected off
+// the finding's subject urn — and that urn's namespace and name segments are
+// ASCII-lower-cased when it is built (go-cloudsec model.BuildRepoURN / FoldRepoSegment,
+// v1.46.0), so ONE repository is one node however its three producers spelled it. The
+// DISPLAY name is untouched by that fold, so the spelling a caller reads off a finding,
+// an SCM page, or a hive record is routinely not the spelling stored in the column.
+// Folding here is what stops `Acme/API` from being a syntactically perfect filter that
+// silently matches nothing.
 //
 // The fold is ASCII-only, deliberately, because that is the rule the backend applied:
 // strings.ToLower would also fold non-ASCII (`İ` becomes two runes), producing a key no
@@ -364,21 +373,43 @@ func findingRepoValues(args map[string]interface{}) ([]string, *mcp.CallToolResu
 	}
 	out := make([]string, 0, len(values))
 	for _, v := range values {
-		// Each SEGMENT is trimmed, not just the key: `"acme / api"` survives a whole-key
-		// trim with both halves non-empty and no inner slash, so it would pass every
-		// check below and then match zero rows — the silent miss this validator exists to
-		// prevent. The backend's own parser for this key trims the halves after the cut
-		// (legion_cloudsec_host service/codescan_ingest.go, splitRepoKey); same rule here.
-		owner, name, hasSlash := strings.Cut(v, "/")
-		owner, name = strings.TrimSpace(owner), strings.TrimSpace(name)
-		if !hasSlash || owner == "" || name == "" || strings.Contains(name, "/") {
+		key, ok := normalizedRepoKey(v)
+		if !ok {
 			return nil, tools.ErrorResultf(
-				"%q is not a repository key: 'repo' takes '<owner>/<name>'. An empty or malformed value selects no rows, "+
-					"and dropping it would widen the read to the whole estate, so the call stops here. %s", v, repoKeySourceNote)
+				"%q is not a repository key: 'repo' takes '<owner>/<name>' (or, for a GitLab repository "+
+					"nested under a group/subgroup namespace, the whole path, e.g. 'group/subgroup/name'). "+
+					"An empty or malformed value selects no rows, and dropping it would widen the read to "+
+					"the whole estate, so the call stops here. %s", v, repoKeySourceNote)
 		}
-		out = append(out, foldRepoKey(owner)+"/"+foldRepoKey(name))
+		out = append(out, foldRepoKey(key))
 	}
 	return out, nil
+}
+
+// normalizedRepoKey trims each '/'-separated segment of a repository key and rejoins
+// them, reporting false when the key has fewer than two segments or any segment is
+// empty after trimming.
+//
+// Each SEGMENT is trimmed, not just the whole key: `"acme / api"` survives a whole-key
+// trim with both halves non-empty and no inner slash, so it would pass a naive check and
+// then match zero rows — the silent miss this exists to prevent. The backend's own key
+// parser applies the identical per-segment trim; same rule here, generalized to every
+// segment so a nested GitLab namespace ("acme / platform / backend") gets the same
+// protection a flat one does.
+func normalizedRepoKey(v string) (string, bool) {
+	segments := strings.Split(v, "/")
+	if len(segments) < 2 {
+		return "", false
+	}
+	trimmed := make([]string, len(segments))
+	for i, s := range segments {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return "", false
+		}
+		trimmed[i] = s
+	}
+	return strings.Join(trimmed, "/"), true
 }
 
 // repoKeySourceNote tells a refused caller where the keys come from. The findings facet

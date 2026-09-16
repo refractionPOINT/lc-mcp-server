@@ -68,6 +68,8 @@ var readOnlyTools = []string{
 	// AppSec code lane reads
 	"cloudsec_code_repos",
 	"cloudsec_code_findings",
+	"cloudsec_code_capabilities",
+	"cloudsec_code_fixes",
 }
 
 // writeTools are the cloudsec.set tools, with the destructive classification each
