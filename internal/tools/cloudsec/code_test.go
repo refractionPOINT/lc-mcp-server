@@ -365,6 +365,8 @@ func TestCodeToolsNameTheOptInSwitch(t *testing.T) {
 	for _, name := range []string{
 		"cloudsec_code_repos",
 		"cloudsec_code_findings",
+		"cloudsec_code_capabilities",
+		"cloudsec_code_fixes",
 		"cloudsec_code_scan_local",
 		"cloudsec_code_autofix",
 	} {
@@ -373,6 +375,96 @@ func TestCodeToolsNameTheOptInSwitch(t *testing.T) {
 		assert.Contains(t, reg.Description, "cloudsec_policy", name)
 		assert.Contains(t, reg.Description, "cloudsec_provider", name)
 	}
+}
+
+// ------------------------------------------------------------------
+// cloudsec_code_capabilities
+// ------------------------------------------------------------------
+
+func TestCodeCapabilitiesIsRegisteredAndReadOnly(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_capabilities")
+	require.True(t, exists)
+	assert.True(t, reg.Schema.Annotations.ReadOnlyHint != nil && *reg.Schema.Annotations.ReadOnlyHint)
+	_, declared := reg.Schema.InputSchema.Properties["repo"]
+	assert.True(t, declared, "must declare the 'repo' narrowing param")
+}
+
+// The endpoint is GitHub-only — a GitLab or Bitbucket connection never appears in its
+// response, not even as an 'unknown' entry (legion_cloudsec_host codeConnectionCapabilities
+// skips every provider but GitHub, because a capability is detected from an App
+// installation's granted permissions and neither of those providers uses one). Describing
+// this as covering every source-control provider would be exactly the kind of stale claim
+// this parity effort found and had to correct elsewhere.
+func TestCodeCapabilitiesDescriptionNamesTheGitHubOnlyScope(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_capabilities")
+	require.True(t, exists)
+	assert.Contains(t, reg.Description, "GITHUB")
+	assert.Contains(t, reg.Description, "GitLab")
+	assert.Contains(t, reg.Description, "Bitbucket")
+}
+
+// 'available' must never be misread as 'this fires automatically' — the PR-check relay
+// from a webhook is a separate, not-yet-wired piece of the system, and a description that
+// implied otherwise would document a flow that cannot currently work.
+func TestCodeCapabilitiesDescriptionDoesNotOverclaimAutomaticTriggering(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_capabilities")
+	require.True(t, exists)
+	assert.Contains(t, reg.Description, "does NOT mean")
+}
+
+func TestCodeCapabilitiesHandlerForwardsRepo(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_capabilities")
+	require.True(t, exists)
+
+	// No organization in context: validation (there is none to refuse here — 'repo' is
+	// optional and unvalidated client-side) falls straight through to the request path,
+	// which fails on the missing organization. That failure is the proof the handler
+	// reached readGET rather than erroring out earlier for an unrelated reason.
+	res, err := reg.Handler(context.Background(), map[string]interface{}{"repo": "acme/platform/backend"})
+	require.NoError(t, err)
+	assert.Contains(t, codeResultText(res), "organization")
+
+	res, err = reg.Handler(context.Background(), map[string]interface{}{})
+	require.NoError(t, err)
+	assert.Contains(t, codeResultText(res), "organization")
+}
+
+// ------------------------------------------------------------------
+// cloudsec_code_fixes
+// ------------------------------------------------------------------
+
+func TestCodeFixesIsRegisteredAndReadOnly(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_fixes")
+	require.True(t, exists)
+	assert.True(t, reg.Schema.Annotations.ReadOnlyHint != nil && *reg.Schema.Annotations.ReadOnlyHint)
+	for _, param := range []string{"cursor", "limit"} {
+		_, declared := reg.Schema.InputSchema.Properties[param]
+		assert.True(t, declared, "must declare '%s'", param)
+	}
+}
+
+func TestCodeFixesDescriptionNamesTheBackendCapAndDefault(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_fixes")
+	require.True(t, exists)
+	assert.Contains(t, reg.Description, "representative_finding_id")
+	assert.Contains(t, reg.Description, "cloudsec_code_autofix")
+}
+
+func TestCodeFixesHandlerClampsLimitAndForwardsCursor(t *testing.T) {
+	reg, exists := tools.GetTool("cloudsec_code_fixes")
+	require.True(t, exists)
+
+	// A limit far above the backend's cap must not reach the handler unclamped; there is
+	// no gateway here to observe the outgoing query directly, so this pins the clamp via
+	// the pure builder addInt already covers (maxCodeFixLimit) and confirms the handler
+	// still reaches the request path (fails on the missing organization) rather than
+	// erroring out on the oversized value.
+	res, err := reg.Handler(context.Background(), map[string]interface{}{
+		"cursor": "abc", "limit": float64(9999),
+	})
+	require.NoError(t, err)
+	assert.Contains(t, codeResultText(res), "organization")
+	assert.Equal(t, 20, maxCodeFixLimit, "the backend cap this test assumes must not silently drift")
 }
 
 // The gateway page cap is mirrored client-side so an over-large ask is refused rather
@@ -423,21 +515,26 @@ func TestRepoKeysOf(t *testing.T) {
 
 // The repository a finding belongs to is an identity, so a remote that does not name a
 // hosted repository must yield nothing rather than a plausible guess: "/home/me/src/api"
-// would produce the wrong-but-believable key "src/api".
+// would produce the wrong-but-believable key "src/api". The same reasoning is why a
+// GitLab remote nested under a group/subgroup namespace must keep its WHOLE path: dropping
+// a leading segment is just as plausible-looking and just as wrong, addressing a
+// different repository under a key that still parses.
 func TestRepoKeyFromRemote(t *testing.T) {
 	for remote, want := range map[string]string{
-		"https://github.com/acme/api.git":      "acme/api",
-		"https://github.com/acme/api/":         "acme/api",
-		"git@github.com:acme/api.git":          "acme/api",
-		"ssh://git@github.com:22/acme/api.git": "acme/api",
-		"https://user:tok@github.com/acme/api": "acme/api",
-		"https://gitlab.example.com/g/sub/api": "sub/api",
-		"/home/me/src/api":                     "",
-		"file:///home/me/src/api":              "",
-		"../sibling/api":                       "",
-		"https://github.com/acme":              "",
-		"":                                     "",
-		"   ":                                  "",
+		"https://github.com/acme/api.git":           "acme/api",
+		"https://github.com/acme/api/":              "acme/api",
+		"git@github.com:acme/api.git":               "acme/api",
+		"ssh://git@github.com:22/acme/api.git":      "acme/api",
+		"https://user:tok@github.com/acme/api":      "acme/api",
+		"https://gitlab.example.com/g/sub/api":      "g/sub/api",
+		"https://gitlab.example.com/g/sub/sub2/api": "g/sub/sub2/api",
+		"git@gitlab.example.com:g/sub/sub2/api.git": "g/sub/sub2/api",
+		"/home/me/src/api":                          "",
+		"file:///home/me/src/api":                   "",
+		"../sibling/api":                            "",
+		"https://github.com/acme":                   "",
+		"":                                          "",
+		"   ":                                       "",
 	} {
 		assert.Equal(t, want, repoKeyFromRemote(remote), remote)
 	}

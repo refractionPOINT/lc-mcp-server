@@ -503,6 +503,8 @@ var ProfileDefinitions = map[string][]string{
 		// AppSec code lane (repository scanning)
 		"cloudsec_code_repos",
 		"cloudsec_code_findings",
+		"cloudsec_code_capabilities",
+		"cloudsec_code_fixes",
 		"cloudsec_code_scan_local",
 		"cloudsec_code_autofix",
 	},
@@ -566,6 +568,8 @@ var ProfileDefinitions = map[string][]string{
 		// declared non-read.
 		"cloudsec_code_repos",
 		"cloudsec_code_findings",
+		"cloudsec_code_capabilities",
+		"cloudsec_code_fixes",
 	},
 }
 

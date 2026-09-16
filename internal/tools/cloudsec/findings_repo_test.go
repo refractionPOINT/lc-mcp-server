@@ -113,6 +113,24 @@ func TestFindingRepoValuesFoldsToTheStoredKey(t *testing.T) {
 		assert.Equal(t, []string{"acme/api"}, got)
 	})
 
+	t.Run("a GitLab repository nested under a group/subgroup namespace keeps its whole path", func(t *testing.T) {
+		// go-cloudsec model.SplitRepoKey reads a nested-owner provider's key by cutting
+		// on the LAST '/', not the first -- this validator does not need to find that
+		// boundary itself (the backend compares the folded string whole), so a key with
+		// more than one '/' must not be refused as if it had an extra owner segment.
+		got, errResult := findingRepoValues(map[string]interface{}{
+			"repo": "Acme/Platform/Backend",
+		})
+		require.Nil(t, errResult)
+		assert.Equal(t, []string{"acme/platform/backend"}, got)
+
+		got, errResult = findingRepoValues(map[string]interface{}{
+			"repo": "acme / platform / backend",
+		})
+		require.Nil(t, errResult)
+		assert.Equal(t, []string{"acme/platform/backend"}, got)
+	})
+
 	t.Run("absent leaves the dimension unconstrained", func(t *testing.T) {
 		got, errResult := findingRepoValues(map[string]interface{}{"severity": []interface{}{"HIGH"}})
 		require.Nil(t, errResult)
@@ -126,13 +144,17 @@ func TestFindingRepoValuesFoldsToTheStoredKey(t *testing.T) {
 // or the caller gets the whole worklist back under a filter it believes it applied.
 func TestFindingRepoValuesRejectsRatherThanWidens(t *testing.T) {
 	cases := map[string]interface{}{
-		"blank":                  []interface{}{""},
-		"whitespace only":        "   ",
-		"blank among real keys":  []interface{}{"acme/api", ""},
-		"no owner segment":       "api",
-		"empty owner segment":    "/api",
-		"empty name segment":     "acme/",
-		"three segments":         "acme/team/api",
+		"blank":                 []interface{}{""},
+		"whitespace only":       "   ",
+		"blank among real keys": []interface{}{"acme/api", ""},
+		"no owner segment":      "api",
+		"empty owner segment":   "/api",
+		"empty name segment":    "acme/",
+		// A three-segment key is NOT rejected on segment count alone — that is exactly
+		// the shape a nested GitLab namespace key has (see
+		// TestFindingRepoValuesFoldsToTheStoredKey's nested-namespace subtest) — only an
+		// EMPTY segment anywhere in the key is refused.
+		"empty middle segment":   "acme//api",
 		"empty list":             []interface{}{},
 		"not a string or a list": float64(7),
 		"an object":              map[string]interface{}{"owner": "acme"},
