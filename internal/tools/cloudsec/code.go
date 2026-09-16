@@ -121,7 +121,9 @@ func registerCodeCapabilities() {
 			"Only GitHub connections are covered — a GitLab or Bitbucket connection scans with its own read-only token and has no write plane to detect (no PR checks, " +
 			"no PR comments, no AutoFix), so it never appears here, not even as an 'unknown' entry; use cloudsec_get_provider_manifests for what those connections collect. " +
 			"Returns one entry per connection under 'connections': 'connection' (the cloudsec_provider record name), 'org', 'provider', 'mode' ('unified' | 'separate_actions_app'), " +
-			"'suspended', 'verified_at' (RFC3339 UTC, empty if the installation could never be read), and 'capabilities' — one row per capability id " +
+			"'scan_app_id'/'actions_app_id' (the App ids behind the two planes — the same id in unified mode), 'repository_selection' ('all' | 'selected', the ACTIONS installation's own selection), " +
+			"'repository' (set only when narrowed to one, per 'repository_selection: selected'), 'suspended', 'verified_at' (RFC3339 UTC, empty if the installation could never be read), " +
+			"and 'capabilities' — one row per capability id " +
 			"(repo_scanning | pr_checks | pr_comments | fix_pull_requests) carrying 'state' (available | unavailable | unknown), the 'needs' permissions, and — when unavailable — " +
 			"'missing' permissions plus a machine-readable 'reason' (missing_permissions | installation_suspended | verification_unavailable | repository_not_in_installation | " +
 			"installation_not_found) and a human 'detail'. 'unknown' means the installation could not be read (rate limit, revoked key) — it is NOT a denial, and a capability " +
@@ -153,7 +155,8 @@ func registerCodeFixes() {
 	register(toolDef{
 		name: "cloudsec_code_fixes",
 		description: "The dependency-upgrade queue: open code (SCA) findings grouped by the single package upgrade that would close them, ranked so the highest-leverage " +
-			"fix leads. Each entry under 'fixes' carries a shared 'cause_key', a 'title', the package 'ecosystem' and 'package' name, the 'fixed_version', how many findings " +
+			"fix leads. Each entry under 'fixes' carries a 'key' (identical to 'cause_key' — the same value under two names, since 'cause_key' is what cloudsec_list_finding_causes " +
+			"calls it), a 'title', the package 'ecosystem' and 'package' name, the 'fixed_version', how many findings " +
 			"and repositories it closes ('finding_count', 'repository_count'), the 'top_severity' among them, and a 'representative_finding_id' usable with cloudsec_code_autofix. " +
 			"'distinct' is the total number of fixes matching the scope, which may exceed the page returned. 'scope' and 'caveat' describe exactly what population this counts " +
 			"and its caveats — read them rather than assuming they match cloudsec_code_findings' filters, since this rollup takes none of the findings selectors. " +

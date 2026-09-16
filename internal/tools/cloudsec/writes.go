@@ -31,7 +31,10 @@ func registerWrites() {
 		name: "cloudsec_test_provider",
 		description: "Preflight a cloud-security provider configuration: connect to the provider with the given credentials and probe every permission surface collection needs. " +
 			"Credentials are ephemeral — supply them inline or as a \"hive://secret/<name>\" reference; nothing is stored by this call. " +
-			"report.ok is the verdict over the REQUIRED checks; each check carries id/name/required/ok/detail, and a failed optional check means a gracefully degraded surface rather than a failure. " +
+			"report.ok is the verdict over the REQUIRED checks; each check carries id/name/required/ok/detail, and a failed optional check means a gracefully degraded surface rather than a failure — " +
+			"for example, a GitLab or Bitbucket token that is BROADER than the connection needs fails its (optional, non-required) 'token_read_only' check while report.ok stays true; only a MISSING required scope fails a required check. " +
+			"GitLab ('provider_type':'gitlab') needs 'gitlab_namespace' (the group/subgroup path, e.g. 'acme/platform') and 'credentials'; the token's account additionally needs at least Reporter on the WHOLE named group (the 'namespace_membership' check) — a token scoped to one project inside that group fails it, and there is no per-project alternative. An optional 'gitlab_base_url' targets a self-managed instance, but that instance's repositories cannot be code-scanned (the scanning sandbox only reaches GitLab.com). " +
+			"Bitbucket ('provider_type':'bitbucket') needs 'bitbucket_workspace' (the Cloud workspace slug) and 'credentials'; there is no self-managed (Data Center) support and no base-url field for it. " +
 			"Probing runs against the live provider and can take up to a minute. " + hiveNote,
 		// A probe persists nothing, but it is gated on cloudsec.set because testing
 		// a credential is as sensitive as saving one.
