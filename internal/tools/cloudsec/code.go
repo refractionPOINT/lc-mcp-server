@@ -147,8 +147,8 @@ func registerCodeCapabilities() {
 // cloudsec_code_fixes
 // ------------------------------------------------------------------
 
-// maxCodeFixLimit is the /code/fixes page cap (legion_graph findingstore/code.go:
-// maxCodeFixLimit = 20; the backend's own default absent a limit is 5).
+// maxCodeFixLimit is the /code/fixes page cap the backend enforces server-side; its own
+// default absent a limit is 5.
 const maxCodeFixLimit = 20
 
 func registerCodeFixes() {

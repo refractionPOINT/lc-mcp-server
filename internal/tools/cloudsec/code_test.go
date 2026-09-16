@@ -390,7 +390,7 @@ func TestCodeCapabilitiesIsRegisteredAndReadOnly(t *testing.T) {
 }
 
 // The endpoint is GitHub-only — a GitLab or Bitbucket connection never appears in its
-// response, not even as an 'unknown' entry (legion_cloudsec_host codeConnectionCapabilities
+// response, not even as an 'unknown' entry (the backend's connection-capability detector
 // skips every provider but GitHub, because a capability is detected from an App
 // installation's granted permissions and neither of those providers uses one). Describing
 // this as covering every source-control provider would be exactly the kind of stale claim

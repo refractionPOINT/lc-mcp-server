@@ -392,9 +392,8 @@ func findingRepoValues(args map[string]interface{}) ([]string, *mcp.CallToolResu
 //
 // Each SEGMENT is trimmed, not just the whole key: `"acme / api"` survives a whole-key
 // trim with both halves non-empty and no inner slash, so it would pass a naive check and
-// then match zero rows — the silent miss this exists to prevent. The backend's own
-// parser for this key trims the halves after the cut (legion_cloudsec_host
-// service/codescan_ingest.go, splitRepoKey); same rule here, generalized to every
+// then match zero rows — the silent miss this exists to prevent. The backend's own key
+// parser applies the identical per-segment trim; same rule here, generalized to every
 // segment so a nested GitLab namespace ("acme / platform / backend") gets the same
 // protection a flat one does.
 func normalizedRepoKey(v string) (string, bool) {
