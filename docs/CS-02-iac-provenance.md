@@ -25,3 +25,9 @@ Package: https://github.com/maximelb/claude-config/issues/137
 Epic: https://github.com/maximelb/claude-config/issues/134
 Graph: https://github.com/refractionPOINT/legion_graph/pull/228
 Gateway owner draft: https://github.com/refractionPOINT/lc_api-go/pull/962
+
+Rolling-version proof: JSON reads with new selectors require an exact
+`applied_iac_filters` response receipt. CSV exports require a bounded first line
+`# lc_iac_filters_v1=<base64url JSON receipt>`; the tool validates and removes it
+before returning CSV. Missing/mismatched receipts are errors, including successful
+responses from older gateways/readers. Selector-free legacy responses are unchanged.

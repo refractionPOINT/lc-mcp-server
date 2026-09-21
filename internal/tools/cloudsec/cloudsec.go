@@ -105,6 +105,9 @@ func readGETOrg(org *lc.Organization, path string, query lc.Dict) (*mcp.CallTool
 	if err := org.GenericGETRequest(path, query, &resp); err != nil {
 		return tools.ErrorResultf("cloudsec request to %s failed: %s", path, describeErr(err)), nil
 	}
+	if err := requireIaCReceipt(query, resp["applied_iac_filters"]); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	}
 	return tools.SuccessResult(resp), nil
 }
 
@@ -114,6 +117,9 @@ func getJSON(ctx context.Context, org *lc.Organization, path string, query lc.Di
 	resp := map[string]interface{}{}
 	if err := org.GenericGETRequest(path, query, &resp); err != nil {
 		return nil, fmt.Errorf("cloudsec request to %s failed: %w", path, err)
+	}
+	if err := requireIaCReceipt(query, resp["applied_iac_filters"]); err != nil {
+		return nil, err
 	}
 	return resp, nil
 }

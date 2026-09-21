@@ -190,7 +190,11 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		return tools.ErrorResultf("cloudsec CSV export of %s failed: %s", dataset, describeErr(err)), nil
 	}
 
-	return mcp.NewToolResultText(truncateCSV(string(raw), limitBytes)), nil
+	checked, err := checkIaCCSVReceipt(query, string(raw))
+	if err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	}
+	return mcp.NewToolResultText(truncateCSV(checked, limitBytes)), nil
 }
 
 // truncateCSV cuts a CSV document at the last complete row that fits in limit bytes
