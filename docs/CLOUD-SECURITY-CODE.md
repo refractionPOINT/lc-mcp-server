@@ -192,3 +192,17 @@ malformed override otherwise turns every call into an opaque transport failure.
 
 This exists for staging. A route reaches the experimental gateway days or weeks before production, so
 without it a tool written against a new route cannot be exercised end to end at all.
+
+## Build provenance
+
+`cloudsec_code_provenance_push` accepts a bounded JSON `document` string and sends
+its bytes unchanged. It never fetches a URL or reads a file. Use metadata-only LC
+provenance, SLSA v1 or offline Sigstore bundles; do not pass raw source, snippets,
+credentials, environment variables or build output. The server assigns tenant and
+trust context. Signature verification failure is a refusal, not an asserted claim.
+
+`cloudsec_code_provenance` reads normalized attestations by `repo_urn`, `commit`,
+`digest` and `cursor`. Decisions include the full conflicting claim set regardless
+of filters. Only the read belongs to `cloud_security_readonly`; pushes require
+`cloudsec.set` and are additive. Feature rollout and schema installation remain
+separate prerequisites; tool registration grants no production authorization.

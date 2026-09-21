@@ -507,6 +507,8 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_code_fixes",
 		"cloudsec_code_scan_local",
 		"cloudsec_code_autofix",
+		"cloudsec_code_provenance",
+		"cloudsec_code_provenance_push",
 	},
 	"cloud_security_readonly": {
 		// The cloudsec.get subset: every read plus the CSV export. Excludes all
@@ -570,6 +572,7 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_code_findings",
 		"cloudsec_code_capabilities",
 		"cloudsec_code_fixes",
+		"cloudsec_code_provenance",
 	},
 }
 
