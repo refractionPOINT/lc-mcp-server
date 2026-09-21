@@ -101,6 +101,13 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		return tools.ErrorResult("dataset parameter is required ('findings', 'inventory', 'compliance' or 'query')"), nil
 	}
 
+	if _, present := args["iac_attribution"]; present && dataset != "findings" {
+		return tools.ErrorResult("iac_attribution applies only to dataset=findings"), nil
+	}
+	if _, present := args["has_iac_origin"]; present && dataset != "findings" && dataset != "inventory" {
+		return tools.ErrorResult("has_iac_origin applies only to dataset=findings or inventory"), nil
+	}
+
 	limitBytes := defaultCSVBytes
 	if n, ok := argInt(args, "max_bytes"); ok && n > 0 {
 		if n > maxCSVBytes {
@@ -137,7 +144,9 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		}
 	case "inventory":
 		suffix = "inventory"
-		addInventorySelector(query, args)
+		if errResult := addInventorySelector(query, args); errResult != nil {
+			return errResult, nil
+		}
 		addScalars(query, args, "sort")
 		addIdentitySelector(query, args)
 	case "compliance":

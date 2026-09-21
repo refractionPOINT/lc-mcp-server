@@ -150,6 +150,8 @@ func pagingParams(noun string) []mcp.ToolOption {
 // findings list, its facets, the cause rollup and the CSV export.
 func findingSelectorParams(paging bool) []mcp.ToolOption {
 	params := []mcp.ToolOption{
+		mcp.WithBoolean("has_iac_origin", mcp.Description("Filter recorded IaC origin evidence. False means no recorded evidence, not proof that no IaC exists. Omit for no constraint. Requires enabled provenance queries.")),
+		mcp.WithArray("iac_attribution", mcp.WithStringItems(), mcp.Description("One to four exact verdicts: attributed, ambiguous, none, unknown. Unknown or partial evidence is never safe. Requires enabled provenance queries.")),
 		mcp.WithArray("severity", mcp.WithStringItems(),
 			mcp.Description("Severity filter: CRITICAL | HIGH | MEDIUM | LOW | INFO. Repeatable (OR within the key, AND across keys); at most 100 values are honored")),
 		mcp.WithArray("finding_class", mcp.WithStringItems(),
