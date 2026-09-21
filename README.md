@@ -21,7 +21,7 @@ This server bridges AI assistants and the LimaCharlie security platform through 
 
 ## Features
 
-- **343 MCP Tools** across 13 specialized profiles
+- **345 MCP Tools** across 13 specialized profiles
 - **Multi-Tenant Architecture** with strict credential isolation
 - **Dual Transport Modes**: STDIO (local) and HTTP (cloud with OAuth 2.1)
 - **AI-Powered Generation**: Automatic rule and query creation using Claude (default: Claude Sonnet 4.6)
@@ -135,9 +135,9 @@ The server organizes tools into profiles for different use cases:
 | **ai_powered** | 18 | AI-assisted content generation | Auto-generate rules/queries; AI sessions, usage, memory |
 | **investigation_management** | 20 | Case management | Cases, notes, entities, detections, telemetry, artifacts |
 | **api_access** | 1 | Generic API escape-hatch | Raw LimaCharlie API calls |
-| **cloud_security** | 53 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes, AppSec code lane |
-| **cloud_security_readonly** | 42 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
-| **all** | 343 | All profiles combined | Full platform access |
+| **cloud_security** | 55 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes, AppSec code lane |
+| **cloud_security_readonly** | 43 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
+| **all** | 345 | All profiles combined | Full platform access |
 
 ## Configuration
 
@@ -284,7 +284,7 @@ Claude uses: add_tag
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │   Auth      │  │     Tools    │  │   SDK Cache  │     │
 │  │   Context   │  │   Registry   │  │   (Thread-   │     │
-│  │   Isolation │  │   (343)      │  │    Safe)     │     │
+│  │   Isolation │  │   (345)      │  │    Safe)     │     │
 │  └─────────────┘  └──────────────┘  └──────────────┘     │
 │                                                             │
 └────────────────────────┬────────────────────────────────────┘
@@ -341,7 +341,7 @@ lc-mcp-server/
 │   │   ├── state/           # OAuth state management
 │   │   └── token/           # Token encryption and storage
 │   │
-│   └── tools/               # MCP tool implementations (343 tools)
+│   └── tools/               # MCP tool implementations (345 tools)
 │       ├── registry.go      # Tool registration system
 │       ├── core/            # Core + fleet sensor ops (9 tools)
 │       ├── historical/      # Historical data & LCQL (13 tools)
