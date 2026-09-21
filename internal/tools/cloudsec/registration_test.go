@@ -15,6 +15,7 @@ import (
 // policy-value suggester and the two simulate previews) which the gateway serves as
 // read-only previews, so they belong here despite the verb.
 var readOnlyTools = []string{
+	"cloudsec_code_provenance",
 	// posture
 	"cloudsec_get_overview",
 	"cloudsec_get_risk_trend",
@@ -75,6 +76,7 @@ var readOnlyTools = []string{
 // writeTools are the cloudsec.set tools, with the destructive classification each
 // one carries.
 var writeTools = map[string]bool{
+	"cloudsec_code_provenance_push":    false,
 	"cloudsec_set_finding_status":      true,  // changes a finding's disposition
 	"cloudsec_bulk_set_finding_status": true,  // same, over a batch
 	"cloudsec_set_finding_owner":       false, // assignment metadata
