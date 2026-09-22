@@ -13,6 +13,7 @@ import (
 // form under type=Identity, and an array sent to the generic walk reads as unset.
 func inventorySelectorParams() []mcp.ToolOption {
 	return []mcp.ToolOption{
+		mcp.WithBoolean("has_iac_origin", mcp.Description("Filter recorded IaC origin evidence; false is not proof of no IaC. Omit for no constraint. Requires enabled provenance queries.")),
 		mcp.WithString("type",
 			mcp.Description("Filter to one resource_type (e.g. compute_instance | Identity | ThirdPartyAsset)")),
 		mcp.WithString("provider",
@@ -42,7 +43,9 @@ func registerInventory() {
 		), append(identitySelectorParams(), pagingParams("resources")...)...),
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
-			addInventorySelector(q, args)
+			if errResult := addInventorySelector(q, args); errResult != nil {
+				return errResult, nil
+			}
 			addScalars(q, args, "sort", "cursor")
 			addInt(q, args, "limit", maxPageLimit)
 			addIdentitySelector(q, args)
@@ -59,7 +62,9 @@ func registerInventory() {
 		params:   inventorySelectorParams(),
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
-			addInventorySelector(q, args)
+			if errResult := addInventorySelector(q, args); errResult != nil {
+				return errResult, nil
+			}
 			return readGET(ctx, "inventory/facets", q)
 		},
 	})

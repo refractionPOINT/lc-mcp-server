@@ -243,6 +243,9 @@ func addInt(dst lc.Dict, args map[string]interface{}, key string, max int) {
 // CSV export, which walks the full filtered set server-side and ignores cursor/limit
 // (endpoint_cloudsec_export.go:80-86).
 func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) *mcp.CallToolResult {
+	if errResult := addIaCSelectors(dst, args, true); errResult != nil {
+		return errResult
+	}
 	addStrings(dst, args, "severity", "finding_class", "status", "account", "owner")
 	// `repo` is validated and case-folded rather than forwarded raw, so it is the one
 	// selector here that can refuse the call. The error travels up through every caller
@@ -466,7 +469,10 @@ func addIdentityPlacement(dst lc.Dict, args map[string]interface{}) {
 // (addCloudSecInventoryArgs, endpoint_cloudsec.go:336-349). provider/account/region
 // are single-valued here: the gateway only upgrades them to the repeatable form
 // when type=Identity, and an array sent to the generic walk would read as unset.
-func addInventorySelector(dst lc.Dict, args map[string]interface{}) {
+func addInventorySelector(dst lc.Dict, args map[string]interface{}) *mcp.CallToolResult {
+	if errResult := addIaCSelectors(dst, args, false); errResult != nil {
+		return errResult
+	}
 	for _, k := range []string{"type", "provider", "account", "region", "q"} {
 		if v := argScalar(args, k); v != "" {
 			dst[k] = v
@@ -487,6 +493,7 @@ func addInventorySelector(dst lc.Dict, args map[string]interface{}) {
 			}
 		}
 	}
+	return nil
 }
 
 // identityResourceType is the inventory discriminator the merged identity lane
@@ -503,4 +510,51 @@ func addDataStoreSelector(dst lc.Dict, args map[string]interface{}, paging bool)
 		addScalars(dst, args, "cursor")
 		addInt(dst, args, "limit", maxPageLimit)
 	}
+}
+
+// addIaCSelectors rejects malformed supplied selectors before any request can
+// silently widen a read. Absence and explicit false have different meanings.
+func addIaCSelectors(dst lc.Dict, args map[string]interface{}, findings bool) *mcp.CallToolResult {
+	if raw, present := args["has_iac_origin"]; present {
+		value, ok := raw.(bool)
+		if !ok {
+			return tools.ErrorResult("has_iac_origin must be a boolean; omit it for no constraint")
+		}
+		dst["has_iac_origin"] = value
+	}
+	if raw, present := args["iac_attribution"]; present {
+		if !findings {
+			return tools.ErrorResult("iac_attribution applies only to findings")
+		}
+		var values []string
+		switch v := raw.(type) {
+		case []string:
+			values = v
+		case []interface{}:
+			if len(v) > 4 {
+				return tools.ErrorResult("iac_attribution accepts one to four verdicts")
+			}
+			for _, item := range v {
+				value, ok := item.(string)
+				if !ok {
+					return tools.ErrorResult("iac_attribution must be an array of verdict strings")
+				}
+				values = append(values, value)
+			}
+		default:
+			return tools.ErrorResult("iac_attribution must be an array of verdict strings")
+		}
+		if len(values) == 0 || len(values) > 4 {
+			return tools.ErrorResult("iac_attribution accepts one to four verdicts")
+		}
+		for _, value := range values {
+			switch value {
+			case "attributed", "ambiguous", "none", "unknown":
+			default:
+				return tools.ErrorResult("invalid iac_attribution verdict")
+			}
+		}
+		dst["iac_attribution"] = values
+	}
+	return nil
 }

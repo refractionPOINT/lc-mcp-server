@@ -106,6 +106,9 @@ func readGETOrg(org *lc.Organization, path string, query lc.Dict) (*mcp.CallTool
 	if err := org.GenericGETRequest(path, query, &resp); err != nil {
 		return tools.ErrorResultf("cloudsec request to %s failed: %s", path, describeErr(err)), nil
 	}
+	if err := requireIaCReceipt(query, resp["applied_iac_filters"]); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	}
 	return tools.SuccessResult(resp), nil
 }
 
@@ -115,6 +118,9 @@ func getJSON(ctx context.Context, org *lc.Organization, path string, query lc.Di
 	resp := map[string]interface{}{}
 	if err := org.GenericGETRequest(path, query, &resp); err != nil {
 		return nil, fmt.Errorf("cloudsec request to %s failed: %w", path, err)
+	}
+	if err := requireIaCReceipt(query, resp["applied_iac_filters"]); err != nil {
+		return nil, err
 	}
 	return resp, nil
 }
@@ -151,6 +157,8 @@ func pagingParams(noun string) []mcp.ToolOption {
 // findings list, its facets, the cause rollup and the CSV export.
 func findingSelectorParams(paging bool) []mcp.ToolOption {
 	params := []mcp.ToolOption{
+		mcp.WithBoolean("has_iac_origin", mcp.Description("Filter recorded IaC origin evidence. False means no recorded evidence, not proof that no IaC exists. Omit for no constraint. Requires enabled provenance queries.")),
+		mcp.WithArray("iac_attribution", mcp.WithStringItems(), mcp.Description("One to four exact verdicts: attributed, ambiguous, none, unknown. Unknown or partial evidence is never safe. Requires enabled provenance queries.")),
 		mcp.WithArray("severity", mcp.WithStringItems(),
 			mcp.Description("Severity filter: CRITICAL | HIGH | MEDIUM | LOW | INFO. Repeatable (OR within the key, AND across keys); at most 100 values are honored")),
 		mcp.WithArray("finding_class", mcp.WithStringItems(),
