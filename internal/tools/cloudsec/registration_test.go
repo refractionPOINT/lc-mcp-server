@@ -61,8 +61,11 @@ var readOnlyTools = []string{
 	// resolution
 	"cloudsec_resolve_sensors",
 	"cloudsec_resolve_assets",
-	// runtime package evidence (a POST the gateway serves as a read: it computes a
-	// verdict on demand and stores nothing)
+	// runtime package evidence. A POST the gateway serves as a read: it mutates no
+	// customer state and takes no response action. It is not side-effect FREE — asking
+	// publishes the finding's packages as relevant so the producer starts summarizing
+	// them — but nothing customer-visible is written, which is the line the other four
+	// POST-previews sit on too.
 	"cloudsec_check_finding_runtime",
 	// export
 	"cloudsec_export_csv",
