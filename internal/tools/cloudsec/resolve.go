@@ -13,8 +13,8 @@ func registerResolve() {
 	register(toolDef{
 		name: "cloudsec_resolve_sensors",
 		description: "Resolve LimaCharlie sensor ids to the cloud asset (urn, with posture flags) each one runs on — the runtime-to-posture direction of the fusion mapping. " +
-			"Sensors with no known cloud asset come back in 'unresolved'. Any batch size works: the request is chunked automatically. " +
-			"'resolver_ready' false means the resolver is not provisioned here, which is different from 'no asset matched'.",
+			"Unresolved sensors are unknown, never evidence of absence. Optional freshness and node placement fields are preserved. Requests are chunked automatically. " +
+			"'resolver_ready' reports reader provisioning, not successful cache access or complete coverage.",
 		readOnly: true,
 		params: []mcp.ToolOption{
 			mcp.WithArray("sid", mcp.WithStringItems(),
@@ -29,8 +29,8 @@ func registerResolve() {
 	register(toolDef{
 		name: "cloudsec_resolve_assets",
 		description: "Resolve cloud asset urns to the LimaCharlie sensor ids running on each — the posture-to-runtime direction of the fusion mapping. " +
-			"Urns with no sensor come back in 'unresolved'. Any batch size works: the request is chunked automatically. " +
-			"'resolver_ready' false means the resolver is not provisioned here, which is different from 'no sensor matched'.",
+			"Unresolved urns are unknown, never evidence that no sensor runs there. Requests are chunked automatically. " +
+			"'resolver_ready' reports reader provisioning, not successful cache access or complete coverage.",
 		readOnly: true,
 		params: []mcp.ToolOption{
 			mcp.WithArray("urn", mcp.WithStringItems(),
