@@ -11,9 +11,9 @@ import (
 )
 
 // readOnlyTools are the cloudsec.get tools — the exact membership of the
-// cloud_security_readonly profile. Four of them are POSTs (the graph query, the
-// policy-value suggester and the two simulate previews) which the gateway serves as
-// read-only previews, so they belong here despite the verb.
+// cloud_security_readonly profile. Five of them are POSTs (the graph query, the
+// policy-value suggester, the two simulate previews and the runtime check) which the
+// gateway serves as read-only previews, so they belong here despite the verb.
 var readOnlyTools = []string{
 	"cloudsec_code_provenance",
 	// posture
@@ -61,6 +61,12 @@ var readOnlyTools = []string{
 	// resolution
 	"cloudsec_resolve_sensors",
 	"cloudsec_resolve_assets",
+	// runtime package evidence. A POST the gateway serves as a read: it mutates no
+	// customer state and takes no response action. It is not side-effect FREE — asking
+	// publishes the finding's packages as relevant so the producer starts summarizing
+	// them — but nothing customer-visible is written, which is the line the other four
+	// POST-previews sit on too.
+	"cloudsec_check_finding_runtime",
 	// export
 	"cloudsec_export_csv",
 	// free tier / fleet

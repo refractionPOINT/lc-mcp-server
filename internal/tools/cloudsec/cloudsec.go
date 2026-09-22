@@ -2,7 +2,8 @@
 // tools: the posture overview, the findings worklist and its triage writes, CIEM /
 // identity access, the cloud inventory and Data Security (DSPM) rollups, compliance
 // assessments, CAASM third-party asset coverage, the security-graph query DSL, the
-// sensor <-> cloud-asset resolver, and the CSV exports.
+// sensor <-> cloud-asset resolver, the on-demand runtime package check (see
+// docs/CS-15-runtime-package-evidence.md), and the CSV exports.
 //
 // Every route lives under /v1/cloudsec/ on the API gateway
 // (lc_api-go/service/endpoint_cloudsec*.go). Reads require the cloudsec.get
@@ -33,6 +34,7 @@ func init() {
 	registerCAASM()
 	registerPolicyAids()
 	registerResolve()
+	registerRuntime()
 	registerExport()
 	registerWrites()
 	registerFleet()

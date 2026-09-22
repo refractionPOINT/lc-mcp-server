@@ -135,8 +135,8 @@ The server organizes tools into profiles for different use cases:
 | **ai_powered** | 18 | AI-assisted content generation | Auto-generate rules/queries; AI sessions, usage, memory |
 | **investigation_management** | 20 | Case management | Cases, notes, entities, detections, telemetry, artifacts |
 | **api_access** | 1 | Generic API escape-hatch | Raw LimaCharlie API calls |
-| **cloud_security** | 55 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes, AppSec code lane |
-| **cloud_security_readonly** | 43 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
+| **cloud_security** | 58 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes, AppSec code lane |
+| **cloud_security_readonly** | 46 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
 | **all** | 345 | All profiles combined | Full platform access |
 
 ## Configuration
