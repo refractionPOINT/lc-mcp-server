@@ -103,3 +103,17 @@ func TestResolveMergeEmptyResultHasBothKeys(t *testing.T) {
 	assert.Equal(t, []interface{}{}, out["resolved"])
 	assert.Equal(t, []interface{}{}, out["unresolved"])
 }
+
+func TestResolveMergePreservesRuntimeEvidenceAndUnknown(t *testing.T) {
+	row := map[string]interface{}{"sid": "s1", "urn": "asset", "level": "derived", "source": "sensor_cloud_resolver", "observed_at": "2026-09-22T00:00:00Z", "stale_at": "2026-09-22T00:15:00Z", "node": map[string]interface{}{"node_uid": "node", "cluster_urn": "cluster"}}
+	m := resolveMerge{}
+	m.add(map[string]interface{}{"resolved": []interface{}{row}, "unresolved": []interface{}{"unknown"}, "resolver_ready": true})
+	m.add(map[string]interface{}{"resolved": []interface{}{}, "unresolved": []interface{}{"cache-failed"}, "resolver_ready": false})
+	out := m.result()
+	require.Equal(t, []interface{}{row}, out["resolved"])
+	require.Equal(t, []interface{}{"unknown", "cache-failed"}, out["unresolved"])
+	require.Equal(t, false, out["resolver_ready"])
+	for _, key := range []string{"exposed", "reaches_crownjewel", "lc_risk"} {
+		require.NotContains(t, row, key)
+	}
+}
