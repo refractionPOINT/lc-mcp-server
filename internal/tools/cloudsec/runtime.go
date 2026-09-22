@@ -13,10 +13,9 @@ import (
 // Runtime package evidence (CS-15) — the PUBLIC five-rung ladder.
 //
 // The question: for one open package finding on one cloud workload, did that code
-// actually run? Plan 24 decision D6 fixes the answer to five rungs and no more.
-// go-cloudsec findings/runtime.go and runtimeevidence/verdict.go
-// (PR refractionPOINT/go-cloudsec#413) are the authority; these constants mirror them
-// so the MCP surface cannot drift into a sixth rung or a different spelling.
+// actually run? The answer is one of five rungs and no more. The LimaCharlie backend's
+// runtime-evidence contract is the authority; these constants mirror it so the MCP
+// surface cannot drift into a sixth rung or a different spelling.
 //
 // The reason this file carries so much description text is that the tool's consumer is
 // a model, and the failure mode that matters is a model reading an absence of telemetry
@@ -45,7 +44,7 @@ const (
 	// runtimeExecuting: the package IS the running executable.
 	runtimeExecuting = "executing"
 
-	// legacyRuntimeNotObserved is the pre-CS-15 spelling. Plan 24 §14: "Decode legacy
+	// legacyRuntimeNotObserved is the earlier spelling. The contract's rule: "Decode legacy
 	// dormant as not_observed but never emit it." Nothing here produces it, and
 	// decodeRuntimeStatus is the only thing that recognizes it.
 	//
@@ -115,8 +114,7 @@ func runtimeLevel(v interface{}) string {
 // runtimeVerdict reads the SERVER's whole-resource verdict out of a check response.
 //
 // THERE IS DELIBERATELY NO CLIENT-SIDE FOLD. The backend already computes the verdict
-// (runtimeevidence.CheckResult.Headline) and publishes it at the top of the `runtime`
-// object, so this reads it. Re-deriving it here would be a permanent drift surface, and
+// and publishes it at the top of the `runtime` object, so this reads it. Re-deriving it here would be a permanent drift surface, and
 // the obvious hand-rolled fold is wrong in one specific and dangerous way: the negative
 // rung ranks BELOW `present`, so taking the strongest per-package answer reports a
 // whole-machine negative whenever nothing positive turned up — losing the veto that one
@@ -208,7 +206,7 @@ func registerRuntime() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 			path := orgPath(org, "findings/"+url.PathEscape(findingID)+"/runtime-check")
-			// The body is EMPTY and must stay so. Plan §9: every target is derived from
+			// The body is EMPTY and must stay so: every target is derived from
 			// the finding id server-side, so a caller cannot name a sensor, a resource or
 			// a package — and the only way to keep that true from here is to send nothing.
 			resp, err := postJSON(ctx, org, path, map[string]interface{}{}, defaultTimeout)

@@ -12,16 +12,13 @@ import (
 
 // These tests pin the properties the runtime ladder exists FOR, not its shape:
 //
-//   - plan 24 §14 — "Decode legacy dormant as not_observed but never emit it"; and
-//   - plan 24 §18 gate 12 — "Runtime negative only on complete window; telemetry lapse
-//     yields unknown", which on this side means the tool must never manufacture a
-//     negative and must never report an unavailable check as one.
+//   - "Decode legacy dormant as not_observed but never emit it"; and
+//   - "Runtime negative only on complete window; telemetry lapse yields unknown", which
+//     on this side means the tool must never manufacture a negative and must never
+//     report an unavailable check as one.
 //
-// Contract: go-cloudsec findings/runtime.go + runtimeevidence/verdict.go (#413, merged).
-// WIRE shape: the gateway forwards the graph actor's Data dict verbatim, so the envelope
-// is {"accepted": bool, "runtime": {...}|null} with FLAT per-package rows and the unknown
-// rung rendered as the literal "unknown" (legion_graph runtimePackageWire /
-// runtimeVerdictWire; lc_api-go endpoint_cloudsec_runtime.go declares the same schema).
+// WIRE shape: the gateway route returns {"accepted": bool, "runtime": {...}|null} with
+// FLAT per-package rows and the unknown rung rendered as the literal "unknown".
 
 // legacyToken is spelled out here rather than reused from the package constant: a test
 // asserting that a token can never come back out should not depend on the production
