@@ -16,6 +16,12 @@ import (
 // gateway serves as read-only previews, so they belong here despite the verb.
 var readOnlyTools = []string{
 	"cloudsec_code_provenance",
+	// Code Security evidence chain, coverage, impact and remediation reads
+	"cloudsec_get_finding_evidence_chain",
+	"cloudsec_get_code_coverage",
+	"cloudsec_get_code_impact",
+	"cloudsec_list_remediations",
+	"cloudsec_get_remediation",
 	// posture
 	"cloudsec_get_overview",
 	"cloudsec_get_risk_trend",
@@ -101,6 +107,12 @@ var writeTools = map[string]bool{
 	// and devalue that signal for the calls that are.
 	"cloudsec_code_scan_local": false, // ingest merges by identity; deletes nothing
 	"cloudsec_code_autofix":    false, // creates a branch + pull request; destroys nothing
+	// Remediation. Create queues a run that does nothing until a human approves it.
+	// Decide approves, rejects or cancels: it is destructive, and it also has its own
+	// server-checked two-step confirmation (remediation.go), because a client's
+	// destructive-hint prompt is advisory and cannot be relied on.
+	"cloudsec_create_remediation": false,
+	"cloudsec_decide_remediation": true,
 }
 
 // noOIDTools do not take an organization: the fleet board's route carries no {oid}

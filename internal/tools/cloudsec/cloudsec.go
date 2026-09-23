@@ -40,6 +40,8 @@ func init() {
 	registerFleet()
 	registerCode()
 	registerProvenance()
+	registerEvidence()
+	registerRemediation()
 }
 
 // toolDef describes one cloudsec tool. Registering through a single helper keeps the
