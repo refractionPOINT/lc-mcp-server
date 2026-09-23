@@ -511,6 +511,13 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_code_autofix",
 		"cloudsec_code_provenance",
 		"cloudsec_code_provenance_push",
+		"cloudsec_get_finding_evidence_chain",
+		"cloudsec_get_code_coverage",
+		"cloudsec_get_code_impact",
+		"cloudsec_list_remediations",
+		"cloudsec_get_remediation",
+		"cloudsec_create_remediation",
+		"cloudsec_decide_remediation",
 	},
 	"cloud_security_readonly": {
 		// The cloudsec.get subset: every read plus the CSV export. Excludes all
@@ -577,6 +584,11 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_code_capabilities",
 		"cloudsec_code_fixes",
 		"cloudsec_code_provenance",
+		"cloudsec_get_finding_evidence_chain",
+		"cloudsec_get_code_coverage",
+		"cloudsec_get_code_impact",
+		"cloudsec_list_remediations",
+		"cloudsec_get_remediation",
 	},
 }
 
