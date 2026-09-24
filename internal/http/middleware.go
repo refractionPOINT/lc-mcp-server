@@ -178,6 +178,9 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID, X-MCP-Tools, X-LC-UID, X-LC-OID, X-LC-API-KEY, X-LC-ALLOW-META-TOOLS, X-LC-DENY-META-TOOLS")
+			// Browser-based MCP clients must be able to read the OAuth challenge
+			// on a 401 to discover where to sign in.
+			w.Header().Set("Access-Control-Expose-Headers", "WWW-Authenticate")
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
 		}

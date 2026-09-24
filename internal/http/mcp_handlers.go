@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -51,6 +52,13 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		// Heartbeat/keepalive - return empty response
 		s.writeJSONRPCSuccess(w, req.ID, map[string]interface{}{})
 	case "initialize":
+		// Opening a session needs a credential so that an OAuth client learns,
+		// before it lists or calls anything, that it must sign in. tools/list
+		// stays open: the tool catalog is public and holds no org data.
+		if !s.requestHasCredentials(r) {
+			s.writeAuthChallenge(w, req.ID, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
+			return
+		}
 		s.handleInitialize(w, r, req.ID, req.Params)
 	case "notifications/initialized":
 		// Client confirms initialization is complete - just log it
@@ -147,7 +155,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		// Bearer token provided - use OAuth/JWT passthrough
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || parts[0] != "Bearer" {
-			s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Invalid Authorization header format")
+			s.writeAuthChallenge(w, id, "invalid_token", "Invalid Authorization header format")
 			return
 		}
 
@@ -160,7 +168,11 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		tokenDuration := time.Since(tokenStartTime)
 		if err != nil {
 			s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
-			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
+			if errors.Is(err, errInvalidCredentials) {
+				s.writeAuthChallenge(w, id, "invalid_token", "The access token is invalid or expired")
+			} else {
+				s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
+			}
 			return
 		}
 		s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
@@ -229,7 +241,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", authCtx.UID, "mode", authCtx.Mode.String())
 	} else {
 		// No authentication provided
-		s.writeJSONRPCError(w, id, -32000, "Unauthorized", "Missing authentication: provide Authorization header, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers")
+		s.writeAuthChallenge(w, id, "", "Missing authentication: provide Authorization header, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers")
 		return
 	}
 
@@ -472,7 +484,7 @@ func (s *Server) extractUIDFromToken(token string) (string, string, string, erro
 
 	// Check if OAuth is configured
 	if s.tokenManager == nil {
-		return "", "", "", fmt.Errorf("invalid token: OAuth not configured and token is not a valid LimaCharlie JWT")
+		return "", "", "", fmt.Errorf("%w: OAuth not configured and token is not a valid LimaCharlie JWT", errInvalidCredentials)
 	}
 
 	// Validate the MCP access token using token manager
@@ -487,7 +499,7 @@ func (s *Server) extractUIDFromToken(token string) (string, string, string, erro
 	}
 
 	if !validation.Valid {
-		return "", "", "", fmt.Errorf("invalid or expired token: %s", validation.Error)
+		return "", "", "", fmt.Errorf("%w: invalid or expired token: %s", errInvalidCredentials, validation.Error)
 	}
 
 	// Return the Firebase UID, LimaCharlie JWT (exchanged from Firebase token), and Firebase ID token
