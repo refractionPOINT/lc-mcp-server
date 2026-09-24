@@ -485,3 +485,83 @@ func TestTokenExtension_SecurityAuditFields(t *testing.T) {
 		assert.NotEqual(t, int64(0), tokenData.LastExtendedAt)
 	})
 }
+
+// ===== Transient vs dead token failures =====
+
+// Callers answer a dead token with a 401, which sends the client back through
+// sign-in, so a backend failure must be flagged Transient and a dead token
+// must not.
+func TestValidateAccessToken_TransientVsDead(t *testing.T) {
+	ctx := context.Background()
+
+	storeToken := func(t *testing.T, stateManager *state.Manager, accessToken string, expiresAt int64) {
+		t.Helper()
+		tokenData := state.NewAccessTokenData(accessToken, "user", "fb-id", "fb-refresh",
+			time.Now().Add(1*time.Hour).Unix(), "openid", state.TokenTTL)
+		tokenData.ExpiresAt = expiresAt
+		require.NoError(t, stateManager.StoreAccessToken(ctx, tokenData))
+	}
+
+	t.Run("unknown token is dead", func(t *testing.T) {
+		manager, _, _ := setupTestManager(t)
+
+		result, err := manager.ValidateAccessToken(ctx, "no-such-token", true)
+
+		require.NoError(t, err)
+		assert.False(t, result.Valid)
+		assert.False(t, result.Transient)
+	})
+
+	t.Run("extension limit reached is dead", func(t *testing.T) {
+		manager, stateManager, _ := setupTestManager(t)
+		tokenData := state.NewAccessTokenData("maxed", "user", "fb-id", "fb-refresh",
+			time.Now().Add(1*time.Hour).Unix(), "openid", state.TokenTTL)
+		tokenData.ExtensionCount = state.MaxTokenExtensions
+		tokenData.ExpiresAt = time.Now().Add(-1 * time.Hour).Unix()
+		require.NoError(t, stateManager.StoreAccessToken(ctx, tokenData))
+
+		result, err := manager.ValidateAccessToken(ctx, "maxed", true)
+
+		require.NoError(t, err)
+		assert.False(t, result.Valid)
+		assert.False(t, result.Transient)
+	})
+
+	t.Run("JWT exchange failure on a live token is transient", func(t *testing.T) {
+		manager, stateManager, _ := setupTestManager(t)
+		manager.WithJWTExchange(mockJWTExchange("", errors.New("jwt service unavailable")))
+		storeToken(t, stateManager, "live", time.Now().Add(12*time.Hour).Unix())
+
+		result, err := manager.ValidateAccessToken(ctx, "live", true)
+
+		require.NoError(t, err)
+		assert.False(t, result.Valid)
+		assert.True(t, result.Transient)
+	})
+
+	t.Run("Firebase refresh failure in the grace period is transient", func(t *testing.T) {
+		manager, stateManager, mockFB := setupTestManager(t)
+		mockFB.refreshIDTokenFunc = func(ctx context.Context, refreshToken string) (string, int64, error) {
+			return "", 0, errors.New("firebase unavailable")
+		}
+		storeToken(t, stateManager, "in-grace", time.Now().Add(-1*time.Hour).Unix())
+
+		result, err := manager.ValidateAccessToken(ctx, "in-grace", true)
+
+		require.NoError(t, err)
+		assert.False(t, result.Valid)
+		assert.True(t, result.Transient)
+	})
+
+	t.Run("JWT exchange failure after a grace period extension is transient", func(t *testing.T) {
+		manager, stateManager, _ := setupTestManager(t)
+		manager.WithJWTExchange(mockJWTExchange("", errors.New("jwt service unavailable")))
+		storeToken(t, stateManager, "extended", time.Now().Add(-1*time.Hour).Unix())
+
+		result, err := manager.ValidateAccessToken(ctx, "extended", true)
+
+		require.NoError(t, err)
+		assert.False(t, result.Valid)
+		assert.True(t, result.Transient)
+	})
+}

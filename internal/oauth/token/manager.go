@@ -32,6 +32,12 @@ type ValidationResult struct {
 	Scope                string
 	Error                string
 	Refreshed            bool
+	// Transient is set when Valid is false because a backend (Firebase, the
+	// JWT service, Redis) failed, not because the token is dead. Callers must
+	// not send the client back through sign-in for it: a retry may succeed,
+	// and a token that really is dead is rejected as expired once its TTL
+	// runs out.
+	Transient bool
 }
 
 // TokenResponse represents an OAuth 2.0 token response
@@ -123,8 +129,9 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			if err != nil {
 				m.logger.Error("Failed to refresh Firebase ID token during MCP token extension", "error", err, "uid", tokenData.UID)
 				return &ValidationResult{
-					Valid: false,
-					Error: fmt.Sprintf("token expired and refresh failed: %v", err),
+					Valid:     false,
+					Error:     fmt.Sprintf("token expired and refresh failed: %v", err),
+					Transient: true,
 				}, nil
 			}
 
@@ -138,8 +145,9 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			if err := m.stateManager.StoreAccessToken(ctx, tokenData); err != nil {
 				m.logger.Error("Failed to extend MCP token lifetime", "error", err, "uid", tokenData.UID)
 				return &ValidationResult{
-					Valid: false,
-					Error: "failed to extend token lifetime",
+					Valid:     false,
+					Error:     "failed to extend token lifetime",
+					Transient: true,
 				}, nil
 			}
 
@@ -155,8 +163,9 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			if err != nil {
 				m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 				return &ValidationResult{
-					Valid: false,
-					Error: fmt.Sprintf("JWT exchange failed: %v", err),
+					Valid:     false,
+					Error:     fmt.Sprintf("JWT exchange failed: %v", err),
+					Transient: true,
 				}, nil
 			}
 
@@ -256,8 +265,9 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 				if err != nil {
 					m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 					return &ValidationResult{
-						Valid: false,
-						Error: fmt.Sprintf("JWT exchange failed: %v", err),
+						Valid:     false,
+						Error:     fmt.Sprintf("JWT exchange failed: %v", err),
+						Transient: true,
 					}, nil
 				}
 
@@ -280,8 +290,9 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	if err != nil {
 		m.logger.Error("Failed to exchange Firebase token for LimaCharlie JWT", "error", err, "uid", tokenData.UID)
 		return &ValidationResult{
-			Valid: false,
-			Error: fmt.Sprintf("JWT exchange failed: %v", err),
+			Valid:     false,
+			Error:     fmt.Sprintf("JWT exchange failed: %v", err),
+			Transient: true,
 		}, nil
 	}
 

@@ -2,13 +2,16 @@ package http
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
@@ -161,6 +164,21 @@ func TestToolCallTokenErrors(t *testing.T) {
 		var resp map[string]interface{}
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.Equal(t, "Unauthorized", resp["error"].(map[string]interface{})["message"])
+	})
+
+	t.Run("live token whose JWT exchange fails is not a 401", func(t *testing.T) {
+		s, _ := createOAuthTestServer(t)
+		s.tokenManager.WithJWTExchange(func(string, string, *slog.Logger) (string, error) {
+			return "", errors.New("jwt service unavailable")
+		})
+		tokenData := state.NewAccessTokenData("live-token", "user", "fb-id", "fb-refresh",
+			time.Now().Add(time.Hour).Unix(), "openid", state.TokenTTL)
+		require.NoError(t, s.stateManager.StoreAccessToken(context.Background(), tokenData))
+
+		w := postMCP(t, s, "/mcp", "tools/call", map[string]string{"Authorization": "Bearer live-token"})
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Empty(t, w.Header().Get("WWW-Authenticate"))
 	})
 
 	t.Run("no OAuth configured and not a LimaCharlie JWT", func(t *testing.T) {

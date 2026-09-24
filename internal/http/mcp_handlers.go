@@ -499,6 +499,9 @@ func (s *Server) extractUIDFromToken(token string) (string, string, string, erro
 	}
 
 	if !validation.Valid {
+		if validation.Transient {
+			return "", "", "", fmt.Errorf("token could not be validated: %s", validation.Error)
+		}
 		return "", "", "", fmt.Errorf("%w: invalid or expired token: %s", errInvalidCredentials, validation.Error)
 	}
 
