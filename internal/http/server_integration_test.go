@@ -217,6 +217,10 @@ func TestMissingAuth(t *testing.T) {
 
 	server.mux.ServeHTTP(w, req)
 
+	// A 401 with a challenge is what makes an OAuth client start its login
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Header().Get("WWW-Authenticate"), "Bearer")
+
 	var response map[string]interface{}
 	err = json.Unmarshal(w.Body.Bytes(), &response)
 	require.NoError(t, err)
@@ -250,6 +254,9 @@ func TestInvalidBearerToken(t *testing.T) {
 		w := httptest.NewRecorder()
 
 		server.mux.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+		assert.Contains(t, w.Header().Get("WWW-Authenticate"), `error="invalid_token"`)
 
 		var response map[string]interface{}
 		err = json.Unmarshal(w.Body.Bytes(), &response)
