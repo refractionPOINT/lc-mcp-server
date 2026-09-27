@@ -85,8 +85,8 @@ var readOnlyTools = []string{
 	"cloudsec_code_fixes",
 }
 
-// writeTools are the cloudsec.set tools, with the destructive classification each
-// one carries.
+// writeTools are non-read tools (some require cloudsec.respond, others
+// cloudsec.set), with the destructive classification each one carries.
 var writeTools = map[string]bool{
 	"cloudsec_code_provenance_push":    false,
 	"cloudsec_set_finding_status":      true,  // changes a finding's disposition

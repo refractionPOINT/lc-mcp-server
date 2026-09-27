@@ -343,16 +343,14 @@ func TestCodeAutofixRefusesAnythingThatIsNotAFindingID(t *testing.T) {
 	}
 }
 
-// The description has to carry the two things a caller cannot discover from the response,
-// because the response is only "accepted": that the pull request is the actual result, and
-// that for npm and go the lockfile is NOT regenerated. An agent that reports "fixed" on the
-// strength of an accepted call, or that believes an npm bump changed what installs, is
-// worse than no tool.
+// The description must direct a caller to the governed run and make the
+// permission and terminal unverified outcomes explicit.
 func TestCodeAutofixDescriptionCarriesWhatTheResponseCannot(t *testing.T) {
 	reg, exists := tools.GetTool("cloudsec_code_autofix")
 	require.True(t, exists)
 	for _, want := range []string{
-		"WRITES", "queued", "lockfile", "MALICIOUS", "fixed version",
+		"WRITES", "cloudsec.respond", "run_id", "cloudsec_get_remediation",
+		"pr_merged_unverifiable", "pr_closed", "capacity", "lockfile", "MALICIOUS", "fixed version",
 	} {
 		assert.Contains(t, reg.Description, want)
 	}

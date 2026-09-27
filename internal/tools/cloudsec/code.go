@@ -855,19 +855,15 @@ var findingIDRe = regexp.MustCompile(`^fnd_[0-9a-f]{32}$`)
 func registerCodeAutofix() {
 	register(toolDef{
 		name: "cloudsec_code_autofix",
-		description: "Open a PULL REQUEST in the customer's repository raising the vulnerable dependency a finding is about. THIS WRITES TO THEIR SOURCE CONTROL — ask before calling it. " +
-			"The finding id is the only input that decides anything: the backend resolves it against the dependency rows its own scan produced and raises THAT package to THAT " +
-			"advisory's fixed version, so there is deliberately no way to name a package or a version here. It ACCEPTS and returns; the pull request appears minutes later and IS " +
-			"the result — this response only says the request was queued, so do not report a pull request as opened on the strength of it. " +
-			"Each of these is a quiet no-op rather than an error: no Code Actions App configured, or one lacking 'Contents: Read and write' (the write App is separate and opt-in — " +
-			"the read-only connector is never used to write); a MALICIOUS package, where the remediation is removal and credential rotation rather than an upgrade; a finding with no " +
-			"published fixed version; an ecosystem other than npm, pip, go or maven; a repository outside the code_scanning policy scope or over the free-tier quota; a package that " +
-			"already has an AutoFix pull request open (one per repository and package at a time); and a connection at its daily AutoFix limit. " +
-			"Lockfiles: for npm the package-lock.json IS rewritten by default, from one read-only registry metadata read; it is left stale only where the policy sets " +
-			"'autofix_registry_access: false', where the lock is a yarn.lock/pnpm-lock.yaml, or where the entry cannot be rewritten safely. For go the go.sum is NOT regenerated. " +
-			"pip (requirements.txt) and maven have no lockfile, so those changes are complete. Whenever a lock is left stale the pull request says so and names the command to run, " +
-			"so trust the pull request over any assumption here. Read the finding first with cloudsec_code_findings: 'code.fixed_version' is what will be applied, and if you would " +
-			"rather make the change locally, cloudsec_code_scan_local confirms it before you push. " + codeLaneNote,
+		description: "Request a dependency-fix pull request in the customer's repository. THIS WRITES TO SOURCE CONTROL — ask the user before calling it. " +
+			"Requires cloudsec.respond; cloudsec.set alone is refused. The call creates a governed remediation run with the caller as requester and approver. " +
+			"The response includes run_id, state and replayed. Follow the run with cloudsec_get_remediation: accepted does not mean a pull request exists or a fix is verified. " +
+			"Disabled remediation returns disabled, an unavailable action returns action_unavailable, and full mutation slots return capacity. " +
+			"An existing package PR or exhausted daily budget fails the run with autofix_pr_already_open or autofix_budget_exhausted. " +
+			"A merged PR with no recorded deployment scope ends pr_merged_unverifiable; a PR closed without merge ends pr_closed. Neither is verified. " +
+			"The finding id determines the package and fixed version; repo is only a search hint. A MALICIOUS package needs removal and credential rotation, not an upgrade. " +
+			"Lockfiles: npm package-lock.json is rewritten by default unless policy disables registry access or safety checks fail; yarn.lock and pnpm-lock.yaml are left stale. " +
+			"For go, go.sum is NOT regenerated. The pull request explains any stale lockfile. Read the finding first with cloudsec_code_findings. " + codeLaneNote,
 		// A write, and not a destructive one: it creates a branch and a pull request and
 		// changes nothing that exists. Marking it destructive would put it behind the
 		// confirmation an irreversible action deserves and devalue that signal.

@@ -28,9 +28,9 @@ Both are hive records, so an agent reads and writes them with the generic hive t
 means one of those two is missing, not that the code is clean** — which is why every one of the four
 descriptions says so.
 
-The whole `/cloudsec/*` surface also needs the org subscribed to the `ext-cloud-security` extension
-and the caller to hold `cloudsec.get` (and `cloudsec.set` for `cloudsec_code_scan_local` with
-`ingest`).
+The whole `/cloudsec/*` surface also needs the org subscribed to Cloud Security.
+Reads require `cloudsec.get`; local scan ingestion requires `cloudsec.set`;
+`cloudsec_code_autofix` requires `cloudsec.respond`.
 
 ## Setup — Claude Code
 
@@ -150,7 +150,8 @@ misread as a clean estate.
 
 ## `cloudsec_code_autofix`
 
-Registered, listed, and refuses every call with:
+Requires `cloudsec.respond`; `cloudsec.set` alone receives 403 `missing_permission`.
+The caller becomes the governed run's requester and approver. A successful call returns:
 
 ```json
 {
@@ -158,21 +159,26 @@ Registered, listed, and refuses every call with:
   "finding_id": "fnd_...",
   "repo": "acme/api",
   "provider": "github",
-  "debounce_seconds": 60
+  "run_id": "rem_...",
+  "state": "requested",
+  "replayed": false,
+  "run": {"run_id": "rem_..."}
 }
 ```
 
-**The response says the request was queued, not that a pull request exists.** The clone, the edit and
-the pull request happen minutes later inside a sandbox, so the pull request itself is the result — do
-not report a dependency as fixed on the strength of this response.
+**The response says a remediation run exists, not that a pull request exists.** Follow
+`run_id` with `cloudsec_get_remediation`. A second click before the PR opens returns
+the same run with `replayed: true`. The PR arrives through the authenticated callback.
 
-Every refusal downstream of that acknowledgement is a *quiet* no-op: no Code Actions App, an App
-without `Contents: Read and write`, a malicious package (where the remediation is removal and
-credential rotation, not an upgrade), no published fixed version, an unsupported ecosystem, a
-repository outside the policy scope or over the free-tier quota, a pull request already open for that
-package, or the daily limit. None of them comes back on this call — they surface as the
-`cloudsec.code_autofix_refused` operational event, and in the lane's own logs. If no pull request
-appears, that event is where the reason is.
+Before run creation, disabled remediation returns 503 `disabled`, an unavailable fix
+action returns 422 `action_unavailable`, and full mutation slots return 429
+`capacity`. An existing package PR or exhausted daily AutoFix budget fails the run
+with `autofix_pr_already_open` or `autofix_budget_exhausted`. After a PR merges,
+a run with no recorded deployment in scope ends `expired` with
+`pr_merged_unverifiable`; closing the PR without merge ends with `pr_closed`.
+Neither is `verified`. A merged PR waiting for deployment evidence remains in
+`monitoring` but no longer consumes a mutation slot. AutoFix has a smaller slot
+budget than containment actions.
 
 The write App is **separate and opt-in**: the read-only connector is never used to write.
 
