@@ -97,9 +97,8 @@ cloudsec_code_findings { "repo": ["owner/name"], "severity": ["CRITICAL","HIGH"]
 `repo` is repeatable and the gateway honours at most 100 values.
 
 `repo` is matched **exactly** against a key whose owner and name segments are both ASCII
-lower-cased when the repository's urn is built (`go-cloudsec` `model.BuildRepoURN` /
-`FoldRepoSegment`, v1.46.0), while a finding's own `code.repo_name` is the platform's *display*
-casing. The shared findings selector folds what you pass, so reading `refractionPOINT/lc-appsec-fixtures`
+lower-cased when the repository's urn is built, while a finding's own `code.repo_name` is the platform's *display*
+casing. The shared findings selector folds what you pass, so reading `Acme/API`
 off a finding and feeding it back now works. A key that is genuinely wrong still returns zero rows:
 an empty page under a single `repo` filter carries a `note` saying which of the three cases it is —
 the key is right and nothing matched, the key is wrong and here is the real one, or no such

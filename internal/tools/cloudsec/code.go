@@ -278,8 +278,7 @@ func codeFindingsRequest(args map[string]interface{}) (string, lc.Dict, *mcp.Cal
 // than guessing.
 //
 // The trap it exists for: `repo` is matched exactly against a key that is ASCII
-// lower-cased in both segments when the repository's urn is built (go-cloudsec
-// model.BuildRepoURN / FoldRepoSegment, v1.46.0), while a finding's own `code.repo_name`
+// lower-cased in both segments when the repository's urn is built, while a finding's own `code.repo_name`
 // is the platform's DISPLAY casing. The shared selector folds what a caller passes, so
 // casing alone no longer produces an empty page — but a key that is simply wrong, or a
 // repository that is not in the inventory at all, still does, and looks identical.
@@ -942,8 +941,8 @@ func gitRepoKey(ctx context.Context, root string) string {
 // The key keeps the remote's FULL path (host and ".git" stripped), not just its last two
 // segments. A flat-owner remote (GitHub, Bitbucket) is already exactly "owner/name", but
 // a GitLab repository nested under a group/subgroup namespace publishes that whole path
-// as its key ("acme/platform/backend", not "platform/backend") — go-cloudsec's
-// model.SplitRepoKey reads a nested-owner provider's key by cutting on the LAST '/', so
+// as its key ("acme/platform/backend", not "platform/backend"). A nested-owner
+// provider's key is read by cutting on the LAST '/', so
 // dropping a leading segment here would silently attribute a finding to a DIFFERENT,
 // but still plausible-looking, repository.
 func repoKeyFromRemote(raw string) string {

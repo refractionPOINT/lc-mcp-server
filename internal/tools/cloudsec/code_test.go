@@ -90,13 +90,13 @@ func TestCodeFindingsWillNotListUnscoped(t *testing.T) {
 
 	// The shared selector case-folds, so a display-cased key read straight off a finding
 	// scopes the read instead of silently matching nothing. The stored column is ASCII
-	// lower-cased in both segments (go-cloudsec model.BuildRepoURN / FoldRepoSegment).
+	// lower-cased in both segments.
 	t.Run("a display-cased key is folded to the stored spelling", func(t *testing.T) {
 		_, q, errResult := codeFindingsRequest(map[string]interface{}{
-			"repo": []interface{}{"refractionPOINT/lc-appsec-fixtures"},
+			"repo": []interface{}{"Acme/API"},
 		})
 		require.Nil(t, errResult)
-		assert.Equal(t, []string{"refractionpoint/lc-appsec-fixtures"}, q["repo"])
+		assert.Equal(t, []string{"acme/api"}, q["repo"])
 	})
 
 	// A blank element is REFUSED, not dropped. Dropping it would run a two-repository
