@@ -90,13 +90,13 @@ func TestCodeFindingsWillNotListUnscoped(t *testing.T) {
 
 	// The shared selector case-folds, so a display-cased key read straight off a finding
 	// scopes the read instead of silently matching nothing. The stored column is ASCII
-	// lower-cased in both segments (go-cloudsec model.BuildRepoURN / FoldRepoSegment).
+	// lower-cased in both segments.
 	t.Run("a display-cased key is folded to the stored spelling", func(t *testing.T) {
 		_, q, errResult := codeFindingsRequest(map[string]interface{}{
-			"repo": []interface{}{"refractionPOINT/lc-appsec-fixtures"},
+			"repo": []interface{}{"Acme/API"},
 		})
 		require.Nil(t, errResult)
-		assert.Equal(t, []string{"refractionpoint/lc-appsec-fixtures"}, q["repo"])
+		assert.Equal(t, []string{"acme/api"}, q["repo"])
 	})
 
 	// A blank element is REFUSED, not dropped. Dropping it would run a two-repository
@@ -343,16 +343,14 @@ func TestCodeAutofixRefusesAnythingThatIsNotAFindingID(t *testing.T) {
 	}
 }
 
-// The description has to carry the two things a caller cannot discover from the response,
-// because the response is only "accepted": that the pull request is the actual result, and
-// that for npm and go the lockfile is NOT regenerated. An agent that reports "fixed" on the
-// strength of an accepted call, or that believes an npm bump changed what installs, is
-// worse than no tool.
+// The description must direct a caller to the governed run and make the
+// permission and terminal unverified outcomes explicit.
 func TestCodeAutofixDescriptionCarriesWhatTheResponseCannot(t *testing.T) {
 	reg, exists := tools.GetTool("cloudsec_code_autofix")
 	require.True(t, exists)
 	for _, want := range []string{
-		"WRITES", "queued", "lockfile", "MALICIOUS", "fixed version",
+		"WRITES", "cloudsec.respond", "run_id", "cloudsec_get_remediation",
+		"pr_merged_unverifiable", "pr_closed", "capacity", "lockfile", "MALICIOUS", "fixed version",
 	} {
 		assert.Contains(t, reg.Description, want)
 	}
