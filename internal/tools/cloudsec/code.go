@@ -863,9 +863,10 @@ func registerCodeAutofix() {
 			"the read-only connector is never used to write); a MALICIOUS package, where the remediation is removal and credential rotation rather than an upgrade; a finding with no " +
 			"published fixed version; an ecosystem other than npm, pip, go or maven; a repository outside the code_scanning policy scope or over the free-tier quota; a package that " +
 			"already has an AutoFix pull request open (one per repository and package at a time); and a connection at its daily AutoFix limit. " +
-			"Lockfiles: for npm the package-lock.json IS rewritten by default, from one read-only registry metadata read; it is left stale only where the policy sets " +
-			"'autofix_registry_access: false', where the lock is a yarn.lock/pnpm-lock.yaml, or where the entry cannot be rewritten safely. For go the go.sum is NOT regenerated. " +
-			"pip (requirements.txt) and maven have no lockfile, so those changes are complete. Whenever a lock is left stale the pull request says so and names the command to run, " +
+			"Lockfiles: for npm the lockfile beside the manifest (package-lock.json, npm-shrinkwrap.json, yarn.lock or pnpm-lock.yaml) is updated so the fix installs as opened; " +
+			"a yarn or pnpm lockfile that cannot be rewritten safely is refused before any job runs (autofix_not_applicable, with the reason), and a package-lock.json that cannot be " +
+			"regenerated (for example with 'autofix_registry_access: false') is flagged 'lockfile_stale'. For go the go.sum is written from the Go checksum database, or the fix is refused " +
+			"before any job runs (autofix_not_applicable). pip (requirements.txt) and maven have no lockfile, so those changes are complete. Whenever a lock is left stale the pull request says so and names the command to run, " +
 			"so trust the pull request over any assumption here. Read the finding first with cloudsec_code_findings: 'code.fixed_version' is what will be applied, and if you would " +
 			"rather make the change locally, cloudsec_code_scan_local confirms it before you push. " + codeLaneNote,
 		// A write, and not a destructive one: it creates a branch and a pull request and
