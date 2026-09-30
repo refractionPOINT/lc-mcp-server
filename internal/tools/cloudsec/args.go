@@ -246,7 +246,22 @@ func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) *
 	if errResult := addIaCSelectors(dst, args, true); errResult != nil {
 		return errResult
 	}
-	addStrings(dst, args, "severity", "finding_class", "status", "account", "owner")
+	for _, key := range []string{"sla", "image_urn", "fix_state", "exploit_band", "grain"} {
+		if raw, present := args[key]; present {
+			values, ok := argStrings(args, key)
+			if !ok || len(values) == 0 || len(values) > 100 {
+				return tools.ErrorResultf("%s must contain 1 to 100 strings", key)
+			}
+			if list, ok := raw.([]interface{}); ok {
+				for _, item := range list {
+					if _, ok := item.(string); !ok {
+						return tools.ErrorResultf("%s must contain only strings", key)
+					}
+				}
+			}
+		}
+	}
+	addStrings(dst, args, "severity", "finding_class", "status", "account", "owner", "sla", "image_urn", "fix_state", "exploit_band", "grain")
 	// `repo` is validated and case-folded rather than forwarded raw, so it is the one
 	// selector here that can refuse the call. The error travels up through every caller
 	// — the list, the facets, the causes rollup and the CSV export — because they are
@@ -267,7 +282,12 @@ func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) *
 	if source != "" {
 		dst["source"] = source
 	}
-	addScalars(dst, args, "q", "sort", "order")
+	if raw, present := args["cause"]; present {
+		if _, ok := raw.(string); !ok {
+			return tools.ErrorResult("cause must be a string")
+		}
+	}
+	addScalars(dst, args, "q", "sort", "order", "cause")
 	if paging {
 		addScalars(dst, args, "cursor")
 		addInt(dst, args, "limit", maxPageLimit)
@@ -298,6 +318,14 @@ func findingSourceValue(args map[string]interface{}) (string, *mcp.CallToolResul
 	raw, present := args["source"]
 	if !present {
 		return "", nil
+	}
+	if values, ok := argStrings(args, "source"); ok {
+		if len(values) != 1 {
+			return "", tools.ErrorResult("finding source must be one producer; use both for no producer constraint")
+		}
+		if list, ok := raw.([]interface{}); ok && len(list) != 1 {
+			return "", tools.ErrorResult("finding source must be one string")
+		}
 	}
 	v := strings.TrimSpace(argScalar(args, "source"))
 	if v == "" {
@@ -478,8 +506,14 @@ func addInventorySelector(dst lc.Dict, args map[string]interface{}) *mcp.CallToo
 			dst[k] = v
 		}
 	}
-	if v, ok := argBool(args, "account_unscoped"); ok {
-		dst["account_unscoped"] = v
+	for _, key := range []string{"account_empty", "account_unscoped"} {
+		if raw, present := args[key]; present {
+			v, ok := raw.(bool)
+			if !ok {
+				return tools.ErrorResultf("%s must be boolean", key)
+			}
+			dst[key] = v
+		}
 	}
 	// Under type=Identity the merged lane DOES read the placement dimensions
 	// multi-valued, and the gateway upgrades them for exactly that type

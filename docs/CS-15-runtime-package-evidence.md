@@ -8,7 +8,7 @@ finding.
 
 ## The ladder
 
-Plan 24 decision D6 fixes the answer to five rungs and no more.
+The answer uses five evidence levels.
 
 | Rung | Means | Precondition |
 |---|---|---|
@@ -32,7 +32,7 @@ complete telemetry window did not see the code run. It does not say the package 
 that the finding is fixed, or that the vulnerability is not exploitable, and nothing this
 tool returns proves anything about exploitability.
 
-**A telemetry lapse never produces a negative** (plan §18 gate 12). An interrupted or
+**A telemetry lapse never produces a negative**. An interrupted or
 too-young window, a shed write, a truncated watch list, a versionless package, an
 unattributable package and a conflicting package inventory all come back as `present` or
 unknown, each with a `reason` naming the gate that failed. Read the reason before
@@ -88,15 +88,14 @@ that would invent a coverage fact nobody established.
 
 ## Legacy spelling
 
-`dormant` was the old name for `not_observed`. It is decoded on read (plan §14) and never
+`dormant` was the old name for `not_observed`. It is decoded on read and never
 emitted. The CIEM identity-dormancy facet (`dormant_90d`, `dormant_admin`), the
 AI-sessions session status and sensor sleep mode keep the word and are unrelated
 vocabularies.
 
 ## Compatibility
 
-The gateway route `POST /cloudsec/{oid}/findings/{id}/runtime-check` (plan 24 §6,
-permission `cloudsec.get`, 600 requests per hour per authenticated identity) may not be
+The gateway route `POST /cloudsec/{oid}/findings/{id}/runtime-check` (permission `cloudsec.get`, 600 requests per hour per authenticated identity) may not be
 deployed in every datacenter yet. A 404 / unknown-route error means exactly that; it must
 never be reported as "nothing ran". The tool returns the error rather than an empty
 verdict, because a runtime check that quietly answers from nothing is the failure this
@@ -105,7 +104,3 @@ package exists to prevent.
 Roll back by removing the tool from the two `cloud_security*` profiles (both
 `internal/tools/registry.go` and `configs/profiles.yaml`). It enables nothing, changes no
 IAM, and writes no customer-visible state.
-
-Package: https://github.com/maximelb/claude-config/issues/150
-Epic: https://github.com/maximelb/claude-config/issues/134
-Contract: https://github.com/refractionPOINT/go-cloudsec/pull/413

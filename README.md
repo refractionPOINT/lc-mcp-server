@@ -3,7 +3,7 @@
 A high-performance [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server for [LimaCharlie](https://limacharlie.io/), enabling AI assistants like Claude to interact with your security infrastructure through natural language.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Version](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.27.1+-00ADD8?logo=go)](https://go.dev/)
 [![MCP](https://img.shields.io/badge/MCP-1.0-purple)](https://modelcontextprotocol.io/)
 
 ## What is This?
@@ -16,12 +16,14 @@ This server bridges AI assistants and the LimaCharlie security platform through 
 - **Manage detections** (D&R rules, YARA rules, false positives)
 - **Administer platforms** (outputs, integrations, configurations)
 - **Generate security content** with AI (rules, queries, playbooks)
+- **Review CloudSec and CodeSec** findings, repository scans, images and coverage
+- **Triage MailSec** messages, campaigns, reports and action history
 
 **LimaCharlie** is a Security Infrastructure as a Service (SIaaS) platform providing EDR, XDR, SIEM capabilities through a unified API. This MCP server makes that API accessible to AI assistants.
 
 ## Features
 
-- **345 MCP Tools** across 13 specialized profiles
+- **Specialized tool profiles** for investigation, administration and security products
 - **Multi-Tenant Architecture** with strict credential isolation
 - **Dual Transport Modes**: STDIO (local) and HTTP (cloud with OAuth 2.1)
 - **AI-Powered Generation**: Automatic rule and query creation using Claude (default: Claude Sonnet 4.6)
@@ -39,10 +41,19 @@ go build -o lc-mcp-server ./cmd/server
 # 2. Set your credentials
 export LC_OID="your-organization-id"
 export LC_API_KEY="your-api-key"
+export MCP_MODE="stdio"
+export MCP_PROFILE="cloud_security_readonly"
 
 # 3. Run the server
 ./lc-mcp-server
 ```
+
+Use an organization UUID for `LC_OID`. For this profile, the key needs
+`ai_agent.operate` and `cloudsec.get`; the organization must have CloudSec enabled.
+Use `email_security_readonly` with `mailsec.get` instead for MailSec.
+Run the server from your MCP client to interact with it; starting the binary alone
+waits for protocol input. See [security-product onboarding](docs/SECURITY-PRODUCTS.md)
+for a first connection and a read-only pilot.
 
 ## Running with Claude Code (STDIO Mode)
 
@@ -57,7 +68,19 @@ go build -o lc-mcp-server ./cmd/server
 
 ### Step 2: Configure Claude Code
 
-Edit your Claude Code MCP settings file (usually at `~/.config/claude-code/mcp.json`):
+Add the local server with the [Claude Code MCP command](https://code.claude.com/docs/en/mcp):
+
+```bash
+claude mcp add \
+  --env LC_OID=YOUR_ORGANIZATION_UUID \
+  --env LC_API_KEY=YOUR_API_KEY \
+  --env MCP_MODE=stdio \
+  --env MCP_PROFILE=cloud_security_readonly \
+  --transport stdio limacharlie-cloudsec \
+  -- /absolute/path/to/lc-mcp-server
+```
+
+For clients configured through JSON, the equivalent server entry is:
 
 ```json
 {
@@ -69,7 +92,7 @@ Edit your Claude Code MCP settings file (usually at `~/.config/claude-code/mcp.j
         "LC_OID": "your-organization-id",
         "LC_API_KEY": "your-api-key",
         "MCP_MODE": "stdio",
-        "MCP_PROFILE": "all",
+        "MCP_PROFILE": "cloud_security_readonly",
         "LOG_LEVEL": "info"
       }
     }
@@ -81,9 +104,11 @@ Edit your Claude Code MCP settings file (usually at `~/.config/claude-code/mcp.j
 
 Restart Claude Code to load the MCP server. You can verify it's working by asking:
 
-> "Can you list my online sensors?"
+> "Show my CloudSec scan status and overview. Explain any missing coverage before summarizing risk."
 
-Claude will use the `list_sensors` or `get_online_sensors` tool to query your LimaCharlie organization.
+The assistant can use `cloudsec_get_scan_status` and `cloudsec_get_overview`.
+Check `/mcp` to confirm the selected tools loaded. Use another profile, such as
+`core`, if you want sensor inventory instead.
 
 ### Profile-Specific Configuration
 
@@ -122,22 +147,24 @@ You can configure multiple MCP server instances with different profiles:
 
 The server organizes tools into profiles for different use cases:
 
-| Profile | Tools | Description | Use Cases |
-|---------|-------|-------------|-----------|
-| **core** | 8 | Essential sensor operations | Sensor inventory, status checks, host search |
-| **historical_data** | 24 | Telemetry analysis and queries | LCQL queries, event retrieval, IOC searches, detection history |
-| **historical_data_readonly** | 22 | Read-only telemetry access | Same as above, but safe for restricted users |
-| **live_investigation** | 23 | Real-time endpoint inspection | Process lists, network connections, YARA scanning, artifacts |
-| **threat_response** | 15 | Incident response actions | Isolation, sensor tasking/tagging, memory dump, mass-tag |
-| **fleet_management** | 14 | Sensor deployment and lifecycle | Installation keys, cloud sensors, tag lookup, sensor export, upgrades |
-| **detection_engineering** | 44 | Detection rule management | D&R/FP/YARA rules, exfil, MITRE ATT&CK |
-| **platform_admin** | 136 | Complete platform control | Outputs, integrations, lookups, secrets, billing, vulnerability, hive/adapter management |
-| **ai_powered** | 18 | AI-assisted content generation | Auto-generate rules/queries; AI sessions, usage, memory |
-| **investigation_management** | 20 | Case management | Cases, notes, entities, detections, telemetry, artifacts |
-| **api_access** | 1 | Generic API escape-hatch | Raw LimaCharlie API calls |
-| **cloud_security** | 58 | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes, AppSec code lane |
-| **cloud_security_readonly** | 46 | Read-only Cloud Security | Same reads as above without the cloudsec.set writes |
-| **all** | 345 | All profiles combined | Full platform access |
+| Profile | Description | Use Cases |
+|---------|-------------|-----------|
+| **core** | Essential sensor operations | Sensor inventory, status checks, host search |
+| **historical_data** | Telemetry analysis and queries | LCQL queries, event retrieval, IOC searches, detection history |
+| **historical_data_readonly** | Read-only telemetry access | Same as above, but safe for restricted users |
+| **live_investigation** | Real-time endpoint inspection | Process lists, network connections, YARA scanning, artifacts |
+| **threat_response** | Incident response actions | Isolation, sensor tasking/tagging, memory dump, mass-tag |
+| **fleet_management** | Sensor deployment and lifecycle | Installation keys, cloud sensors, tag lookup, sensor export, upgrades |
+| **detection_engineering** | Detection rule management | D&R/FP/YARA rules, exfil, MITRE ATT&CK |
+| **platform_admin** | Complete platform control | Outputs, integrations, lookups, secrets, billing, vulnerability, hive/adapter management |
+| **ai_powered** | AI-assisted content generation | Auto-generate rules/queries; AI sessions, usage, memory |
+| **investigation_management** | Case management | Cases, notes, entities, detections, telemetry, artifacts |
+| **api_access** | Generic API escape-hatch | Raw LimaCharlie API calls |
+| **cloud_security** | Cloud Security (CNAPP) | Findings, inventory, CIEM, compliance, CAASM, policy simulation, triage writes, AppSec code lane |
+| **cloud_security_readonly** | Read-only Cloud Security | CloudSec reads; local scanning and writes excluded |
+| **email_security** | MailSec | Messages, campaigns, analysis, actions and onboarding diagnostics |
+| **email_security_readonly** | MailSec reads | Messages, coverage and history using mailsec.get; privileged diagnostics and raw EML excluded |
+| **all** | All profiles combined | Full platform access |
 
 ## Configuration
 
@@ -204,11 +231,19 @@ export LC_API_URL="https://api.limacharlie.io"
 
 ### Cloud Security: the AppSec code lane
 
-`cloudsec_code_repos`, `cloudsec_code_findings`, `cloudsec_code_scan_local` and the reserved
+`cloudsec_code_repos`, `cloudsec_code_findings`, `cloudsec_code_scan_local` and
 `cloudsec_code_autofix` expose repository scanning to an IDE agent — including a scan of the working
 copy on your own machine, before anything is pushed. Setup for Claude Code and Cursor, the opt-in
 switches the lane needs, and why `cloudsec_code_findings` requires a repository:
 [docs/CLOUD-SECURITY-CODE.md](docs/CLOUD-SECURITY-CODE.md).
+
+### CloudSec, CodeSec and MailSec onboarding
+
+Start with [docs/SECURITY-PRODUCTS.md](docs/SECURITY-PRODUCTS.md) for product
+profiles, exact permissions, pilot setup and a first investigation. The dedicated
+[MailSec guide](docs/MAIL-SECURITY.md) maps message triage and onboarding diagnostics
+to tools. Inspect the client's tool list after connecting; product subscriptions,
+permissions and backend capabilities are configured separately.
 
 ## Usage Examples
 
@@ -284,7 +319,7 @@ Claude uses: add_tag
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐     │
 │  │   Auth      │  │     Tools    │  │   SDK Cache  │     │
 │  │   Context   │  │   Registry   │  │   (Thread-   │     │
-│  │   Isolation │  │   (345)      │  │    Safe)     │     │
+│  │   Isolation │  │              │  │    Safe)     │     │
 │  └─────────────┘  └──────────────┘  └──────────────┘     │
 │                                                             │
 └────────────────────────┬────────────────────────────────────┘
@@ -341,7 +376,7 @@ lc-mcp-server/
 │   │   ├── state/           # OAuth state management
 │   │   └── token/           # Token encryption and storage
 │   │
-│   └── tools/               # MCP tool implementations (345 tools)
+│   └── tools/               # MCP tool implementations
 │       ├── registry.go      # Tool registration system
 │       ├── core/            # Core + fleet sensor ops (9 tools)
 │       ├── historical/      # Historical data & LCQL (13 tools)
@@ -625,19 +660,18 @@ export MCP_PROFILE="all"  # Use 'all' to get all tools
 
 **Error**: `failed to get organization: unauthorized`
 
-**Solution**: Verify your credentials:
-```bash
-# Test API key manually
-curl -H "Authorization: Bearer ${LC_API_KEY}" \
-  "https://api.limacharlie.io/v1/${LC_OID}/sensors"
-```
+**Solution**: Confirm the organization UUID and the key's scope. An organization
+key uses `API_KEY:OID` for hosted MCP bearer authentication; a raw API key is not
+a REST JWT. For security-product profiles, also check `ai_agent.operate` and the
+product permission. See [authentication and pilot setup](docs/SECURITY-PRODUCTS.md).
 
 ### Claude Code Not Detecting Server
 
-**Solution**: Check MCP configuration file syntax:
+**Solution**: Inspect the configured server and reconnect:
+
 ```bash
-# Validate JSON syntax
-cat ~/.config/claude-code/mcp.json | jq .
+claude mcp list
+claude mcp get limacharlie-cloudsec
 
 # Check server logs
 export LOG_LEVEL="debug"

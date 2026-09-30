@@ -199,7 +199,7 @@ func (s *Server) getActiveProfile(r *http.Request) string {
 	path := r.URL.Path
 
 	// Handle root and /mcp paths - default to "all"
-	if path == "/" || path == "/mcp" {
+	if path == "/" || path == "/mcp" || path == "/mcp/"+APIVersionV1 {
 		return "all"
 	}
 
@@ -227,9 +227,10 @@ func (s *Server) getActiveProfile(r *http.Request) string {
 		return "all"
 	}
 
-	// If not a valid profile, default to "all"
-	s.logger.Warn("Invalid profile in URL path, defaulting to 'all'", "path", path, "profile", profile)
-	return "all"
+	// Preserve unknown names: GetToolsForProfile returns an empty list, so a
+	// typo in a read-only product endpoint cannot widen access to all tools.
+	s.logger.Warn("Invalid profile in URL path; no tools exposed", "path", path, "profile", profile)
+	return profile
 }
 
 // parseToolsFromHeader extracts and parses the X-MCP-Tools header

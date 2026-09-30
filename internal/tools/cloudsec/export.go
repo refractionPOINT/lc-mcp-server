@@ -2,8 +2,10 @@ package cloudsec
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -30,10 +32,12 @@ func registerExport() {
 		mcp.WithString("dataset",
 			mcp.Required(),
 			mcp.Description("Which dataset to export: 'findings' | 'inventory' | 'compliance' | 'query'. The selectors for that dataset are the same ones its list tool takes")),
+		mcp.WithNumber("max_rows", mcp.Description("findings/inventory only: 1..100000 rows per resumable chunk; actual chunk rounds up to whole 1000-row pages. Next token is the trailing # next_cursor= comment.")),
+		mcp.WithString("cursor", mcp.Description("findings/inventory only: prior chunk next_cursor; requires max_rows.")),
 		mcp.WithNumber("max_bytes",
 			mcp.Description(fmt.Sprintf("Maximum CSV bytes to return (default %d, max %d). A longer export is cut at a row boundary with a trailing '#' comment row", defaultCSVBytes, maxCSVBytes))),
 	}
-	// findings selectors (no paging: the export always walks the full filtered set)
+	// findings selectors; resumable chunk paging is declared separately above
 	params = append(params, findingSelectorParams(false)...)
 	// inventory selectors, minus 'account': the findings dataset declares it as a
 	// repeatable array above, and one name cannot be two JSON types in one schema.
@@ -45,8 +49,9 @@ func registerExport() {
 			mcp.Description("dataset=inventory: producing-sweep filter (gcp | okta | …). Single-valued; use the repeatable 'source' selector with type=Identity")),
 		mcp.WithString("region",
 			mcp.Description("dataset=inventory: region filter. Single-valued")),
+		mcp.WithBoolean("account_empty", mcp.Description("Select only resources whose cloud account is empty; omit account selectors to span the estate")),
 		mcp.WithBoolean("account_unscoped",
-			mcp.Description("dataset=inventory: set true to drop the account scoping so the walk spans the whole estate")),
+			mcp.Description("dataset=inventory: deprecated alias of account_empty (only resources with empty cloud account)")),
 	)
 	params = append(params, identitySelectorParams()...)
 	// compliance selectors
@@ -70,12 +75,13 @@ func registerExport() {
 	// Overrides, declared last so they win over the dataset-specific descriptions
 	// above for the names more than one dataset shares.
 	params = append(params,
+		mcp.WithArray("source", mcp.WithStringItems(), mcp.Description("findings: exactly one producer (hosted, ingest, other, none, both). inventory type=Identity: repeatable producing sweeps. Other inventory resource types do not support source; use provider.")),
 		mcp.WithArray("account", mcp.WithStringItems(),
 			mcp.Description("Account/project filter. Repeatable for dataset=findings; single-valued for dataset=inventory, where only the first value is used")),
 		mcp.WithString("q",
 			mcp.Description("Free-text filter: over the findings for dataset=findings, over the resource's identifying fields for dataset=inventory")),
 		mcp.WithString("sort",
-			mcp.Description("Page order. dataset=findings: 'lc_risk' (default) | 'severity' | 'first_seen'. dataset=inventory: 'urn' (default) | 'risk' with type=Identity | 'last_seen' with type=ThirdPartyAsset")),
+			mcp.Description("Page order. dataset=findings: 'lc_risk' (default) | 'severity' | 'first_seen' | 'due_at'. dataset=inventory: 'urn' (default) | 'risk' with type=Identity | 'last_seen' with type=ThirdPartyAsset")),
 		mcp.WithArray("repo", mcp.WithStringItems(),
 			mcp.Description("dataset=findings ONLY: source-repository filter, keyed '<owner>/<name>' as the 'repo' facet of cloudsec_get_finding_facets returns it. "+
 				"LOWER-CASED here before it is sent, since the stored key is the repository urn's case-folded owner/name and the backend matches it exactly. "+
@@ -85,7 +91,7 @@ func registerExport() {
 
 	register(toolDef{
 		name: "cloudsec_export_csv",
-		description: "Export a cloud-security dataset as CSV text. The server walks the FULL filtered set (any cursor/limit is ignored), capped at 100k rows with a trailing '#' comment row on truncation. " +
+		description: "Export a cloud-security dataset as CSV text. Without max_rows the server walks the full filtered set, capped at 100k rows. findings/inventory support bounded resumable chunks: pass max_rows, then reuse the trailing # next_cursor= token as cursor with identical filters. A byte-truncated chunk is refused (raise max_bytes or lower max_rows), so a missing cursor never looks like completion. " +
 			"Datasets and their selectors: 'findings' (the cloudsec_list_findings filters), 'inventory' (the cloudsec_list_inventory filters, including 'sort'), " +
 			"'compliance' ('framework' or 'assignment'), 'query' (exactly one of 'named' / 'text' / 'query'). " +
 			"Returns the CSV document itself, not JSON — use the list tools when you want structured rows.",
@@ -114,6 +120,29 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 			n = maxCSVBytes
 		}
 		limitBytes = n
+	}
+
+	if _, present := args["max_rows"]; present {
+		if dataset != "findings" && dataset != "inventory" {
+			return tools.ErrorResult("max_rows applies only to findings/inventory"), nil
+		}
+		if _, e := strictPositiveInt(args, "max_rows", 100000); e != nil {
+			return tools.ErrorResult(e.Error()), nil
+		}
+	}
+	if raw, present := args["cursor"]; present {
+		v, ok := raw.(string)
+		if !ok || v == "" || len(v) > 4096 || strings.ContainsAny(v, "\r\n\x00") {
+			return tools.ErrorResult("cursor must be a nonempty bounded token"), nil
+		}
+		if _, bounded := args["max_rows"]; !bounded {
+			return tools.ErrorResult("cursor requires max_rows; an unbounded export cannot resume"), nil
+		}
+	}
+	for _, key := range []string{"sla", "image_urn", "fix_state", "exploit_band", "grain", "cause"} {
+		if _, present := args[key]; present && dataset != "findings" {
+			return tools.ErrorResultf("%s applies only to dataset=findings", key), nil
+		}
 	}
 
 	// `repo` reaches this tool's schema through the findings selector, so it is
@@ -181,6 +210,13 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 	// format rides the query string on every dataset, including the POST one
 	// (endpoint_cloudsec.go:892-895).
 	values.Set("format", "csv")
+	if _, present := args["max_rows"]; present {
+		n, _ := strictPositiveInt(args, "max_rows", 100000)
+		values.Set("max_rows", fmt.Sprint(n))
+		if cursor := argString(args, "cursor"); cursor != "" {
+			values.Set("cursor", cursor)
+		}
+	}
 
 	path := orgPath(org, suffix)
 	// Read one byte past the budget: enough to know the export was longer without
@@ -190,11 +226,54 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		return tools.ErrorResultf("cloudsec CSV export of %s failed: %s", dataset, describeErr(err)), nil
 	}
 
+	if _, bounded := args["max_rows"]; bounded && len(raw) > limitBytes {
+		return tools.ErrorResult("CSV chunk exceeded max_bytes; no resumable CSV was returned. Raise max_bytes or lower max_rows (minimum effective page is 1000 rows), or use structured list tools."), nil
+	}
 	checked, err := checkIaCCSVReceipt(query, string(raw))
 	if err != nil {
 		return tools.ErrorResult(err.Error()), nil
 	}
-	return mcp.NewToolResultText(truncateCSV(checked, limitBytes)), nil
+	_, bounded := args["max_rows"]
+	if err := checkCSVOutcome(checked, bounded, len(raw) <= limitBytes); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	}
+	// The transport budget includes the receipt removed above. Keep that offset
+	// when cutting CSV: a shortened body can still end inside a row at the byte
+	// limit, even though its length now fits the original budget.
+	csvBudget := limitBytes - (len(raw) - len(checked))
+	if csvBudget <= 0 {
+		return tools.ErrorResult("CSV byte budget was exhausted by the selector receipt; raise max_bytes"), nil
+	}
+	return mcp.NewToolResultText(truncateCSV(checked, csvBudget)), nil
+}
+
+// A streamed gateway failure arrives as HTTP 200 with a one-cell control record.
+// Parse records so marker-like text inside quoted evidence is not mistaken for a
+// gateway failure. A byte-limited full export can end inside a record; truncateCSV
+// handles that case, while an otherwise complete malformed body is refused.
+func checkCSVOutcome(document string, bounded, complete bool) error {
+	reader := csvReader(document)
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			if complete {
+				return fmt.Errorf("gateway returned malformed CSV; no complete export was confirmed")
+			}
+			return nil
+		}
+		if len(record) != 1 {
+			continue
+		}
+		if strings.HasPrefix(record[0], "# export aborted:") {
+			return fmt.Errorf("gateway returned an incomplete CSV export: %s", record[0])
+		}
+		if bounded && strings.HasPrefix(record[0], "# truncated at ") {
+			return fmt.Errorf("gateway truncated a bounded CSV export without a resume cursor; no complete chunk was confirmed")
+		}
+	}
 }
 
 // truncateCSV cuts a CSV document at the last complete row that fits in limit bytes
@@ -208,18 +287,27 @@ func truncateCSV(csv string, limit int) string {
 	if limit <= 0 || len(csv) <= limit {
 		return csv
 	}
-	cut := strings.LastIndexByte(csv[:limit], '\n')
-	sep := ""
-	if cut < 0 {
-		// A single row longer than the whole budget: keep the budget's worth
-		// rather than returning nothing, and break the line so the note is a
-		// comment row instead of gluing onto the partial row.
-		cut = limit
-		sep = "\n"
-	} else {
-		cut++ // keep the newline
+	reader := csvReader(csv)
+	cut := 0
+	for {
+		_, err := reader.Read()
+		if err != nil {
+			break
+		}
+		end := int(reader.InputOffset())
+		if end > limit {
+			break
+		}
+		cut = end
 	}
-	return csv[:cut] + sep + fmt.Sprintf("# truncated by lc-mcp-server after %d bytes; the export was longer — narrow the filters or raise max_bytes\n", cut)
+	return csv[:cut] + fmt.Sprintf("# truncated by lc-mcp-server after %d bytes; the export was longer — narrow the filters or raise max_bytes\n", cut)
+
+}
+
+func csvReader(document string) *csv.Reader {
+	reader := csv.NewReader(strings.NewReader(document))
+	reader.FieldsPerRecord = -1
+	return reader
 }
 
 // queryValues encodes a cloudsec query dict as URL values, matching how the SDK's

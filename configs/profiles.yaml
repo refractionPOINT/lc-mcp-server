@@ -406,6 +406,29 @@ investigation_management:
   - merge_cases
 
 cloud_security:
+  - cloudsec_code_status
+  - cloudsec_code_sbom
+  - cloudsec_code_image_repos
+  - cloudsec_code_image_repo_facets
+  - cloudsec_code_images
+  - cloudsec_code_image
+  - cloudsec_list_compliance_runs
+  - cloudsec_list_compliance_attestations
+  - cloudsec_list_compliance_events
+  - cloudsec_export_compliance_run
+  - cloudsec_list_compliance_schedules
+  - cloudsec_get_azure_scope_hierarchy
+  - cloudsec_code_iac_map_status
+  - cloudsec_code_iac_map_extract
+  - cloudsec_mint_m365_certificate
+  - cloudsec_code_rescan
+  - cloudsec_code_pr_check
+  - cloudsec_code_webhook
+  - cloudsec_code_ingest
+  - cloudsec_code_iac_map_push
+  - cloudsec_create_compliance_run
+  - cloudsec_create_compliance_attestation
+  - cloudsec_set_compliance_schedule
   # Posture summary / trends
   - cloudsec_get_overview
   - cloudsec_get_risk_trend
@@ -489,7 +512,19 @@ cloud_security:
   - cloudsec_code_autofix
 
 cloud_security_readonly:
-  # The cloudsec.get subset: every read plus the CSV export. Excludes all nine
+  - cloudsec_code_status
+  - cloudsec_code_sbom
+  - cloudsec_code_image_repos
+  - cloudsec_code_image_repo_facets
+  - cloudsec_code_images
+  - cloudsec_code_image
+  - cloudsec_list_compliance_runs
+  - cloudsec_list_compliance_attestations
+  - cloudsec_list_compliance_events
+  - cloudsec_export_compliance_run
+  - cloudsec_list_compliance_schedules
+  - cloudsec_get_azure_scope_hierarchy
+  # The cloudsec.get subset includes the CSV export. Excludes all
   # cloudsec.set writes, including cloudsec_test_provider (a probe, but gated on
   # cloudsec.set because testing a credential is as sensitive as saving one).
   # Posture summary / trends
@@ -556,3 +591,54 @@ cloud_security_readonly:
   - cloudsec_get_code_impact
   - cloudsec_list_remediations
   - cloudsec_get_remediation
+
+email_security:
+  # MailSec message investigation, triage, provider actions and onboarding.
+  - mailsec_get_coverage
+  - mailsec_list_messages
+  - mailsec_get_message
+  - mailsec_get_message_eml
+  - mailsec_list_similar_messages
+  - mailsec_list_verdict_revisions
+  - mailsec_revise_verdict
+  - mailsec_act_on_message
+  - mailsec_list_campaigns
+  - mailsec_get_campaign
+  - mailsec_preview_campaign_action
+  - mailsec_act_on_campaign
+  - mailsec_preview_bulk_action
+  - mailsec_execute_bulk_action
+  - mailsec_get_bulk_action
+  - mailsec_get_sender_profile
+  - mailsec_get_action
+  - mailsec_analyze
+  - mailsec_list_reports
+  - mailsec_get_report
+  - mailsec_resolve_report
+  - mailsec_reopen_report
+  - mailsec_validate_rule
+  - mailsec_backtest_rule
+  - mailsec_test_connection
+  - mailsec_get_onboarding
+  - mailsec_prepare_tenant_purge
+  - mailsec_purge_tenant
+
+email_security_readonly:
+  # mailsec.get-only subset; raw EML and ownership/action probes are excluded.
+  - mailsec_get_coverage
+  - mailsec_list_messages
+  - mailsec_get_message
+  - mailsec_list_similar_messages
+  - mailsec_list_verdict_revisions
+  - mailsec_list_campaigns
+  - mailsec_get_campaign
+  - mailsec_preview_bulk_action
+  - mailsec_get_bulk_action
+  - mailsec_get_sender_profile
+  - mailsec_get_action
+  - mailsec_analyze
+  - mailsec_list_reports
+  - mailsec_get_report
+  - mailsec_validate_rule
+  - mailsec_backtest_rule
+  - mailsec_get_onboarding

@@ -28,6 +28,7 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/forensics"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/historical"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/investigation"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/mailsec"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/response"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/rules"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/schemas"

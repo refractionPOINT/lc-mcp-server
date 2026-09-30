@@ -42,7 +42,7 @@ const extGateNote = `Requires the "ext-cloud-security" extension: a 403 saying c
 // hiveNote points at the hives that hold cloudsec configuration. Those records are
 // not part of the /cloudsec/* API surface, so an agent reading only these tools has
 // no other way to discover them.
-const hiveNote = `Provider/policy/query CONFIGURATION lives in the "cloudsec_provider", "cloudsec_policy" and "cloudsec_query" hives — read/write it with the generic hive tools (list_rules / get_rule / set_rule / delete_rule with hive_name), not through this tool.`
+const hiveNote = `Provider/policy/query CONFIGURATION lives in the "cloudsec_provider", "cloudsec_policy", "cloudsec_code_rule" and "cloudsec_query" hives — read/write it with the generic hive tools (list_rules / get_rule / set_rule / delete_rule with hive_name), not through this tool.`
 
 // apiRoot returns the gateway base URL these raw calls target.
 //
@@ -56,7 +56,7 @@ func apiRoot() string {
 }
 
 // httpClient is shared; each call carries its own context deadline.
-var httpClient = &http.Client{}
+var httpClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
 // orgPath builds the oid-scoped path suffix every per-org cloudsec route shares.
 func orgPath(org *lc.Organization, suffix string) string {

@@ -10,11 +10,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// readOnlyTools are the cloudsec.get tools — the exact membership of the
-// cloud_security_readonly profile. Five of them are POSTs (the graph query, the
+// readOnlyTools are the tools with read-only annotations. The set-gated IaC
+// receipt and local extractor remain in the full profile only. Five of them are POSTs (the graph query, the
 // policy-value suggester, the two simulate previews and the runtime check) which the
 // gateway serves as read-only previews, so they belong here despite the verb.
 var readOnlyTools = []string{
+	"cloudsec_code_status",
+	"cloudsec_code_sbom",
+	"cloudsec_code_image_repos",
+	"cloudsec_code_image_repo_facets",
+	"cloudsec_code_images",
+	"cloudsec_code_image",
+	"cloudsec_list_compliance_runs",
+	"cloudsec_list_compliance_attestations",
+	"cloudsec_list_compliance_events",
+	"cloudsec_export_compliance_run",
+	"cloudsec_list_compliance_schedules",
+	"cloudsec_get_azure_scope_hierarchy",
+	"cloudsec_code_iac_map_status",
+	"cloudsec_code_iac_map_extract",
+
 	"cloudsec_code_provenance",
 	// Code Security evidence chain, coverage, impact and remediation reads
 	"cloudsec_get_finding_evidence_chain",
@@ -88,6 +103,16 @@ var readOnlyTools = []string{
 // writeTools are the cloudsec.set tools, with the destructive classification each
 // one carries.
 var writeTools = map[string]bool{
+	"cloudsec_mint_m365_certificate":         true,
+	"cloudsec_code_rescan":                   false,
+	"cloudsec_code_pr_check":                 false,
+	"cloudsec_code_webhook":                  true,
+	"cloudsec_code_ingest":                   false,
+	"cloudsec_code_iac_map_push":             false,
+	"cloudsec_create_compliance_run":         false,
+	"cloudsec_create_compliance_attestation": false,
+	"cloudsec_set_compliance_schedule":       true,
+
 	"cloudsec_code_provenance_push":    false,
 	"cloudsec_set_finding_status":      true,  // changes a finding's disposition
 	"cloudsec_bulk_set_finding_status": true,  // same, over a batch
@@ -115,10 +140,11 @@ var writeTools = map[string]bool{
 	"cloudsec_decide_remediation": true,
 }
 
-// noOIDTools do not take an organization: the fleet board's route carries no {oid}
-// and the gateway resolves the org set from the caller's own token.
+// noOIDTools do not take an organization: the fleet board resolves the org set
+// from the token, while offline IaC extraction needs no authentication.
 var noOIDTools = map[string]bool{
-	"cloudsec_get_fleet_overview": true,
+	"cloudsec_code_iac_map_extract": true,
+	"cloudsec_get_fleet_overview":   true,
 }
 
 func allToolNames() []string {

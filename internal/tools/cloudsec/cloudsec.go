@@ -31,6 +31,7 @@ func init() {
 	registerIdentity()
 	registerInventory()
 	registerCompliance()
+	registerComplianceV2()
 	registerCAASM()
 	registerPolicyAids()
 	registerResolve()
@@ -40,6 +41,7 @@ func init() {
 	registerFleet()
 	registerCode()
 	registerProvenance()
+	registerIaCMap()
 	registerEvidence()
 	registerRemediation()
 }
@@ -55,7 +57,7 @@ type toolDef struct {
 	readOnly bool
 	// destructive is only read when readOnly is false.
 	destructive bool
-	// noOID marks the one tool whose route has no {oid} (the fleet board).
+	// noOID marks fleet reads or offline tools that need no selected organization.
 	noOID   bool
 	params  []mcp.ToolOption
 	handler tools.ToolHandler
@@ -173,6 +175,12 @@ func findingSelectorParams(paging bool) []mcp.ToolOption {
 			mcp.Description("Cloud account/project filter. Repeatable")),
 		mcp.WithArray("owner", mcp.WithStringItems(),
 			mcp.Description("Owner filter. Repeatable. An EMPTY STRING element selects the unassigned bucket, so [\"\"] means 'findings with no owner'")),
+		mcp.WithArray("sla", mcp.WithStringItems(), mcp.Description("Remediation SLA states: breached, due_soon, on_track, exempt, none. Repeatable.")),
+		mcp.WithArray("image_urn", mcp.WithStringItems(), mcp.Description("Exact container-image subject URNs. Repeatable.")),
+		mcp.WithArray("fix_state", mcp.WithStringItems(), mcp.Description("Vulnerability fix availability; unknown means not established, never no_fix. Repeatable; use live facets for vocabulary.")),
+		mcp.WithArray("exploit_band", mcp.WithStringItems(), mcp.Description("Exploit signal band; none means no recorded exploit signal. Repeatable; use live facets for vocabulary.")),
+		mcp.WithArray("grain", mcp.WithStringItems(), mcp.Description("package, cve, other. Omission leads with package grain and excludes duplicate per-CVE rollups. Select cve to see all CVEs, or all three for the full union.")),
+		mcp.WithString("cause", mcp.Description("Exact cause key to filter findings sharing a remediation.")),
 		mcp.WithArray("repo", mcp.WithStringItems(),
 			mcp.Description("Source-repository filter — the AppSec code lane's subject selector, keyed '<owner>/<name>' exactly as the 'repo' facet of cloudsec_get_finding_facets returns it (the cloudsec_code_* tools return the same key, where that surface is available). "+
 				"A GitLab repository nested under a group/subgroup namespace carries that WHOLE path as its key ('group/subgroup/name', not just 'subgroup/name') — pass it unmodified. "+
@@ -199,7 +207,7 @@ func findingSelectorParams(paging bool) []mcp.ToolOption {
 		mcp.WithString("q",
 			mcp.Description("Free-text filter over the findings")),
 		mcp.WithString("sort",
-			mcp.Description("Sort field: 'lc_risk' (default) | 'severity' | 'first_seen'")),
+			mcp.Description("Sort field: 'lc_risk' (default) | 'severity' | 'first_seen' | 'due_at'")),
 		mcp.WithString("order",
 			mcp.Description("Sort direction: 'desc' (default) | 'asc'")),
 	}
