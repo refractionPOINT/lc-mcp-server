@@ -241,6 +241,25 @@ func TestCSVExportDoesNotReportAbortedChunksAsComplete(t *testing.T) {
 	}
 }
 
+func TestCSVByteLimitStillAppliesAfterRemovingIaCReceipt(t *testing.T) {
+	receipt := "# lc_iac_filters_v1=" + base64.RawURLEncoding.EncodeToString([]byte(`{"has_iac_origin":true}`)) + "\n"
+	for _, value := range []string{strings.Repeat("x", 100), "\"line one\n" + strings.Repeat("x", 100) + "\""} {
+		productTransport(t, func(*http.Request) string { return receipt + "id,value\n1," + value + "\n" })
+		result, err := handleExportCSV(productTestContext(t), map[string]interface{}{"dataset": "findings", "has_iac_origin": true, "max_bytes": len(receipt) + 20})
+		require.NoError(t, err)
+		require.False(t, result.IsError, codeResultText(result))
+		text := codeResultText(result)
+		assert.Equal(t, "id,value\n", strings.Split(text, "# truncated")[0])
+		assert.Contains(t, text, "# truncated by lc-mcp-server")
+		assert.NotContains(t, text, "lc_iac_filters_v1")
+	}
+	productTransport(t, func(*http.Request) string { return receipt + "id,value\n1,ok\n" })
+	result, err := handleExportCSV(productTestContext(t), map[string]interface{}{"dataset": "findings", "has_iac_origin": true, "max_bytes": len(receipt)})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, codeResultText(result), "raise max_bytes")
+}
+
 func TestImageFiltersRefuseMalformedSelectorsBeforeAuthentication(t *testing.T) {
 	for _, args := range []map[string]interface{}{
 		{"running": "false"}, {"signed": 0}, {"limit": 1.5}, {"limit": 0}, {"limit": 1001},

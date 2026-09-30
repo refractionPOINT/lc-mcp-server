@@ -237,7 +237,14 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 	if err := checkCSVOutcome(checked, bounded, len(raw) <= limitBytes); err != nil {
 		return tools.ErrorResult(err.Error()), nil
 	}
-	return mcp.NewToolResultText(truncateCSV(checked, limitBytes)), nil
+	// The transport budget includes the receipt removed above. Keep that offset
+	// when cutting CSV: a shortened body can still end inside a row at the byte
+	// limit, even though its length now fits the original budget.
+	csvBudget := limitBytes - (len(raw) - len(checked))
+	if csvBudget <= 0 {
+		return tools.ErrorResult("CSV byte budget was exhausted by the selector receipt; raise max_bytes"), nil
+	}
+	return mcp.NewToolResultText(truncateCSV(checked, csvBudget)), nil
 }
 
 // A streamed gateway failure arrives as HTTP 200 with a one-cell control record.
