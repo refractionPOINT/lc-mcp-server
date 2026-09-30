@@ -67,6 +67,7 @@ func registerCode() {
 	registerCodeFixes()
 	registerCodeScanLocal()
 	registerCodeAutofix()
+	registerCodeWorkflows()
 }
 
 // ------------------------------------------------------------------
@@ -118,8 +119,8 @@ func registerCodeCapabilities() {
 		name: "cloudsec_code_capabilities",
 		description: "What each connected GITHUB source-control organization may actually DO for the AppSec code lane: repository scanning, PR checks, PR comments, " +
 			"and dependency AutoFix pull requests, detected from the App installation itself rather than inferred from a hive record. " +
-			"Only GitHub connections are covered — a GitLab or Bitbucket connection scans with its own read-only token and has no write plane to detect (no PR checks, " +
-			"no PR comments, no AutoFix), so it never appears here, not even as an 'unknown' entry; use cloudsec_get_provider_manifests for what those connections collect. " +
+			"GitHub connections are always covered. GitLab.com and Bitbucket Cloud also appear when their source-control write workflows are enabled for the deployment; " +
+			"otherwise their absence does not imply collection failed. Their separate write token supplies PR status/comment and AutoFix permissions. Use cloudsec_get_provider_manifests for collection coverage. " +
 			"Returns one entry per connection under 'connections': 'connection' (the cloudsec_provider record name), 'org', 'provider', 'mode' ('unified' | 'separate_actions_app'), " +
 			"'scan_app_id'/'actions_app_id' (the App ids behind the two planes — the same id in unified mode), 'repository_selection' ('all' | 'selected', the ACTIONS installation's own selection), " +
 			"'repository' (set only when narrowed to one, per 'repository_selection: selected'), 'suspended', 'verified_at' (RFC3339 UTC, empty if the installation could never be read), " +
@@ -133,7 +134,7 @@ func registerCodeCapabilities() {
 		readOnly: true,
 		params: []mcp.ToolOption{
 			mcp.WithString("repo",
-				mcp.Description("Narrow to the one connection covering a single repository ('<owner>/<name>' as cloudsec_code_repos returns it). Omit to list every GitHub connection")),
+				mcp.Description("Narrow to the one connection covering a single repository ('<owner>/<name>' as cloudsec_code_repos returns it). Omit to list all connections with capability detection enabled")),
 		},
 		handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			q := lc.Dict{}
@@ -418,13 +419,13 @@ func registerCodeScanLocal() {
 		description: "Scan a LOCAL working copy with the same LimaCharlie code scanner the hosted lane runs, and optionally push the result to this organization. " +
 			"This is the IDE-agent door: it answers 'what would Cloud Security say about the code on this disk' before anything is committed or pushed. " +
 			"The scan runs in a container on the machine hosting this MCP server via the 'limacharlie' CLI ('limacharlie cloudsec code scan'), which owns the scanner " +
-			"image pin — nothing but the report leaves the machine, and with ingest=false nothing leaves it at all. With ingest=true the report is pushed through this " +
+			"image pin. Source stays local; ingest=false uploads no report. Pulling the image and vulnerability data/checksum lookups may use network access. With ingest=true the report is pushed through this " +
 			"server's own credential to /code/ingest, where it deduplicates against the hosted scan BY IDENTITY: the report format is loss-free, so a laptop scan lands " +
 			"on exactly the rows a hosted scan of the same repository would write, and re-pushing an identical report writes nothing. A pushed report can only close " +
 			"findings IT previously reported, never one the hosted scanner found. " +
 			"SECRET SCANNING CANNOT RUN LOCALLY and asking for it is an error, not a silent omission: a credential's identity here is a digest keyed by a value only the " +
 			"hosted lane holds, so local secrets would neither deduplicate nor be accepted. Use the hosted lane for secrets. " +
-			"Requires stdio mode (a local scan on a shared hosted server would run a container on somebody else's behalf), Docker, and the 'limacharlie' CLI on PATH. " +
+			"Requires stdio mode (a local scan on a shared hosted server would run a container on somebody else's behalf), Docker, and a CLI supporting cloudsec code scan on PATH. Published PyPI 5.6.2 lacks this command; install the reviewed development CLI until a release includes it. The default scanner image requires registry pull access. An operator can set LC_CODE_SCANNER_IMAGE to an accessible scanner image or LC_CODE_SCANNER_BINARY to an installed scanner; those are server configuration, never tool arguments. Local scans do not load organization custom code rules by default; an operator can set LC_CODE_SCANNER_RULES_FILE to an exported rules JSON file to align the local SAST rules with hosted scanning. " +
 			"Expect minutes, not seconds. " + codeLaneNote,
 		readOnly:    false,
 		destructive: false, // writes findings for a repository the caller already owns; nothing is deleted
@@ -435,7 +436,7 @@ func registerCodeScanLocal() {
 			mcp.WithBoolean("ingest",
 				mcp.Description("Push the report to this organization when the scan finishes (default false). Requires 'repo'")),
 			mcp.WithString("repo",
-				mcp.Description("Repository key '<owner>/<name>' to attribute the results to. Required with ingest=true, and read from the checkout's git origin when omitted. The repository must already be in the org's collected inventory and be selected by an enabled code_scanning policy — the same switch the hosted lane uses")),
+				mcp.Description("Repository key '<owner>/<name>' to attribute the results to. Required with ingest=true, and read from the checkout's git origin when omitted. The repository must be in scope of an enabled code_scanning policy; BYO ingestion does not require a provider connection")),
 			mcp.WithString("commit",
 				mcp.Description("The revision scanned. Read from the checkout when omitted. Recorded, not verified")),
 			mcp.WithString("ref",
@@ -758,8 +759,8 @@ func runLocalCodeScan(ctx context.Context, spec localScanSpec) ([]byte, error) {
 	bin, err := exec.LookPath(spec.CLI)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"the 'limacharlie' CLI is required for a local scan and was not found (%v). Install it with 'pip install limacharlie', "+
-				"or pass 'cli' with its full path", err)
+			"the 'limacharlie' CLI is required for a local scan and was not found (%v). Install a version supporting cloudsec code scan (PyPI 5.6.2 predates it), "+
+				"or set the operator environment variable LC_CODE_SCANNER_CLI to its full path", err)
 	}
 	if err := checkCodeScanSupported(ctx, bin); err != nil {
 		return nil, err
@@ -783,6 +784,15 @@ func runLocalCodeScan(ctx context.Context, spec localScanSpec) ([]byte, error) {
 		"-o", reportPath,
 		"--scanners", spec.Scanners,
 		"--timeout", strconv.Itoa(int(spec.Timeout / time.Second)),
+	}
+	if image := os.Getenv("LC_CODE_SCANNER_IMAGE"); image != "" {
+		argv = append(argv, "--image", image)
+	}
+	if binary := os.Getenv("LC_CODE_SCANNER_BINARY"); binary != "" {
+		argv = append(argv, "--binary", binary)
+	}
+	if rules := os.Getenv("LC_CODE_SCANNER_RULES_FILE"); rules != "" {
+		argv = append(argv, "--rules-file", rules)
 	}
 	if spec.Repo != "" {
 		argv = append(argv, "--repo", spec.Repo)
@@ -819,7 +829,7 @@ func checkCodeScanSupported(ctx context.Context, bin string) error {
 	if err != nil {
 		return fmt.Errorf(
 			"this 'limacharlie' CLI has no 'cloudsec code scan' command, so it is older than the code lane. "+
-				"Upgrade it with 'pip install --upgrade limacharlie'.\n%s", tailLines(string(out), 10))
+				"Install a reviewed development CLI until a published release includes Code Security; PyPI 5.6.2 lacks this command. Set LC_CODE_SCANNER_CLI to select that installation.\n%s", tailLines(string(out), 10))
 	}
 	return nil
 }
@@ -857,17 +867,18 @@ func registerCodeAutofix() {
 		name: "cloudsec_code_autofix",
 		description: "Open a PULL REQUEST in the customer's repository raising the vulnerable dependency a finding is about. THIS WRITES TO THEIR SOURCE CONTROL — ask before calling it. " +
 			"The finding id is the only input that decides anything: the backend resolves it against the dependency rows its own scan produced and raises THAT package to THAT " +
-			"advisory's fixed version, so there is deliberately no way to name a package or a version here. It ACCEPTS and returns; the pull request appears minutes later and IS " +
-			"the result — this response only says the request was queued, so do not report a pull request as opened on the strength of it. " +
-			"Each of these is a quiet no-op rather than an error: no Code Actions App configured, or one lacking 'Contents: Read and write' (the write App is separate and opt-in — " +
-			"the read-only connector is never used to write); a MALICIOUS package, where the remediation is removal and credential rotation rather than an upgrade; a finding with no " +
-			"published fixed version; an ecosystem other than npm, pip, go or maven; a repository outside the code_scanning policy scope or over the free-tier quota; a package that " +
-			"already has an AutoFix pull request open (one per repository and package at a time); and a connection at its daily AutoFix limit. " +
+			"advisory's proposed fix, so there is deliberately no way to name a package or a version here. It ACCEPTS and returns a queued governed run; " +
+			"the collector may create a pull request minutes later. Do not report a pull request as opened or a finding as fixed from acceptance alone. " +
+			"Requires cloudsec.respond (cloudsec.set alone is refused) and enabled governed remediation. The caller is recorded as requester AND approver. " +
+			"Returns a remediation run_id/state, not proof of a PR: follow cloudsec_get_remediation; verified means the fix was observed in every in-scope deployment. " +
+			"Disabled workflows are refused. Policy/scope/quota, missing permissions, MALICIOUS packages, absent fixed version, unsupported ecosystems, existing PRs and exhausted budgets fail the run with an explicit reason. " +
+			"GitHub uses its permitted connector App or a separate actions App; enabled GitLab/Bitbucket workflows use a separate write token. Read capabilities first. " +
+			"Read code.autofix_version before requesting: AutoFix prefers the installed release line, but may propose a flagged major upgrade (code.autofix_major_upgrade/from_line/to_line), which can break callers. " +
 			"Lockfiles: for npm the lockfile beside the manifest (package-lock.json, npm-shrinkwrap.json, yarn.lock or pnpm-lock.yaml) is updated so the fix installs as opened; " +
 			"a yarn or pnpm lockfile that cannot be rewritten safely is refused before any job runs (autofix_not_applicable, with the reason), and a package-lock.json that cannot be " +
 			"regenerated (for example with 'autofix_registry_access: false') is flagged 'lockfile_stale'. For go the go.sum is written from the Go checksum database, or the fix is refused " +
 			"before any job runs (autofix_not_applicable). pip (requirements.txt) and maven have no lockfile, so those changes are complete. Whenever a lock is left stale the pull request says so and names the command to run, " +
-			"so trust the pull request over any assumption here. Read the finding first with cloudsec_code_findings: 'code.fixed_version' is what will be applied, and if you would " +
+			"so trust the pull request over any assumption here. Read the finding first with cloudsec_code_findings: 'code.autofix_version' is the proposed upgrade (which may differ from 'code.fixed_version'), and if you would " +
 			"rather make the change locally, cloudsec_code_scan_local confirms it before you push. " + codeLaneNote,
 		// A write, and not a destructive one: it creates a branch and a pull request and
 		// changes nothing that exists. Marking it destructive would put it behind the
@@ -907,7 +918,7 @@ func registerCodeAutofix() {
 // codeLaneNote points at the switch that turns the whole lane on. Without it, every code
 // tool's honest empty answer ("no repositories", "no findings") is indistinguishable
 // from "the lane was never enabled", which is the likelier cause by far.
-const codeLaneNote = `The code lane is OPT-IN per organization: it runs only where a "code_scanning" record exists in the "cloudsec_policy" hive (read/write it with the generic hive tools) and a source-control provider is connected in the "cloudsec_provider" hive. An empty answer from a code tool usually means one of those two is missing, NOT that the code is clean.`
+const codeLaneNote = `The code lane is OPT-IN per organization: hosted scanning runs only where a "code_scanning" record exists in the "cloudsec_policy" hive (read/write it with the generic hive tools) and a source-control provider is connected in the "cloudsec_provider" hive. BYO ingestion needs an enabled in-scope code_scanning policy but no connected source-control provider. Empty or partial results never prove code is clean.`
 
 // ------------------------------------------------------------------
 // reading the checkout

@@ -24,8 +24,9 @@ func inventorySelectorParams() []mcp.ToolOption {
 			mcp.Description("Region filter. Single-valued, except with type=Identity where a list of values is also accepted")),
 		mcp.WithString("q",
 			mcp.Description("Case-insensitive substring filter over the resource's identifying fields")),
+		mcp.WithBoolean("account_empty", mcp.Description("Select only resources whose cloud account is empty; omit account selectors to span the estate")),
 		mcp.WithBoolean("account_unscoped",
-			mcp.Description("Set true to drop the account scoping so the walk spans the whole estate")),
+			mcp.Description("Deprecated alias of account_empty: true selects only resources with an empty cloud account. Omit account selectors to span the estate")),
 	}
 }
 

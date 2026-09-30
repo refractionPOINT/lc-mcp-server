@@ -127,9 +127,9 @@ func TestTruncateCSV(t *testing.T) {
 		assert.True(t, strings.HasSuffix(got, "\n"))
 	})
 
-	t.Run("a single row longer than the budget keeps the budget's worth", func(t *testing.T) {
+	t.Run("a single row longer than the budget is omitted, never returned partially", func(t *testing.T) {
 		got := truncateCSV("aaaaaaaaaaaaaaaaaaaa", 5)
-		assert.True(t, strings.HasPrefix(got, "aaaaa"))
+		assert.NotContains(t, got, "aaaaa")
 		assert.Contains(t, got, "# truncated by lc-mcp-server")
 	})
 }

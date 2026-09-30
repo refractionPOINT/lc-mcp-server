@@ -352,7 +352,7 @@ func TestCodeAutofixDescriptionCarriesWhatTheResponseCannot(t *testing.T) {
 	reg, exists := tools.GetTool("cloudsec_code_autofix")
 	require.True(t, exists)
 	for _, want := range []string{
-		"WRITES", "queued", "lockfile", "MALICIOUS", "fixed version",
+		"WRITES", "queued", "lockfile", "MALICIOUS", "fixed version", "cloudsec.respond", "requester AND approver", "run_id", "autofix_version", "major upgrade",
 	} {
 		assert.Contains(t, reg.Description, want)
 	}
@@ -389,16 +389,18 @@ func TestCodeCapabilitiesIsRegisteredAndReadOnly(t *testing.T) {
 	assert.True(t, declared, "must declare the 'repo' narrowing param")
 }
 
-// The endpoint is GitHub-only — a GitLab or Bitbucket connection never appears in its
+// GitLab/Bitbucket write workflow detection is deployment-gated rather than absent by definition; their inclusion depends on enabled workflow support. Previously they never appeared in its
 // response, not even as an 'unknown' entry (the backend's connection-capability detector
 // skips every provider but GitHub, because a capability is detected from an App
 // installation's granted permissions and neither of those providers uses one). Describing
 // this as covering every source-control provider would be exactly the kind of stale claim
 // this parity effort found and had to correct elsewhere.
-func TestCodeCapabilitiesDescriptionNamesTheGitHubOnlyScope(t *testing.T) {
+func TestCodeCapabilitiesDescriptionNamesConditionalProviderScope(t *testing.T) {
 	reg, exists := tools.GetTool("cloudsec_code_capabilities")
 	require.True(t, exists)
 	assert.Contains(t, reg.Description, "GITHUB")
+	assert.Contains(t, reg.Description, "when their source-control write workflows are enabled")
+	assert.NotContains(t, reg.Description, "Only GitHub connections are covered")
 	assert.Contains(t, reg.Description, "GitLab")
 	assert.Contains(t, reg.Description, "Bitbucket")
 }

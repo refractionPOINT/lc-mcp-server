@@ -25,6 +25,7 @@ import (
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/historical"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/hive"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/investigation"
+	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/mailsec"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/payloads"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/replay"
 	_ "github.com/refractionpoint/lc-mcp-go/internal/tools/response"

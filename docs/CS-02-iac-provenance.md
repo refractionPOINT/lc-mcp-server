@@ -16,15 +16,9 @@ including origins for clean resources. Immutable source links are optional;
 missing revision metadata stays unknown and must not become a HEAD link.
 The tools never fetch source URLs or source code.
 
-Compatibility: use after graph PR228 and gateway PR962 are deployed with
-provenance queries enabled. The disabled server rejects explicit new selectors.
+Compatibility: use when the backend has provenance queries enabled. The disabled server rejects explicit new selectors.
 No tool enables features, changes IAM, or writes resources. Roll back by disabling
 provenance server-side and omitting selectors/reverting this client; retain schema.
-
-Package: https://github.com/maximelb/claude-config/issues/137
-Epic: https://github.com/maximelb/claude-config/issues/134
-Graph: https://github.com/refractionPOINT/legion_graph/pull/228
-Gateway owner draft: https://github.com/refractionPOINT/lc_api-go/pull/962
 
 Rolling-version proof: JSON reads with new selectors require an exact
 `applied_iac_filters` response receipt. CSV exports require a bounded first line
