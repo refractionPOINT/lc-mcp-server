@@ -201,12 +201,44 @@ func TestNewFindingSelectorsAndCSVRecordBoundaries(t *testing.T) {
 	assert.Equal(t, "cause:key", q["cause"])
 	assert.Equal(t, "due_at", q["sort"])
 	for _, key := range []string{"sla", "image_urn", "grain", "fix_state", "exploit_band"} {
-		require.NotNil(t, addFindingSelector(map[string]interface{}{}, map[string]interface{}{key: []interface{}{"valid", nil}}, false))
+		for _, invalid := range []interface{}{nil, true, float64(42), map[string]interface{}{}, []interface{}{}} {
+			require.NotNil(t, addFindingSelector(map[string]interface{}{}, map[string]interface{}{key: []interface{}{"valid", invalid}}, false), "%s must refuse %T", key, invalid)
+		}
 	}
 	doc := "id,value\n1,\"line one\nline two\"\n2,ok\n"
 	cut := truncateCSV(doc, 20)
 	assert.Equal(t, "id,value\n", strings.Split(cut, "# truncated")[0])
 	assert.NotContains(t, cut, "line one")
+	// A legitimate data row can start with '#'. Treating it as a comment would
+	// skip the opening quote and mistake a line inside its value for a row boundary.
+	cut = truncateCSV("id,value\n#finding,\"line one\nline two\nline three\"\n2,ok\n", 40)
+	assert.Equal(t, "id,value\n", strings.Split(cut, "# truncated")[0])
+}
+
+func TestCSVExportDoesNotReportAbortedChunksAsComplete(t *testing.T) {
+	for _, tc := range []struct {
+		name, document     string
+		bounded, wantError bool
+	}{
+		{"backend failure", "id,value\n1,ok\n# export aborted: backend error after 1 rows\n", true, true},
+		{"stuck cursor", "id,value\n1,ok\n# export aborted: cursor did not advance after 1 rows\n", true, true},
+		{"full export failure", "id,value\n1,ok\n# export aborted: exceeded 2000 pages after 1 rows\n", false, true},
+		{"legacy cap without continuation", "id,value\n1,ok\n# truncated at 100000 rows - narrow the filter set for a complete export\n", true, true},
+		{"resume marker", "id,value\n1,ok\n# next_cursor=opaque - export chunk ended after 1 rows; repeat the request with cursor=opaque for the rest\n", true, false},
+		{"marker in a quoted field", "id,value\n1,\"evidence\n# export aborted: untrusted message\"\n", true, false},
+		{"malformed complete body", "id,value\n1,\"unterminated", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			productTransport(t, func(*http.Request) string { return tc.document })
+			args := map[string]interface{}{"dataset": "findings"}
+			if tc.bounded {
+				args["max_rows"] = 1000
+			}
+			result, err := handleExportCSV(productTestContext(t), args)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantError, result.IsError, codeResultText(result))
+		})
+	}
 }
 
 func TestImageFiltersRefuseMalformedSelectorsBeforeAuthentication(t *testing.T) {

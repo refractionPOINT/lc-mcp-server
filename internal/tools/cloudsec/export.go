@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -232,7 +233,40 @@ func handleExportCSV(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 	if err != nil {
 		return tools.ErrorResult(err.Error()), nil
 	}
+	_, bounded := args["max_rows"]
+	if err := checkCSVOutcome(checked, bounded, len(raw) <= limitBytes); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	}
 	return mcp.NewToolResultText(truncateCSV(checked, limitBytes)), nil
+}
+
+// A streamed gateway failure arrives as HTTP 200 with a one-cell control record.
+// Parse records so marker-like text inside quoted evidence is not mistaken for a
+// gateway failure. A byte-limited full export can end inside a record; truncateCSV
+// handles that case, while an otherwise complete malformed body is refused.
+func checkCSVOutcome(document string, bounded, complete bool) error {
+	reader := csvReader(document)
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			if complete {
+				return fmt.Errorf("gateway returned malformed CSV; no complete export was confirmed")
+			}
+			return nil
+		}
+		if len(record) != 1 {
+			continue
+		}
+		if strings.HasPrefix(record[0], "# export aborted:") {
+			return fmt.Errorf("gateway returned an incomplete CSV export: %s", record[0])
+		}
+		if bounded && strings.HasPrefix(record[0], "# truncated at ") {
+			return fmt.Errorf("gateway truncated a bounded CSV export without a resume cursor; no complete chunk was confirmed")
+		}
+	}
 }
 
 // truncateCSV cuts a CSV document at the last complete row that fits in limit bytes
@@ -266,7 +300,6 @@ func truncateCSV(csv string, limit int) string {
 func csvReader(document string) *csv.Reader {
 	reader := csv.NewReader(strings.NewReader(document))
 	reader.FieldsPerRecord = -1
-	reader.Comment = '#'
 	return reader
 }
 

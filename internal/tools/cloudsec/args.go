@@ -252,8 +252,12 @@ func addFindingSelector(dst lc.Dict, args map[string]interface{}, paging bool) *
 			if !ok || len(values) == 0 || len(values) > 100 {
 				return tools.ErrorResultf("%s must contain 1 to 100 strings", key)
 			}
-			if list, ok := raw.([]interface{}); ok && len(list) != len(values) {
-				return tools.ErrorResultf("%s must contain only strings", key)
+			if list, ok := raw.([]interface{}); ok {
+				for _, item := range list {
+					if _, ok := item.(string); !ok {
+						return tools.ErrorResultf("%s must contain only strings", key)
+					}
+				}
 			}
 		}
 	}
