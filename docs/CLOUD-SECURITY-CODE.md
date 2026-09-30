@@ -147,9 +147,9 @@ Requirements, all of which produce a clear refusal rather than a confusing failu
   for the container path; a configured local scanner binary avoids that prerequisite.
   The scan is delegated to
   `limacharlie cloudsec code scan`, which owns the scanner image pin and the container contract, so a
-  local scan follows the selected CLI and scanner version. PyPI `limacharlie` 5.6.2
-  does not contain `cloudsec code scan`: use a development SDK containing CodeSec
-  support and verify `limacharlie cloudsec code scan --help`. See the
+  local scan follows the selected CLI and scanner version. Install or upgrade with
+  `python -m pip install --upgrade limacharlie` and verify
+  `limacharlie cloudsec code scan --help`. See the
   [CLI installation guide](https://docs.limacharlie.io/cloud-security/code-security/getting-started/#cli-installation). If it is installed somewhere unusual, the
   **operator** names it with `LC_CODE_SCANNER_CLI` — deliberately an environment variable and not a
   tool argument, because the text a calling agent reads (a repository name, a finding's evidence) is
@@ -159,8 +159,7 @@ Requirements, all of which produce a clear refusal rather than a confusing failu
 The default scanner image requires registry pull access. An anonymous pull is not
 sufficient. The operator can set `LC_CODE_SCANNER_IMAGE` for an authorized compatible
 image or `LC_CODE_SCANNER_BINARY` for a local scanner executable; they map to the
-CLI's `--image` and `--binary`, and cannot be selected by an MCP caller. Use a
-development CLI containing those options until they are released. Hosted scanning
+CLI's `--image` and `--binary`, and cannot be selected by an MCP caller. Hosted scanning
 or direct BYO ingestion avoids the local container prerequisite.
 
 `scanners` defaults to `sca,iac,licenses`; `sast` and `images` are also available locally.

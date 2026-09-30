@@ -5,9 +5,8 @@ mailbox in alert-only mode, verify coverage, then let an assistant review messag
 and explain its evidence. MailSec is in private beta; access, trial enforcement
 and backend capabilities depend on the current deployment.
 
-These tools require a build containing the `email_security` profiles. Earlier
-released binaries and the hosted server may not include them. Confirm the client
-tool list. See [security-product onboarding](SECURITY-PRODUCTS.md) for local and
+Select the `email_security_readonly` profile for your first review and confirm
+the client tool list. See [security-product onboarding](SECURITY-PRODUCTS.md) for local and
 hosted connection examples, organization UUIDs and authentication.
 
 ## Profiles and permissions

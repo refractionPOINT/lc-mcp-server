@@ -3,10 +3,8 @@
 Use this guide to connect an AI assistant to an existing LimaCharlie organization,
 check coverage, and review a small pilot before enabling responses.
 
-These examples describe this source version of the MCP server. A released binary
-or the hosted service may expose fewer tools. Check your client's tool list first;
-building this checkout supplies client tools, but does not enable a backend feature
-or subscribe the organization to a product.
+Check your client's tool list after connecting. Product subscriptions,
+permissions and backend capabilities are configured separately from the client.
 
 ## Choose a profile and credentials
 
@@ -60,8 +58,8 @@ them into a repository.
 
 You can also connect to `https://mcp.limacharlie.io/mcp/cloud_security_readonly`
 or `/mcp/email_security_readonly` using OAuth or the organization-key bearer format
-`API_KEY:ORGANIZATION_UUID`. These profile endpoints work when the hosted version
-includes the profile and does not pin a different server-wide profile. An
+`API_KEY:ORGANIZATION_UUID`. A server-wide configured profile can override the
+URL profile. An
 unrecognized profile endpoint can return 404; confirm the returned tools.
 Keep the API key's permissions read-only even when using a profile endpoint.
 See the [authentication instructions](https://docs.limacharlie.io/6-developer-guide/mcp-server/).
@@ -183,5 +181,5 @@ deployment or remediation. Availability depends on backend provenance rollout.
   and completion. Missing evidence is not proof of a clean environment.
 - **Unknown route or feature disabled:** the backend capability is unavailable in
   this deployment. A new MCP binary or tenant policy cannot enable it.
-- **Local scan fails:** see the CodeSec guide for the development CLI and authorized
+- **Local scan fails:** see the CodeSec guide for CLI installation and authorized
   scanner image requirements; hosted MCP cannot read your local working copy.

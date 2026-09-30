@@ -425,7 +425,7 @@ func registerCodeScanLocal() {
 			"findings IT previously reported, never one the hosted scanner found. " +
 			"SECRET SCANNING CANNOT RUN LOCALLY and asking for it is an error, not a silent omission: a credential's identity here is a digest keyed by a value only the " +
 			"hosted lane holds, so local secrets would neither deduplicate nor be accepted. Use the hosted lane for secrets. " +
-			"Requires stdio mode (a local scan on a shared hosted server would run a container on somebody else's behalf), Docker, and a CLI supporting cloudsec code scan on PATH. Published PyPI 5.6.2 lacks this command; install the reviewed development CLI until a release includes it. The default scanner image requires registry pull access. An operator can set LC_CODE_SCANNER_IMAGE to an accessible scanner image or LC_CODE_SCANNER_BINARY to an installed scanner; those are server configuration, never tool arguments. Local scans do not load organization custom code rules by default; an operator can set LC_CODE_SCANNER_RULES_FILE to an exported rules JSON file to align the local SAST rules with hosted scanning. " +
+			"Requires stdio mode (a local scan on a shared hosted server would run a container on somebody else's behalf), Docker, and a CLI supporting cloudsec code scan on PATH. Install or upgrade with pip install --upgrade limacharlie. The default scanner image requires registry pull access. An operator can set LC_CODE_SCANNER_IMAGE to an accessible scanner image or LC_CODE_SCANNER_BINARY to an installed scanner; those are server configuration, never tool arguments. Local scans do not load organization custom code rules by default; an operator can set LC_CODE_SCANNER_RULES_FILE to an exported rules JSON file to align the local SAST rules with hosted scanning. " +
 			"Expect minutes, not seconds. " + codeLaneNote,
 		readOnly:    false,
 		destructive: false, // writes findings for a repository the caller already owns; nothing is deleted
@@ -759,7 +759,7 @@ func runLocalCodeScan(ctx context.Context, spec localScanSpec) ([]byte, error) {
 	bin, err := exec.LookPath(spec.CLI)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"the 'limacharlie' CLI is required for a local scan and was not found (%v). Install a version supporting cloudsec code scan (PyPI 5.6.2 predates it), "+
+			"the 'limacharlie' CLI is required for a local scan and was not found (%v). Install it with pip install --upgrade limacharlie, "+
 				"or set the operator environment variable LC_CODE_SCANNER_CLI to its full path", err)
 	}
 	if err := checkCodeScanSupported(ctx, bin); err != nil {
@@ -829,7 +829,7 @@ func checkCodeScanSupported(ctx context.Context, bin string) error {
 	if err != nil {
 		return fmt.Errorf(
 			"this 'limacharlie' CLI has no 'cloudsec code scan' command, so it is older than the code lane. "+
-				"Install a reviewed development CLI until a published release includes Code Security; PyPI 5.6.2 lacks this command. Set LC_CODE_SCANNER_CLI to select that installation.\n%s", tailLines(string(out), 10))
+				"Upgrade with pip install --upgrade limacharlie. Set LC_CODE_SCANNER_CLI to select that installation.\n%s", tailLines(string(out), 10))
 	}
 	return nil
 }

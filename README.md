@@ -242,9 +242,8 @@ switches the lane needs, and why `cloudsec_code_findings` requires a repository:
 Start with [docs/SECURITY-PRODUCTS.md](docs/SECURITY-PRODUCTS.md) for product
 profiles, exact permissions, pilot setup and a first investigation. The dedicated
 [MailSec guide](docs/MAIL-SECURITY.md) maps message triage and onboarding diagnostics
-to tools. Tool availability depends on the server version; hosted deployments and
-backend feature rollout can lag this source checkout. Inspect the client's tool
-list before following an example with a newer tool.
+to tools. Inspect the client's tool list after connecting; product subscriptions,
+permissions and backend capabilities are configured separately.
 
 ## Usage Examples
 
