@@ -247,7 +247,7 @@ filters require a supporting backend; older readers must not silently drop them.
 
 `cloudsec_code_ingest` takes `source` (`report`, `sarif` or `cyclonedx`), `repo`,
 optional revision/provider context, and exactly one of `document` (JSON object)
-or `document_b64` (base64 gzip JSON). The envelope is bounded to 20 MiB. It reads
+or `document_b64` (base64 JSON, optionally gzip-compressed). The envelope is bounded to 20 MiB. It reads
 no remote URL or local file; omit raw source, credentials and secrets from the
 submitted report. Only a complete successful producer report can retire that
 producer's prior findings, and it cannot close hosted findings.
