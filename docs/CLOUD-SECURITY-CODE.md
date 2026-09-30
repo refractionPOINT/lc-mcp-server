@@ -207,9 +207,9 @@ its PR is opened can return the same run with `replayed: true`.
 The clone, edit and pull request happen asynchronously. Read the run's `state`,
 `change` and `failure_reason` before reporting an outcome. A created PR is not a
 verified deployed fix: `verified` means the fix was observed in every in-scope
-deployment. Missing write credentials, policy/scope/quota issues, malicious
-packages, no fixed version, unsupported ecosystems, an existing PR or exhausted
-budgets fail the run with a reason. A disabled workflow is refused immediately;
+deployment. The run fails with a reason when connector access is missing, policy
+scope or quota prevents the edit, a package is malicious, no fixed version exists,
+the ecosystem is unsupported, a PR already exists or a budget is exhausted. A disabled workflow is refused immediately;
 there is no fallback that bypasses governed remediation.
 
 A write-capable credential is **explicit and opt-in**. GitHub uses Contents and
