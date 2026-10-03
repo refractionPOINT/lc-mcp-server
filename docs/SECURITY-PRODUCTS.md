@@ -183,3 +183,35 @@ deployment or remediation. Availability depends on backend provenance rollout.
   this deployment. A new MCP binary or tenant policy cannot enable it.
 - **Local scan fails:** see the CodeSec guide for CLI installation and authorized
   scanner image requirements; hosted MCP cannot read your local working copy.
+
+## Entity Pivot
+
+Both Cloud Security profiles include two read-only tools:
+
+- `cloudsec_entity_pivot`: pass `identifier` and optionally `type` and `at`
+  (Unix seconds). It resolves User/Host identities, returns the complete candidate
+  results, and fetches cards for confirmed, unambiguous matches. `cards` contains
+  card responses, preserving `redirect_to` and `index_ready`. `candidates` retains
+  detected types, evidence, ambiguity and possible matches. Possible matches are
+  unconfirmed and are never followed automatically.
+- `cloudsec_entity_activity`: pass `entity_id`, optionally `since`, `until`
+  (Unix seconds, at most 30 days), and a `sources` array containing any of `email`,
+  `detections`, `sensor`, `cloud`. Omit sources for all four.
+
+For example, ask the assistant to resolve a hostname with
+`{"identifier":"host.example","type":"hostname"}`, then inspect activity with
+`{"entity_id":"eh_aaaaaaaaaaaaaaaaaaaaaaaaaa","sources":["sensor","cloud"]}`.
+Entity IDs come from resolution or search; treat them as opaque.
+
+Entity reads require `cloudsec.get` and Cloud Security enabled. Email activity
+also requires `mailsec.get` plus Email Security enabled, detections need
+`insight.det.get`, and sensor state needs `sensor.get`. Missing access is reported
+per source. `unavailable`, `timeout`, `index_ready:false`, or `truncated:true`
+means the answer is incomplete; none establishes absence. Disabled readers
+report `feature_disabled`. Use the returned product links with the caller's own
+permissions to inspect the full view.
+
+The activity window filters email/detections and the host sightings used to
+select sensors; sensor status and open cloud findings describe current state.
+Pivot limits card reads to ten with a 30-second overall deadline. A card failure
+preserves candidates and adds `card_errors` plus `truncated:true`.
