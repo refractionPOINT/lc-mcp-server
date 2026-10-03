@@ -505,6 +505,8 @@ var ProfileDefinitions = map[string][]string{
 		// Sensor <-> cloud asset resolution
 		"cloudsec_resolve_sensors",
 		"cloudsec_resolve_assets",
+		"cloudsec_entity_pivot",
+		"cloudsec_entity_activity",
 		// Runtime package evidence (CS-15): the on-demand five-rung check.
 		"cloudsec_check_finding_runtime",
 		// CSV export
@@ -604,6 +606,8 @@ var ProfileDefinitions = map[string][]string{
 		// Sensor <-> cloud asset resolution
 		"cloudsec_resolve_sensors",
 		"cloudsec_resolve_assets",
+		"cloudsec_entity_pivot",
+		"cloudsec_entity_activity",
 		// Runtime package evidence (CS-15): the on-demand five-rung check.
 		"cloudsec_check_finding_runtime",
 		// CSV export
