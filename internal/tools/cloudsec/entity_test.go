@@ -97,7 +97,7 @@ func TestEntityPivotHTTPContractAndAmbiguity(t *testing.T) {
 					if !reflect.DeepEqual(body, want) {
 						t.Fatalf("body changed %+v", body)
 					}
-					response = fmt.Sprintf(`{"index_ready":%t,"feature_disabled":%t,"sources":[{"source":"fixture","stale":true}],"results":[{"input":{"value":"host.example"},"ambiguous":%t,"matches":[{"entity_id":%q,"confidence":%q}],"possible":[{"entity_id":"eu_aaaa","confidence":"possible"}]}]}`, tc.ready, tc.disabled, tc.ambiguous, entityFixtureID, tc.confidence)
+					response = fmt.Sprintf(`{"index_ready":%t,"feature_disabled":%t,"sightings":"forbidden","sources":[{"source":"fixture","stale":true}],"results":[{"input":{"value":"host.example"},"ambiguous":%t,"matches":[{"entity_id":%q,"confidence":%q}],"possible":[{"entity_id":"eu_aaaa","confidence":"possible"}]}]}`, tc.ready, tc.disabled, tc.ambiguous, entityFixtureID, tc.confidence)
 				} else {
 					gets++
 					if !strings.HasSuffix(r.URL.Path, "/"+entityFixtureID) || r.Method != "GET" {
@@ -117,6 +117,9 @@ func TestEntityPivotHTTPContractAndAmbiguity(t *testing.T) {
 			}
 			if len(output["sources"].([]interface{})) != 1 {
 				t.Fatal("lost freshness")
+			}
+			if output["sightings"] != "forbidden" {
+				t.Fatal("lost sighting permission verdict")
 			}
 		})
 	}

@@ -105,7 +105,7 @@ func pivotEntity(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	failures := []interface{}{}
 	results, _ := response["results"].([]interface{})
 	out := map[string]interface{}{"cards": cards, "candidates": response["results"]}
-	for _, key := range []string{"index_ready", "sources", "feature_disabled"} {
+	for _, key := range []string{"index_ready", "sources", "feature_disabled", "sightings"} {
 		if value, present := response[key]; present {
 			out[key] = value
 		}

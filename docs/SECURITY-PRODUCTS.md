@@ -211,6 +211,11 @@ means the answer is incomplete; none establishes absence. Disabled readers
 report `feature_disabled`. Use the returned product links with the caller's own
 permissions to inspect the full view.
 
+Sighting data needs `insight.evt.get`. Without it, pivot reports
+`sightings:"forbidden"` and omits sighting-derived matches and recent activity.
+User activity uses confirmed owned hosts; other recently observed hosts need
+event-read permission too.
+
 The activity window filters email/detections and the host sightings used to
 select sensors; sensor status and open cloud findings describe current state.
 Pivot limits card reads to ten with a 30-second overall deadline. A card failure
