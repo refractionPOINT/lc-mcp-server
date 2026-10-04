@@ -186,8 +186,12 @@ deployment or remediation. Availability depends on backend provenance rollout.
 
 ## Entity Pivot
 
-Both Cloud Security profiles include two read-only tools:
+Both Cloud Security profiles include three read-only tools:
 
+- `cloudsec_entity_search`: pass `q` (at least two characters, at most 512 UTF-8
+  bytes), optionally `kind=user|host`, `limit` (1–100) and `cursor` (at most 8192
+  bytes). Returns one page, preserving `next_cursor` and `index_ready`. Keep
+  selectors unchanged when continuing a page.
 - `cloudsec_entity_pivot`: pass `identifier` and optionally `type` and `at`
   (Unix seconds). It resolves User/Host identities, returns the complete candidate
   results, and fetches cards for confirmed, unambiguous matches. `cards` contains

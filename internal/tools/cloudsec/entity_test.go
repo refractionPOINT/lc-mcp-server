@@ -40,7 +40,8 @@ func entityResult(t *testing.T, result *mcp.CallToolResult) map[string]interface
 	return out
 }
 func TestEntityToolsAreReadOnlyInBothProfiles(t *testing.T) {
-	for _, name := range []string{"cloudsec_entity_pivot", "cloudsec_entity_activity"} {
+	for _, name := range []string{"cloudsec_entity_search",
+		"cloudsec_entity_pivot", "cloudsec_entity_activity"} {
 		registration, ok := tools.GetTool(name)
 		if !ok || !registration.RequiresOID || registration.Schema.Annotations.ReadOnlyHint == nil || !*registration.Schema.Annotations.ReadOnlyHint || registration.Schema.Annotations.DestructiveHint == nil || *registration.Schema.Annotations.DestructiveHint {
 			t.Fatalf("unsafe registration %s", name)
@@ -164,5 +165,54 @@ func TestEntityPivotKeepsCandidatesWhenCardUnavailable(t *testing.T) {
 	output := entityResult(t, result)
 	if output["truncated"] != true || len(output["card_errors"].([]interface{})) != 1 || len(output["candidates"].([]interface{})) != 1 {
 		t.Fatal("unavailable card became unresolved identifier")
+	}
+}
+
+func TestEntitySearchRejectsInvalidInputBeforeHTTP(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("invalid search made HTTP request")
+		return nil, nil
+	})}
+	for _, args := range []map[string]interface{}{{}, {"q": 123}, {"q": "中"}, {"q": " "}, {"q": strings.Repeat("a", 513)}, {"q": strings.Repeat("中", 171)}, {"q": "host", "kind": "unknown"}, {"q": "host", "limit": 0}, {"q": "host", "limit": 101}, {"q": "host", "limit": 1.5}, {"q": "host", "limit": true}, {"q": "host", "cursor": strings.Repeat("x", 8193)}, {"q": "host", "cursor": 123}} {
+		result, err := searchEntities(ctx, args)
+		if err != nil || result == nil || !result.IsError {
+			t.Fatalf("invalid search accepted %+v", args)
+		}
+	}
+}
+func TestEntitySearchHTTPByteBoundaryAndState(t *testing.T) {
+	for _, prefix := range []string{strings.Repeat("a", 512), strings.Repeat("中", 170) + "ab"} {
+		t.Run(fmt.Sprint(len(prefix), prefix[:1]), func(t *testing.T) {
+			ctx := entityContext(t)
+			old := httpClient
+			t.Cleanup(func() { httpClient = old })
+			calls := 0
+			payload := `{"entities":[],"next_cursor":"next","index_ready":false,"feature_disabled":true}`
+			httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.Method != "GET" || r.URL.Path != "/v1/cloudsec/"+entityFixtureOID+"/entities/search" || r.Header.Get("Authorization") == "" {
+					t.Fatal("incorrect search route/auth")
+				}
+				if _, ok := r.Context().Deadline(); !ok {
+					t.Fatal("missing deadline")
+				}
+				want := map[string][]string{"q": {prefix}, "kind": {"host"}, "limit": {"100"}, "cursor": {"opaque"}}
+				if !reflect.DeepEqual(map[string][]string(r.URL.Query()), want) {
+					t.Fatalf("incorrect selectors %+v", r.URL.Query())
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload)), Header: http.Header{}}, nil
+			})}
+			result, err := searchEntities(ctx, map[string]interface{}{"q": prefix, "kind": "host", "limit": float64(100), "cursor": "opaque", "oid": "foreign"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := entityResult(t, result)
+			if calls != 1 || out["next_cursor"] != "next" || out["index_ready"] != false || out["feature_disabled"] != true {
+				t.Fatalf("search state lost %+v calls=%d", out, calls)
+			}
+		})
 	}
 }

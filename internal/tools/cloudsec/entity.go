@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -29,6 +30,9 @@ func entityMember(values []string, value string) bool {
 	return false
 }
 func registerEntity() {
+	register(toolDef{name: "cloudsec_entity_search", description: "Search User and Host entity identifiers by prefix (at least two characters, at most 512 UTF-8 bytes). Returns one bounded page with index readiness and next_cursor; do not interpret an incomplete index or page as absence.", readOnly: true,
+		params: []mcp.ToolOption{mcp.WithString("q", mcp.Required(), mcp.Description("Identifier prefix: at least two characters and at most 512 UTF-8 bytes")), mcp.WithString("kind", mcp.Description("Optional user or host")), mcp.WithNumber("limit", mcp.Description("Page size from 1 to 100")), mcp.WithString("cursor", mcp.Description("Opaque next_cursor from the previous page, at most 8192 bytes"))}, handler: searchEntities})
+
 	register(toolDef{name: "cloudsec_entity_pivot", description: "Resolve an identifier to User or Host entity cards across security products. This is the default tool for 'what is this identifier?'. Ambiguous candidates and possible matches are unconfirmed; never choose one or follow a possible match automatically. Preserves index readiness, freshness and redirects.", readOnly: true,
 		params: []mcp.ToolOption{mcp.WithString("identifier", mcp.Required(), mcp.Description("One identifier, at most 1024 bytes")), mcp.WithString("type", mcp.Description("Optional identifier type; omit for shape detection")), mcp.WithNumber("at", mcp.Description("Optional Unix-second timestamp for historical IP resolution"))}, handler: pivotEntity})
 	register(toolDef{name: "cloudsec_entity_activity", description: "Read a bounded entity activity preview from email, detections, live sensor state and open cloud findings. Each source reports ok, forbidden, not_subscribed, unavailable or timeout plus truncation and a full-view link. Requires the caller's own permission for each product; an unavailable or truncated source is unknown, never evidence of absence.", readOnly: true,
@@ -217,6 +221,42 @@ func readEntityActivity(ctx context.Context, args map[string]interface{}) (*mcp.
 	response, err := entityGET(ctx, org, "entities/"+id+"/activity", query)
 	if err != nil {
 		return tools.ErrorResultf("entity activity failed: %s", describeErr(err)), nil
+	}
+	return tools.SuccessResult(response), nil
+}
+
+func searchEntities(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	prefix, ok := args["q"].(string)
+	if !ok || utf8.RuneCountInString(strings.TrimSpace(prefix)) < 2 || len(prefix) > 512 {
+		return tools.ErrorResult("q must contain at least two characters and at most 512 UTF-8 bytes"), nil
+	}
+	query := url.Values{"q": []string{prefix}}
+	if value, present := args["kind"]; present {
+		kind, ok := value.(string)
+		if !ok || !entityMember([]string{"user", "host"}, kind) {
+			return tools.ErrorResult("invalid kind"), nil
+		}
+		query.Set("kind", kind)
+	}
+	if n, present, err := entityTimestamp(args, "limit"); err != nil || (present && (n < 1 || n > 100)) {
+		return tools.ErrorResult("limit must be an integer from 1 to 100"), nil
+	} else if present {
+		query.Set("limit", strconv.FormatInt(n, 10))
+	}
+	if value, present := args["cursor"]; present {
+		cursor, ok := value.(string)
+		if !ok || len(cursor) > 8192 {
+			return tools.ErrorResult("invalid cursor"), nil
+		}
+		query.Set("cursor", cursor)
+	}
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return tools.ErrorResult("organization authentication required"), nil
+	}
+	response, err := entityGET(ctx, org, "entities/search", query)
+	if err != nil {
+		return tools.ErrorResultf("entity search failed: %s", describeErr(err)), nil
 	}
 	return tools.SuccessResult(response), nil
 }
