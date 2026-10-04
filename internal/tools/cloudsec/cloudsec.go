@@ -35,6 +35,7 @@ func init() {
 	registerCAASM()
 	registerPolicyAids()
 	registerResolve()
+	registerEntity()
 	registerRuntime()
 	registerExport()
 	registerWrites()
