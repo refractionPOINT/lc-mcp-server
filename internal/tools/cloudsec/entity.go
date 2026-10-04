@@ -19,7 +19,7 @@ import (
 )
 
 var entityIDPattern = regexp.MustCompile(`^e[uh]_[a-z2-7]{1,37}$`)
-var entityIdentifierTypes = strings.Fields("email github_login entra_object_id okta_user_id gws_user_id aws_arn windows_sid ad_account ad_account_short username sensor_id device_id cloud_instance_id graph_urn serial mac hostname fqdn ip")
+var entityIdentifierTypes = strings.Fields("email github_user_id github_login entra_object_id okta_user_id gws_user_id aws_arn windows_sid ad_account ad_account_short username sensor_id device_id cloud_instance_id graph_urn serial mac hostname fqdn ip")
 
 func entityMember(values []string, value string) bool {
 	for _, v := range values {

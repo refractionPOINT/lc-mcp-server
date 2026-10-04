@@ -252,3 +252,39 @@ func TestEntityGitHubLoginPreservesExternalAdapterCard(t *testing.T) {
 		t.Fatalf("adapter card lost external status, telemetry or pivots: %+v", out)
 	}
 }
+
+func TestEntityGitHubUserIDPreservesExternalAdapterCard(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	calls := 0
+	card := map[string]interface{}{"entity": map[string]interface{}{"id": "eu_aaaa", "kind": "user", "attrs": map[string]interface{}{"external": true}},
+		"telemetry_sources": []interface{}{map[string]interface{}{"sid": entityFixtureOID, "platform": "github", "identity_type": "github_login", "hostname": "12345678901234567890"}},
+		"pivots":            []interface{}{map[string]interface{}{"route": "/sensors/{oid}/{sid}", "permission": "sensor.get", "params": map[string]interface{}{"oid": entityFixtureOID, "sid": entityFixtureOID}}}}
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.Path == "/v1/cloudsec/"+entityFixtureOID+"/entities/resolve" {
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			want := map[string]interface{}{"identifiers": []interface{}{map[string]interface{}{"type": "github_user_id", "value": "12345678901234567890"}}}
+			if r.Method != "POST" || !reflect.DeepEqual(body, want) {
+				t.Fatalf("GitHub lookup changed: %s %+v", r.Method, body)
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":true,"results":[{"ambiguous":false,"matches":[{"entity_id":"eu_aaaa","confidence":"authoritative"}]}]}`)), Header: http.Header{}}, nil
+		}
+		if r.Method != "GET" || r.URL.Path != "/v1/cloudsec/"+entityFixtureOID+"/entities/eu_aaaa" {
+			t.Fatalf("wrong adapter card request: %s", r.URL)
+		}
+		body, _ := json.Marshal(map[string]interface{}{"card": card, "index_ready": true})
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(body))), Header: http.Header{}}, nil
+	})}
+	result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "12345678901234567890", "type": "github_user_id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := entityResult(t, result)
+	cards := out["cards"].([]interface{})
+	if calls != 2 || len(cards) != 1 || !reflect.DeepEqual(cards[0].(map[string]interface{})["card"], card) {
+		t.Fatalf("adapter card lost external status, telemetry or pivots: %+v", out)
+	}
+}
