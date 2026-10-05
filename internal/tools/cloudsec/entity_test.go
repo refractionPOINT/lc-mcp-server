@@ -40,13 +40,13 @@ func entityResult(t *testing.T, result *mcp.CallToolResult) map[string]interface
 	return out
 }
 func TestEntityToolsAreReadOnlyInBothProfiles(t *testing.T) {
-	for _, name := range []string{"cloudsec_entity_search",
-		"cloudsec_entity_pivot", "cloudsec_entity_activity"} {
+	for _, name := range []string{"cloudsec_entity_search", "cloudsec_entity_pivot", "cloudsec_entity_resolve",
+		"cloudsec_entity_get", "cloudsec_entity_sightings", "cloudsec_entity_activity"} {
 		registration, ok := tools.GetTool(name)
 		if !ok || !registration.RequiresOID || registration.Schema.Annotations.ReadOnlyHint == nil || !*registration.Schema.Annotations.ReadOnlyHint || registration.Schema.Annotations.DestructiveHint == nil || *registration.Schema.Annotations.DestructiveHint {
 			t.Fatalf("unsafe registration %s", name)
 		}
-		for _, profile := range []string{"cloud_security", "cloud_security_readonly"} {
+		for _, profile := range []string{"cloud_security", "cloud_security_readonly", "historical_data", "historical_data_readonly", "email_security", "email_security_readonly"} {
 			if !entityMember(tools.GetToolsForProfile(profile), name) {
 				t.Fatalf("missing %s in %s", name, profile)
 			}
@@ -54,7 +54,7 @@ func TestEntityToolsAreReadOnlyInBothProfiles(t *testing.T) {
 	}
 }
 func TestEntityToolsRejectInvalidInputBeforeAuth(t *testing.T) {
-	for _, args := range []map[string]interface{}{{}, {"identifier": 123}, {"identifier": " "}, {"identifier": strings.Repeat("x", 1025)}, {"identifier": "host", "type": "unknown"}, {"identifier": "host", "at": 1.5}, {"identifier": "host", "at": true}, {"identifier": "host", "at": -1}} {
+	for _, args := range []map[string]interface{}{{}, {"identifier": 123}, {"identifier": " "}, {"identifier": strings.Repeat("x", 1025)}, {"identifier": "host", "type": ""}, {"identifier": "host", "type": 5}, {"identifier": "host", "type": strings.Repeat("t", 65)}, {"identifier": "host", "at": 1.5}, {"identifier": "host", "at": true}, {"identifier": "host", "at": -1}} {
 		result, err := pivotEntity(context.Background(), args)
 		if err != nil || result == nil || !result.IsError {
 			t.Fatalf("invalid pivot accepted %+v", args)
@@ -286,5 +286,173 @@ func TestEntityGitHubUserIDPreservesExternalAdapterCard(t *testing.T) {
 	cards := out["cards"].([]interface{})
 	if calls != 2 || len(cards) != 1 || !reflect.DeepEqual(cards[0].(map[string]interface{})["card"], card) {
 		t.Fatalf("adapter card lost external status, telemetry or pivots: %+v", out)
+	}
+}
+
+func TestEntityToolsRejectInvalidResolveGetSightingsInput(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("invalid input made HTTP request")
+		return nil, nil
+	})}
+	tooMany := make([]interface{}, 101)
+	for i := range tooMany {
+		tooMany[i] = map[string]interface{}{"value": "h"}
+	}
+	value := func(v interface{}) map[string]interface{} { return map[string]interface{}{"value": v} }
+	for _, args := range []map[string]interface{}{
+		{}, {"identifiers": "host"}, {"identifiers": []interface{}{}}, {"identifiers": tooMany}, {"identifiers": []interface{}{"host"}},
+		{"identifiers": []interface{}{value(nil)}}, {"identifiers": []interface{}{value(" ")}}, {"identifiers": []interface{}{value(strings.Repeat("x", 1025))}},
+		{"identifiers": []interface{}{map[string]interface{}{"value": "h", "type": ""}}}, {"identifiers": []interface{}{map[string]interface{}{"value": "h", "type": strings.Repeat("t", 65)}}},
+		{"identifiers": []interface{}{value("h")}, "at": -1}, {"identifiers": []interface{}{value("h")}, "at": 1.5},
+	} {
+		if result, err := resolveEntities(ctx, args); err != nil || result == nil || !result.IsError {
+			t.Fatalf("invalid resolve accepted %+v", args)
+		}
+	}
+	for _, args := range []map[string]interface{}{{}, {"entity_id": "../../other"}, {"entity_id": "ex_aaaa"}, {"entity_id": entityFixtureID, "sightings_days": 0}, {"entity_id": entityFixtureID, "sightings_days": 366}, {"entity_id": entityFixtureID, "sightings_days": 1.5}, {"entity_id": entityFixtureID, "sightings_days": "7"}} {
+		if result, err := getEntity(ctx, args); err != nil || result == nil || !result.IsError {
+			t.Fatalf("invalid get accepted %+v", args)
+		}
+	}
+	for _, args := range []map[string]interface{}{{}, {"entity_id": "../../other"}, {"entity_id": entityFixtureID, "kind": "email"}, {"entity_id": entityFixtureID, "kind": 1}, {"entity_id": entityFixtureID, "since": 20, "until": 10}, {"entity_id": entityFixtureID, "since": -1}, {"entity_id": entityFixtureID, "limit": 0}, {"entity_id": entityFixtureID, "limit": 501}, {"entity_id": entityFixtureID, "limit": 1.5}, {"entity_id": entityFixtureID, "cursor": ""}, {"entity_id": entityFixtureID, "cursor": strings.Repeat("x", 8193)}, {"entity_id": entityFixtureID, "cursor": 7}} {
+		if result, err := listEntitySightings(ctx, args); err != nil || result == nil || !result.IsError {
+			t.Fatalf("invalid sightings accepted %+v", args)
+		}
+	}
+}
+
+func TestEntityResolveForwardsBatchAndUnknownTypeUnchanged(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	const payload = `{"index_ready":true,"sightings":"forbidden","sources":[{"source":"fixture"}],"observations":[{"future":true}],"results":[{"input":{"value":"a@example.com"},"matches":[],"possible":[{"entity_id":"eu_aaaa","confidence":"possible"}]}]}`
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Method != "POST" || r.URL.Path != "/v1/cloudsec/"+entityFixtureOID+"/entities/resolve" || r.Header.Get("Content-Type") != "application/json" || r.URL.Query().Get("oid") != "" {
+			t.Fatalf("incorrect resolve request %s %s", r.Method, r.URL)
+		}
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		want := map[string]interface{}{"identifiers": []interface{}{
+			map[string]interface{}{"value": "a@example.com"},
+			map[string]interface{}{"value": "203.0.113.7", "type": "ip"},
+			map[string]interface{}{"value": "x", "type": "a_type_added_by_the_backend_later"},
+		}, "at": float64(99)}
+		if !reflect.DeepEqual(body, want) {
+			t.Fatalf("body changed %+v", body)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload)), Header: http.Header{}}, nil
+	})}
+	result, err := resolveEntities(ctx, map[string]interface{}{"identifiers": []interface{}{
+		map[string]interface{}{"value": "a@example.com", "ignored": "dropped"},
+		map[string]interface{}{"value": "203.0.113.7", "type": "ip"},
+		map[string]interface{}{"value": "x", "type": "a_type_added_by_the_backend_later"},
+	}, "at": 99, "oid": "foreign"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]interface{}
+	_ = json.Unmarshal([]byte(payload), &want)
+	if got := entityResult(t, result); !reflect.DeepEqual(got, want) {
+		t.Fatalf("response not returned unchanged: %+v", got)
+	}
+}
+
+func TestEntityPivotForwardsUnknownTypeAndPassesThroughTopLevelKeys(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		want := map[string]interface{}{"identifiers": []interface{}{map[string]interface{}{"type": "a_type_added_by_the_backend_later", "value": "x"}}}
+		if !reflect.DeepEqual(body, want) {
+			t.Fatalf("unknown type was not forwarded: %+v", body)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":false,"observations":[{"future":true}],"future_flag":"x","results":[{"input":{"value":"x"}}]}`)), Header: http.Header{}}, nil
+	})}
+	result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "x", "type": "a_type_added_by_the_backend_later"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := entityResult(t, result)
+	if out["future_flag"] != "x" || len(out["observations"].([]interface{})) != 1 || len(out["candidates"].([]interface{})) != 1 {
+		t.Fatalf("top-level resolve keys dropped: %+v", out)
+	}
+	if _, present := out["results"]; present {
+		t.Fatal("results must only be exposed as candidates")
+	}
+}
+
+func TestEntityGetHTTPContract(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  map[string]interface{}
+		query map[string][]string
+	}{
+		{"no window", map[string]interface{}{"entity_id": entityFixtureID}, map[string][]string{}},
+		{"window", map[string]interface{}{"entity_id": entityFixtureID, "sightings_days": float64(365), "oid": "foreign"}, map[string][]string{"sightings_days": {"365"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := entityContext(t)
+			old := httpClient
+			t.Cleanup(func() { httpClient = old })
+			const payload = `{"card":null,"index_ready":true,"redirect_to":"eh_bbbb","sightings":"forbidden"}`
+			httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+				if r.Method != "GET" || r.URL.Path != "/v1/cloudsec/"+entityFixtureOID+"/entities/"+entityFixtureID || r.Header.Get("Authorization") == "" {
+					t.Fatalf("incorrect get request %s", r.URL)
+				}
+				if got := map[string][]string(r.URL.Query()); !reflect.DeepEqual(got, tc.query) {
+					t.Fatalf("incorrect query %+v", got)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload)), Header: http.Header{}}, nil
+			})}
+			result, err := getEntity(ctx, tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := entityResult(t, result)
+			if out["redirect_to"] != "eh_bbbb" || out["index_ready"] != true || out["sightings"] != "forbidden" || out["card"] != nil {
+				t.Fatalf("response not returned unchanged: %+v", out)
+			}
+		})
+	}
+}
+
+func TestEntitySightingsHTTPContract(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Method != "GET" || r.URL.Path != "/v1/cloudsec/"+entityFixtureOID+"/entities/"+entityFixtureID+"/sightings" || r.Header.Get("Authorization") == "" {
+			t.Fatalf("incorrect sightings request %s", r.URL)
+		}
+		want := map[string][]string{"kind": {"ext_ip"}, "since": {"10"}, "until": {"10"}, "limit": {"500"}, "cursor": {"opaque"}}
+		if got := map[string][]string(r.URL.Query()); !reflect.DeepEqual(got, want) {
+			t.Fatalf("incorrect query %+v", got)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"sightings":[{"kind":"ext_ip","value":"203.0.113.9"}],"next_cursor":"more"}`)), Header: http.Header{}}, nil
+	})}
+	result, err := listEntitySightings(ctx, map[string]interface{}{"entity_id": entityFixtureID, "kind": "ext_ip", "since": 10, "until": float64(10), "limit": 500, "cursor": "opaque", "oid": "foreign"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := entityResult(t, result); out["next_cursor"] != "more" || len(out["sightings"].([]interface{})) != 1 {
+		t.Fatalf("response not returned unchanged: %+v", out)
+	}
+}
+
+func TestEntitySightingsSurfacesMissingPermission(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{"error":"missing permission insight.evt.get"}`)), Header: http.Header{}}, nil
+	})}
+	result, err := listEntitySightings(ctx, map[string]interface{}{"entity_id": entityFixtureID})
+	if err != nil || result == nil || !result.IsError {
+		t.Fatalf("403 was not surfaced as an error: %+v", result)
 	}
 }

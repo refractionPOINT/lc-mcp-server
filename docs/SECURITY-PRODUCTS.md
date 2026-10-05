@@ -186,7 +186,10 @@ deployment or remediation. Availability depends on backend provenance rollout.
 
 ## Entity Pivot
 
-Both Cloud Security profiles include three read-only tools:
+Six read-only tools. They are in both Cloud Security profiles and also in the
+`historical_data`, `historical_data_readonly`, `email_security` and
+`email_security_readonly` profiles, so investigations started from events or mail
+can pivot to the User or Host behind them:
 
 - `cloudsec_entity_search`: pass `q` (at least two characters, at most 512 UTF-8
   bytes), optionally `kind=user|host`, `limit` (1–100) and `cursor` (at most 8192
@@ -196,16 +199,52 @@ Both Cloud Security profiles include three read-only tools:
   (Unix seconds). It resolves User/Host identities, returns the complete candidate
   results, and fetches cards for confirmed, unambiguous matches. `cards` contains
   card responses, preserving `redirect_to` and `index_ready`. `candidates` retains
-  detected types, evidence, ambiguity and possible matches. Possible matches are
+  detected types, evidence, ambiguity and possible matches. Every other top-level
+  field of the resolve response (`index_ready`, `sources`, `sightings`, and any
+  field the backend adds later) is passed through. Possible matches are
   unconfirmed and are never followed automatically.
+- `cloudsec_entity_resolve`: pass `identifiers`, an array of 1 to 100
+  `{"value": ..., "type": ...}` objects (`type` optional), and optionally `at`.
+  Resolves in batch and returns the backend response unchanged, without fetching
+  cards. Use it for many identifiers or when only entity IDs are needed.
+- `cloudsec_entity_get`: pass `entity_id` (`eu_...` or `eh_...`) and optionally
+  `sightings_days` (1–365). Returns the full card, `index_ready`, `redirect_to`
+  and recent sightings unchanged.
+- `cloudsec_entity_sightings`: pass `entity_id`, optionally `kind`
+  (`user|logon|int_ip|ext_ip|hostname`), `since` (inclusive), `until` (exclusive,
+  not before `since`), `limit` (1–500) and `cursor`. Pages through the raw
+  observations behind an entity. Continue with the same filters for as long as
+  `next_cursor` is present.
 - `cloudsec_entity_activity`: pass `entity_id`, optionally `since`, `until`
   (Unix seconds, at most 30 days), and a `sources` array containing any of `email`,
   `detections`, `sensor`, `cloud`. Omit sources for all four.
 
-For example, ask the assistant to resolve a hostname with
-`{"identifier":"host.example","type":"hostname"}`, then inspect activity with
+`type` is a free string of at most 64 bytes. The backend owns the set of supported
+identifier types (currently including `email`, `hostname`, `ip`, `sensor_id`,
+`github_login`, `github_user_id`, `windows_sid` and `aws_arn`, among others), so
+the tools forward unfamiliar types and surface the backend's error if it rejects
+one. Omit `type` to let the backend detect it from the shape of the value.
+
+A typical investigation: `cloudsec_entity_pivot` (or `cloudsec_entity_resolve`
+for a batch) to find the entity, `cloudsec_entity_get` for the card or to
+re-fetch a card that pivot reported in `card_errors`, then
+`cloudsec_entity_activity` for a cross-product preview and
+`cloudsec_entity_sightings` for raw observations. For example, ask the assistant
+to resolve a hostname with `{"identifier":"host.example","type":"hostname"}`, then
+inspect activity with
 `{"entity_id":"eh_aaaaaaaaaaaaaaaaaaaaaaaaaa","sources":["sensor","cloud"]}`.
 Entity IDs come from resolution or search; treat them as opaque.
+
+Reading results:
+
+- `possible` matches and `ambiguous` results are unconfirmed. Do not pick one
+  automatically; confirm with the user or more evidence.
+- `redirect_to` means the requested ID was merged into another entity; the
+  returned card is the surviving entity's, so use that ID going forward.
+- `card: null` with `index_ready: true` means the ID is not known (if
+  `redirect_to` is also set, the surviving entity was retired).
+- `index_ready: false` means the index is not ready, so an empty answer proves
+  nothing.
 
 Entity reads require `cloudsec.get` and Cloud Security enabled. Email activity
 also requires `mailsec.get` plus Email Security enabled, detections need
@@ -215,8 +254,9 @@ means the answer is incomplete; none establishes absence. Disabled readers
 report `feature_disabled`. Use the returned product links with the caller's own
 permissions to inspect the full view.
 
-Sighting data needs `insight.evt.get`. Without it, pivot reports
-`sightings:"forbidden"` and omits sighting-derived matches and recent activity.
+Sighting data needs `insight.evt.get`. Without it, pivot, resolve and get report
+`sightings:"forbidden"` and omit sighting-derived matches and recent activity, and
+`cloudsec_entity_sightings` fails with a permission error.
 User activity uses confirmed owned hosts; other recently observed hosts need
 event-read permission too.
 
