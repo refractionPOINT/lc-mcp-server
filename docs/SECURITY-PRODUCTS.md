@@ -195,21 +195,26 @@ can pivot to the User or Host behind them:
   bytes), optionally `kind=user|host`, `limit` (1–100) and `cursor` (at most 8192
   bytes). Returns one page, preserving `next_cursor` and `index_ready`. Keep
   selectors unchanged when continuing a page.
-- `cloudsec_entity_pivot`: pass `identifier` and optionally `type` and `at`
-  (Unix seconds). It resolves User/Host identities, returns the complete candidate
+- `cloudsec_entity_pivot`: pass `identifier` (always required: the backend
+  resolves 1 to 100 identifiers per call, so there is no identifier-less pivot)
+  and optionally `type`, `at` (Unix seconds) and `observation_selectors`
+  (see "Observed pivots"). It resolves User/Host identities, returns the complete candidate
   results, and fetches cards for confirmed, unambiguous matches. `cards` contains
   card responses, preserving `redirect_to` and `index_ready`. `candidates` retains
   detected types, evidence, ambiguity and possible matches. Every other top-level
   field of the resolve response (`index_ready`, `sources`, `sightings`, and any
-  field the backend adds later) is passed through. Possible matches are
-  unconfirmed and are never followed automatically.
+  field the backend adds later, including `observed_matches` and `observations`)
+  is passed through. Possible matches are unconfirmed and are never followed
+  automatically.
 - `cloudsec_entity_resolve`: pass `identifiers`, an array of 1 to 100
-  `{"value": ..., "type": ...}` objects (`type` optional), and optionally `at`.
+  `{"value": ..., "type": ...}` objects (`type` optional), and optionally `at` and
+  `observation_selectors`.
   Resolves in batch and returns the backend response unchanged, without fetching
   cards. Use it for many identifiers or when only entity IDs are needed.
 - `cloudsec_entity_get`: pass `entity_id` (`eu_...` or `eh_...`) and optionally
-  `sightings_days` (1–365). Returns the full card, `index_ready`, `redirect_to`
-  and recent sightings unchanged.
+  `sightings_days` (1–365). Returns the full card, `index_ready`, `redirect_to`,
+  recent sightings and `observations` unchanged. Host cards may carry
+  `also_seen_as[]`, and Host and User cards `cloud_sign_ins[]`.
 - `cloudsec_entity_sightings`: pass `entity_id`, optionally `kind`
   (`user|logon|int_ip|ext_ip|hostname`), `since` (inclusive), `until` (exclusive,
   not before `since`), `limit` (1–500) and `cursor`. Pages through the raw
@@ -224,6 +229,38 @@ identifier types (currently including `email`, `hostname`, `ip`, `sensor_id`,
 `github_login`, `github_user_id`, `windows_sid` and `aws_arn`, among others), so
 the tools forward unfamiliar types and surface the backend's error if it rejects
 one. Omit `type` to let the backend detect it from the shape of the value.
+
+### Observed pivots
+
+Resolve and pivot accept an optional `observation_selectors` array of at most four
+objects, to look up a device or hostname seen in adapter events (currently
+`sophos`, `crowdstrike`, `office365`, `entraid`, `okta` and `duo`):
+
+- `{"type": "vendor_device_id", "platform": "sophos", "value": "<device id>"}`,
+  with an optional `origin_sid` (the sensor id the event came from);
+- `{"type": "foreign_hostname", "value": "<hostname>"}`.
+
+The tools check only the shape: at most four selectors, each an object with
+non-empty string `type` and `value` (at most 512 bytes), optional string
+`platform` and `origin_sid`, and no other keys. Selector types and platforms are
+not allowlisted by the tools; the backend validates them and its error is
+returned if it rejects one. `at` pins the day examined; otherwise the newest days
+are returned.
+
+Answers come back only as `observed_matches[{selector, devices[], truncated?}]`
+next to `observations`, never in `matches`. An input explicitly typed `hostname`
+that the inventory does not know is also looked up as a foreign hostname
+automatically. Observed pivots need `insight.evt.get`, like sightings.
+
+Treat everything observed as a lead. It is approximate and explained, never a
+confirmed match, and it never merges entities. Describe it as "same hostname and
+internal IP observed that day", not as the same machine or verified. Candidate
+hosts of a sign-in are always `possible`. Lookups are bounded (30 days, 20 rows
+per panel).
+
+`observations.status` is `ok`, `incomplete`, `unavailable` or `forbidden`
+(`forbidden` means the caller lacks `insight.evt.get`). `incomplete`,
+`unavailable` and `forbidden` never mean there is nothing.
 
 A typical investigation: `cloudsec_entity_pivot` (or `cloudsec_entity_resolve`
 for a batch) to find the entity, `cloudsec_entity_get` for the card or to
@@ -240,7 +277,11 @@ Reading results:
 - `possible` matches and `ambiguous` results are unconfirmed. Do not pick one
   automatically; confirm with the user or more evidence.
 - `redirect_to` means the requested ID was merged into another entity; the
-  returned card is the surviving entity's, so use that ID going forward.
+  returned card is the surviving entity's, so use that ID going forward. The kind
+  can change across a redirect: an old `eh_` Host ID of a Chrome browser profile
+  now redirects to an `eu_` User, because those browser sensors attach to the
+  signed-in person as a telemetry source. A browser User with `attrs.external:
+  true` simply matched no directory record; it is not a verdict on the person.
 - `card: null` with `index_ready: true` means the ID is not known (if
   `redirect_to` is also set, the surviving entity was retired).
 - `index_ready: false` means the index is not ready, so an empty answer proves
