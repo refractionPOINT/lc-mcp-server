@@ -253,8 +253,10 @@ that the inventory does not know is also looked up as a foreign hostname
 automatically. Observed pivots need `insight.evt.get`, like sightings.
 
 Treat everything observed as a lead. It is approximate and explained, never a
-confirmed match, and it never merges entities. Describe it as "same hostname and
-internal IP observed that day", not as the same machine or verified. Candidate
+confirmed match, and it never merges entities. Each device lead carries a
+`confidence` and a `reason` (for example `hostname_internal_ip_same_day`): describe
+it by that reason ("same hostname and internal IP observed that day"), not as the
+same machine or verified. Candidate
 hosts of a sign-in are always `possible`. Lookups are bounded (30 days, 20 rows
 per panel).
 
