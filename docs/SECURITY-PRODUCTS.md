@@ -215,6 +215,10 @@ can pivot to the User or Host behind them:
   `sightings_days` (1–365). Returns the full card, `index_ready`, `redirect_to`,
   recent sightings and `observations` unchanged. Host cards may carry
   `also_seen_as[]`, and Host and User cards `cloud_sign_ins[]`.
+  Each card `telemetry_sources[]` entry may carry `identity_source` (omitted when
+  unknown), saying how the sensor's identity was declared: `parser` (read from
+  the sensor itself, for example a Chrome profile email) or `mapping` (an
+  operator mapping).
 - `cloudsec_entity_sightings`: pass `entity_id`, optionally `kind`
   (`user|logon|int_ip|ext_ip|hostname`), `since` (inclusive), `until` (exclusive,
   not before `since`), `limit` (1–500) and `cursor`. Pages through the raw
@@ -250,7 +254,9 @@ are returned.
 Answers come back only as `observed_matches[{selector, devices[], truncated?}]`
 next to `observations`, never in `matches`. An input explicitly typed `hostname`
 that the inventory does not know is also looked up as a foreign hostname
-automatically. Observed pivots need `insight.evt.get`, like sightings.
+automatically, but only when the caller has `insight.evt.get`, and that lookup
+counts toward the four-selector bound. Untyped values are never looked up this
+way. Observed pivots need `insight.evt.get`, like sightings.
 
 Treat everything observed as a lead. It is approximate and explained, never a
 confirmed match, and it never merges entities. Each device lead carries a

@@ -328,7 +328,7 @@ func TestEntityResolveForwardsBatchAndUnknownTypeUnchanged(t *testing.T) {
 	ctx := entityContext(t)
 	old := httpClient
 	t.Cleanup(func() { httpClient = old })
-	const payload = `{"index_ready":true,"sightings":"forbidden","sources":[{"source":"fixture"}],"observations":[{"future":true}],"results":[{"input":{"value":"a@example.com"},"matches":[],"possible":[{"entity_id":"eu_aaaa","confidence":"possible"}]}]}`
+	const payload = `{"index_ready":true,"sightings":"forbidden","sources":[{"source":"fixture"}],"observations":{"status":"ok","queries":0,"rows":0},"results":[{"input":{"value":"a@example.com"},"matches":[],"possible":[{"entity_id":"eu_aaaa","confidence":"possible"}]}]}`
 	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method != "POST" || r.URL.Path != "/v1/cloudsec/"+entityFixtureOID+"/entities/resolve" || r.Header.Get("Content-Type") != "application/json" || r.URL.Query().Get("oid") != "" {
 			t.Fatalf("incorrect resolve request %s %s", r.Method, r.URL)
@@ -371,14 +371,14 @@ func TestEntityPivotForwardsUnknownTypeAndPassesThroughTopLevelKeys(t *testing.T
 		if !reflect.DeepEqual(body, want) {
 			t.Fatalf("unknown type was not forwarded: %+v", body)
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":false,"observations":[{"future":true}],"future_flag":"x","results":[{"input":{"value":"x"}}]}`)), Header: http.Header{}}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":false,"observations":{"status":"unavailable","reason":"timeout","queries":1,"rows":0},"future_flag":"x","results":[{"input":{"value":"x"}}]}`)), Header: http.Header{}}, nil
 	})}
 	result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "x", "type": "a_type_added_by_the_backend_later"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := entityResult(t, result)
-	if out["future_flag"] != "x" || len(out["observations"].([]interface{})) != 1 || len(out["candidates"].([]interface{})) != 1 {
+	if out["future_flag"] != "x" || out["observations"].(map[string]interface{})["status"] != "unavailable" || len(out["candidates"].([]interface{})) != 1 {
 		t.Fatalf("top-level resolve keys dropped: %+v", out)
 	}
 	if _, present := out["results"]; present {
