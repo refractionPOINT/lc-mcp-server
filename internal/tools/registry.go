@@ -84,6 +84,13 @@ var ProfileDefinitions = map[string][]string{
 		// Platform info
 		"get_platform_names",
 		"list_with_platform",
+		// Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+		"cloudsec_entity_search",
+		"cloudsec_entity_pivot",
+		"cloudsec_entity_resolve",
+		"cloudsec_entity_get",
+		"cloudsec_entity_sightings",
+		"cloudsec_entity_activity",
 	},
 	"historical_data_readonly": {
 		// Same as historical_data but conceptually read-only
@@ -112,6 +119,13 @@ var ProfileDefinitions = map[string][]string{
 		// Platform info (read-only)
 		"get_platform_names",
 		"list_with_platform",
+		// Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+		"cloudsec_entity_search",
+		"cloudsec_entity_pivot",
+		"cloudsec_entity_resolve",
+		"cloudsec_entity_get",
+		"cloudsec_entity_sightings",
+		"cloudsec_entity_activity",
 	},
 	"live_investigation": {
 		"get_processes",
@@ -507,6 +521,9 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_resolve_assets",
 		"cloudsec_entity_search",
 		"cloudsec_entity_pivot",
+		"cloudsec_entity_resolve",
+		"cloudsec_entity_get",
+		"cloudsec_entity_sightings",
 		"cloudsec_entity_activity",
 		// Runtime package evidence (CS-15): the on-demand five-rung check.
 		"cloudsec_check_finding_runtime",
@@ -609,6 +626,9 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_resolve_assets",
 		"cloudsec_entity_search",
 		"cloudsec_entity_pivot",
+		"cloudsec_entity_resolve",
+		"cloudsec_entity_get",
+		"cloudsec_entity_sightings",
 		"cloudsec_entity_activity",
 		// Runtime package evidence (CS-15): the on-demand five-rung check.
 		"cloudsec_check_finding_runtime",
@@ -661,6 +681,13 @@ var ProfileDefinitions = map[string][]string{
 		"mailsec_get_onboarding",
 		"mailsec_prepare_tenant_purge",
 		"mailsec_purge_tenant",
+		// Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+		"cloudsec_entity_search",
+		"cloudsec_entity_pivot",
+		"cloudsec_entity_resolve",
+		"cloudsec_entity_get",
+		"cloudsec_entity_sightings",
+		"cloudsec_entity_activity",
 	},
 	"email_security_readonly": {
 		// mailsec.get-only tools; elevated reads remain in the full profile.
@@ -681,6 +708,13 @@ var ProfileDefinitions = map[string][]string{
 		"mailsec_validate_rule",
 		"mailsec_backtest_rule",
 		"mailsec_get_onboarding",
+		// Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+		"cloudsec_entity_search",
+		"cloudsec_entity_pivot",
+		"cloudsec_entity_resolve",
+		"cloudsec_entity_get",
+		"cloudsec_entity_sightings",
+		"cloudsec_entity_activity",
 	},
 }
 

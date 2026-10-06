@@ -41,6 +41,13 @@ historical_data:
   # Platform info
   - get_platform_names
   - list_with_platform
+  # Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+  - cloudsec_entity_search
+  - cloudsec_entity_pivot
+  - cloudsec_entity_resolve
+  - cloudsec_entity_get
+  - cloudsec_entity_sightings
+  - cloudsec_entity_activity
 
 historical_data_readonly:
   # Same as historical_data but conceptually read-only
@@ -70,6 +77,13 @@ historical_data_readonly:
   # Platform info (read-only)
   - get_platform_names
   - list_with_platform
+  # Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+  - cloudsec_entity_search
+  - cloudsec_entity_pivot
+  - cloudsec_entity_resolve
+  - cloudsec_entity_get
+  - cloudsec_entity_sightings
+  - cloudsec_entity_activity
 
 live_investigation:
   # Process inspection
@@ -476,6 +490,9 @@ cloud_security:
   - cloudsec_resolve_assets
   - cloudsec_entity_search
   - cloudsec_entity_pivot
+  - cloudsec_entity_resolve
+  - cloudsec_entity_get
+  - cloudsec_entity_sightings
   - cloudsec_entity_activity
   # Runtime package evidence (CS-15): the on-demand five-rung check.
   - cloudsec_check_finding_runtime
@@ -577,6 +594,9 @@ cloud_security_readonly:
   - cloudsec_resolve_assets
   - cloudsec_entity_search
   - cloudsec_entity_pivot
+  - cloudsec_entity_resolve
+  - cloudsec_entity_get
+  - cloudsec_entity_sightings
   - cloudsec_entity_activity
   # Runtime package evidence (CS-15): the on-demand five-rung check.
   - cloudsec_check_finding_runtime
@@ -628,6 +648,13 @@ email_security:
   - mailsec_get_onboarding
   - mailsec_prepare_tenant_purge
   - mailsec_purge_tenant
+  # Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+  - cloudsec_entity_search
+  - cloudsec_entity_pivot
+  - cloudsec_entity_resolve
+  - cloudsec_entity_get
+  - cloudsec_entity_sightings
+  - cloudsec_entity_activity
 
 email_security_readonly:
   # mailsec.get-only subset; raw EML and ownership/action probes are excluded.
@@ -648,3 +675,10 @@ email_security_readonly:
   - mailsec_validate_rule
   - mailsec_backtest_rule
   - mailsec_get_onboarding
+  # Entity Pivot reads (User/Host identity across EDR, Email and Cloud Security)
+  - cloudsec_entity_search
+  - cloudsec_entity_pivot
+  - cloudsec_entity_resolve
+  - cloudsec_entity_get
+  - cloudsec_entity_sightings
+  - cloudsec_entity_activity

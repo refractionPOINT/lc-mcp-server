@@ -19,7 +19,6 @@ import (
 )
 
 var entityIDPattern = regexp.MustCompile(`^e[uh]_[a-z2-7]{1,37}$`)
-var entityIdentifierTypes = strings.Fields("email github_user_id github_login entra_object_id okta_user_id gws_user_id aws_arn windows_sid ad_account ad_account_short username sensor_id device_id cloud_instance_id graph_urn serial mac hostname fqdn ip")
 
 func entityMember(values []string, value string) bool {
 	for _, v := range values {
@@ -30,13 +29,38 @@ func entityMember(values []string, value string) bool {
 	return false
 }
 func registerEntity() {
-	register(toolDef{name: "cloudsec_entity_search", description: "Search User and Host entity identifiers by prefix (at least two characters, at most 512 UTF-8 bytes). Returns one bounded page with index readiness and next_cursor; do not interpret an incomplete index or page as absence.", readOnly: true,
+	register(toolDef{name: "cloudsec_entity_search", description: "Find User (eu_) and Host (eh_) entities whose known identifiers start with a prefix. Use it to discover entities when you only have a partial name; use cloudsec_entity_pivot or cloudsec_entity_resolve when you have a full identifier. Requires at least two characters (at most 512 UTF-8 bytes). Returns one bounded page: keep requesting with next_cursor (same q, kind and limit) while it is present, and do not treat index_ready:false or an incomplete page as absence.", readOnly: true,
 		params: []mcp.ToolOption{mcp.WithString("q", mcp.Required(), mcp.Description("Identifier prefix: at least two characters and at most 512 UTF-8 bytes")), mcp.WithString("kind", mcp.Description("Optional user or host")), mcp.WithNumber("limit", mcp.Description("Page size from 1 to 100")), mcp.WithString("cursor", mcp.Description("Opaque next_cursor from the previous page, at most 8192 bytes"))}, handler: searchEntities})
 
-	register(toolDef{name: "cloudsec_entity_pivot", description: "Resolve an identifier to User or Host entity cards across security products. This is the default tool for 'what is this identifier?'. Ambiguous candidates and possible matches are unconfirmed; never choose one or follow a possible match automatically. Preserves index readiness, freshness and redirects.", readOnly: true,
-		params: []mcp.ToolOption{mcp.WithString("identifier", mcp.Required(), mcp.Description("One identifier, at most 1024 bytes")), mcp.WithString("type", mcp.Description("Optional identifier type; omit for shape detection")), mcp.WithNumber("at", mcp.Description("Optional Unix-second timestamp for historical IP resolution"))}, handler: pivotEntity})
-	register(toolDef{name: "cloudsec_entity_activity", description: "Read a bounded entity activity preview from email, detections, live sensor state and open cloud findings. Each source reports ok, forbidden, not_subscribed, unavailable or timeout plus truncation and a full-view link. Requires the caller's own permission for each product; an unavailable or truncated source is unknown, never evidence of absence.", readOnly: true,
+	register(toolDef{name: "cloudsec_entity_pivot", description: "Default tool for 'what is this identifier?': resolve one identifier (email, hostname, DOMAIN\\user, IP, sensor id, GitHub id or login, cloud instance id, ...) to User/Host entity cards across EDR, Email Security and Cloud Security in one call. Returns candidates (the raw resolve results: detected type, evidence, ambiguity, possible matches), cards (fetched only for unambiguous authoritative or corroborated matches, at most 10) and the other top-level resolve fields such as index_ready, sources and sightings. possible and ambiguous candidates are unconfirmed: never pick one or pivot on it automatically; ask the user or gather more evidence. If a card carries redirect_to, the id was merged and the card is the surviving entity's. card_errors/truncated:true means some cards were not fetched; use cloudsec_entity_get on those ids. Next: cloudsec_entity_activity or cloudsec_entity_sightings with a card's entity id.", readOnly: true,
+		params: []mcp.ToolOption{mcp.WithString("identifier", mcp.Required(), mcp.Description("One identifier, at most 1024 bytes")), mcp.WithString("type", mcp.Description("Optional identifier type, at most 64 bytes (for example email, hostname, ip, sensor_id, github_login, github_user_id, windows_sid, aws_arn); omit for shape detection. The backend validates the value and may support more types than listed")), mcp.WithNumber("at", mcp.Description("Optional Unix-second timestamp for historical IP resolution"))}, handler: pivotEntity})
+	register(toolDef{name: "cloudsec_entity_resolve", description: "Batch-resolve 1 to 100 identifiers to entity candidates without fetching cards. Use it instead of cloudsec_entity_pivot when you have many identifiers or only need the entity ids; follow up with cloudsec_entity_get per id. Returns the backend response unchanged: results[] (one per input, in order, each with matches, possible, ambiguous), index_ready, sources and sightings. Matches with confidence authoritative or corroborated are confirmed; possible matches and any ambiguous result are unconfirmed and must not be auto-selected. sightings:\"forbidden\" means the caller lacks insight.evt.get, so sighting-derived matches are omitted.", readOnly: true,
+		params: []mcp.ToolOption{mcp.WithArray("identifiers", mcp.Required(), mcp.Items(map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string", "description": "Identifier, at most 1024 bytes"}, "type": map[string]any{"type": "string", "description": "Optional identifier type, at most 64 bytes; omit for shape detection"}}, "required": []string{"value"}}), mcp.Description("1 to 100 objects of the form {value, type?}")), mcp.WithNumber("at", mcp.Description("Optional Unix-second timestamp for historical IP resolution"))}, handler: resolveEntities})
+	register(toolDef{name: "cloudsec_entity_get", description: "Fetch the full card for one entity id (from resolve, pivot or search): attributes, identifiers, telemetry sources, owned hosts or users and pivot hints, plus index_ready and optionally recent sightings (sightings_days). If redirect_to is present the id was merged: the returned card is the surviving entity's, so use that id from now on. card:null with index_ready:true means the id is unknown (or its surviving entity was retired, in which case redirect_to is still set), not an error. sightings:\"forbidden\" means the caller lacks insight.evt.get. Next: cloudsec_entity_activity for a cross-product preview or cloudsec_entity_sightings for raw observations.", readOnly: true,
+		params: []mcp.ToolOption{mcp.WithString("entity_id", mcp.Required(), mcp.Description("Entity id such as eu_... or eh_..., from resolve, pivot or search")), mcp.WithNumber("sightings_days", mcp.Description("Optional recent-sightings window in days, 1 to 365"))}, handler: getEntity})
+	register(toolDef{name: "cloudsec_entity_sightings", description: "Page through the raw sightings (observed users, logons, internal/external IPs, hostnames) behind an entity, optionally filtered by kind and a since (inclusive) / until (exclusive) Unix-second window. Use it when the card's summary is not enough, for example to see which IPs or logons an entity used. Requires insight.evt.get; without it the call fails with a permission error. Continue calling with the returned next_cursor (same filters) for as long as next_cursor is present; a page without it is the last one.", readOnly: true,
+		params: []mcp.ToolOption{mcp.WithString("entity_id", mcp.Required(), mcp.Description("Entity id such as eu_... or eh_...")), mcp.WithString("kind", mcp.Description("Optional filter: user, logon, int_ip, ext_ip or hostname")), mcp.WithNumber("since", mcp.Description("Inclusive Unix seconds")), mcp.WithNumber("until", mcp.Description("Exclusive Unix seconds; must not be before since")), mcp.WithNumber("limit", mcp.Description("Page size from 1 to 500")), mcp.WithString("cursor", mcp.Description("Opaque next_cursor from the previous page, at most 8192 bytes"))}, handler: listEntitySightings})
+	register(toolDef{name: "cloudsec_entity_activity", description: "Read a bounded cross-product activity preview for one entity: email, detections, live sensor state and open cloud findings, each as a source with status ok, forbidden, not_subscribed, unavailable or timeout, a truncated flag and a full-view link. Requires the caller's own permission for each product. An unavailable, timed-out or truncated source is unknown, never evidence of absence. Use cloudsec_entity_sightings for the entity's raw observations.", readOnly: true,
 		params: []mcp.ToolOption{mcp.WithString("entity_id", mcp.Required()), mcp.WithNumber("since", mcp.Description("Unix seconds; defaults to the last 30 days")), mcp.WithNumber("until", mcp.Description("Unix seconds; defaults to now; maximum window 30 days")), mcp.WithArray("sources", mcp.WithStringItems(), mcp.Description("Subset of email,detections,sensor,cloud; default all"))}, handler: readEntityActivity})
+}
+
+// entityIdentifier validates one {value, type?} identifier the way the API does,
+// except that the type is deliberately not checked against a list: the backend
+// owns the set of supported types and rejects the ones it does not know.
+func entityIdentifier(value interface{}, typ interface{}, hasType bool) (map[string]interface{}, error) {
+	s, ok := value.(string)
+	if !ok || strings.TrimSpace(s) == "" || len(s) > 1024 {
+		return nil, fmt.Errorf("identifier must contain 1 to 1024 bytes")
+	}
+	out := map[string]interface{}{"value": s}
+	if hasType {
+		t, ok := typ.(string)
+		if !ok || strings.TrimSpace(t) == "" || len(t) > 64 {
+			return nil, fmt.Errorf("identifier type must be a non-empty string of at most 64 bytes")
+		}
+		out["type"] = t
+	}
+	return out, nil
 }
 func entityTimestamp(args map[string]interface{}, key string) (int64, bool, error) {
 	value, present := args[key]
@@ -77,17 +101,10 @@ func entityGET(ctx context.Context, org *lc.Organization, suffix string, query u
 	return response, nil
 }
 func pivotEntity(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	identifier, ok := args["identifier"].(string)
-	if !ok || strings.TrimSpace(identifier) == "" || len(identifier) > 1024 {
-		return tools.ErrorResult("identifier must contain 1 to 1024 bytes"), nil
-	}
-	input := map[string]interface{}{"value": identifier}
-	if value, present := args["type"]; present {
-		typ, ok := value.(string)
-		if !ok || !entityMember(entityIdentifierTypes, typ) {
-			return tools.ErrorResult("invalid identifier type"), nil
-		}
-		input["type"] = typ
+	typ, hasType := args["type"]
+	input, err := entityIdentifier(args["identifier"], typ, hasType)
+	if err != nil {
+		return tools.ErrorResult(err.Error()), nil
 	}
 	body := map[string]interface{}{"identifiers": []interface{}{input}}
 	if at, present, err := entityTimestamp(args, "at"); err != nil {
@@ -108,12 +125,16 @@ func pivotEntity(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	cards := []interface{}{}
 	failures := []interface{}{}
 	results, _ := response["results"].([]interface{})
-	out := map[string]interface{}{"cards": cards, "candidates": response["results"]}
-	for _, key := range []string{"index_ready", "sources", "feature_disabled", "sightings"} {
-		if value, present := response[key]; present {
+	// Pass every top-level resolve key through except results, which is exposed as
+	// candidates, so fields the backend adds later are not silently dropped.
+	out := map[string]interface{}{}
+	for key, value := range response {
+		if key != "results" {
 			out[key] = value
 		}
 	}
+	out["cards"] = cards
+	out["candidates"] = response["results"]
 	if ready, _ := response["index_ready"].(bool); !ready {
 		return tools.SuccessResult(out), nil
 	}
@@ -257,6 +278,130 @@ func searchEntities(ctx context.Context, args map[string]interface{}) (*mcp.Call
 	response, err := entityGET(ctx, org, "entities/search", query)
 	if err != nil {
 		return tools.ErrorResultf("entity search failed: %s", describeErr(err)), nil
+	}
+	return tools.SuccessResult(response), nil
+}
+
+func resolveEntities(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	var items []interface{}
+	switch v := args["identifiers"].(type) {
+	case []interface{}:
+		items = v
+	case []map[string]interface{}:
+		for _, item := range v {
+			items = append(items, item)
+		}
+	default:
+		return tools.ErrorResult("identifiers must be an array of {value, type?} objects"), nil
+	}
+	if len(items) < 1 || len(items) > 100 {
+		return tools.ErrorResult("identifiers must contain 1 to 100 entries"), nil
+	}
+	identifiers := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			return tools.ErrorResult("each identifier must be an object with a value"), nil
+		}
+		typ, hasType := m["type"]
+		input, err := entityIdentifier(m["value"], typ, hasType)
+		if err != nil {
+			return tools.ErrorResult(err.Error()), nil
+		}
+		identifiers = append(identifiers, input)
+	}
+	body := map[string]interface{}{"identifiers": identifiers}
+	if at, present, err := entityTimestamp(args, "at"); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	} else if present {
+		body["at"] = at
+	}
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return tools.ErrorResult("organization authentication required"), nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	response, err := postJSON(ctx, org, orgPath(org, "entities/resolve"), body, 20*time.Second)
+	if err != nil {
+		return tools.ErrorResultf("entity resolution failed: %s", describeErr(err)), nil
+	}
+	return tools.SuccessResult(response), nil
+}
+
+func getEntity(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	id, ok := args["entity_id"].(string)
+	if !ok || !entityIDPattern.MatchString(id) {
+		return tools.ErrorResult("invalid entity_id"), nil
+	}
+	var query url.Values
+	if n, present, err := entityTimestamp(args, "sightings_days"); err != nil || (present && (n < 1 || n > 365)) {
+		return tools.ErrorResult("sightings_days must be an integer from 1 to 365"), nil
+	} else if present {
+		query = url.Values{"sightings_days": []string{strconv.FormatInt(n, 10)}}
+	}
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return tools.ErrorResult("organization authentication required"), nil
+	}
+	response, err := entityGET(ctx, org, "entities/"+id, query)
+	if err != nil {
+		return tools.ErrorResultf("entity get failed: %s", describeErr(err)), nil
+	}
+	return tools.SuccessResult(response), nil
+}
+
+func listEntitySightings(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	id, ok := args["entity_id"].(string)
+	if !ok || !entityIDPattern.MatchString(id) {
+		return tools.ErrorResult("invalid entity_id"), nil
+	}
+	query := url.Values{}
+	if value, present := args["kind"]; present {
+		kind, ok := value.(string)
+		if !ok || !entityMember([]string{"user", "logon", "int_ip", "ext_ip", "hostname"}, kind) {
+			return tools.ErrorResult("kind must be one of user, logon, int_ip, ext_ip, hostname"), nil
+		}
+		query.Set("kind", kind)
+	}
+	var since, until int64
+	var hasSince, hasUntil bool
+	for _, key := range []string{"since", "until"} {
+		n, present, err := entityTimestamp(args, key)
+		if err != nil {
+			return tools.ErrorResult(err.Error()), nil
+		}
+		if present {
+			query.Set(key, strconv.FormatInt(n, 10))
+		}
+		if key == "since" {
+			since, hasSince = n, present
+		} else {
+			until, hasUntil = n, present
+		}
+	}
+	if hasSince && hasUntil && since > until {
+		return tools.ErrorResult("since must not be after until"), nil
+	}
+	if n, present, err := entityTimestamp(args, "limit"); err != nil || (present && (n < 1 || n > 500)) {
+		return tools.ErrorResult("limit must be an integer from 1 to 500"), nil
+	} else if present {
+		query.Set("limit", strconv.FormatInt(n, 10))
+	}
+	if value, present := args["cursor"]; present {
+		cursor, ok := value.(string)
+		if !ok || cursor == "" || len(cursor) > 8192 {
+			return tools.ErrorResult("invalid cursor"), nil
+		}
+		query.Set("cursor", cursor)
+	}
+	org, err := tools.GetOrganization(ctx)
+	if err != nil {
+		return tools.ErrorResult("organization authentication required"), nil
+	}
+	response, err := entityGET(ctx, org, "entities/"+id+"/sightings", query)
+	if err != nil {
+		return tools.ErrorResultf("entity sightings failed: %s", describeErr(err)), nil
 	}
 	return tools.SuccessResult(response), nil
 }
