@@ -328,7 +328,7 @@ func TestEntityResolveForwardsBatchAndUnknownTypeUnchanged(t *testing.T) {
 	ctx := entityContext(t)
 	old := httpClient
 	t.Cleanup(func() { httpClient = old })
-	const payload = `{"index_ready":true,"sightings":"forbidden","sources":[{"source":"fixture"}],"observations":[{"future":true}],"results":[{"input":{"value":"a@example.com"},"matches":[],"possible":[{"entity_id":"eu_aaaa","confidence":"possible"}]}]}`
+	const payload = `{"index_ready":true,"sightings":"forbidden","sources":[{"source":"fixture"}],"observations":{"status":"forbidden","queries":0,"rows":0},"future_field":{"kept":true},"results":[{"input":{"value":"a@example.com"},"matches":[],"possible":[{"entity_id":"eu_aaaa","confidence":"possible"}]}]}`
 	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
 		if r.Method != "POST" || r.URL.Path != "/v1/cloudsec/"+entityFixtureOID+"/entities/resolve" || r.Header.Get("Content-Type") != "application/json" || r.URL.Query().Get("oid") != "" {
 			t.Fatalf("incorrect resolve request %s %s", r.Method, r.URL)
@@ -371,14 +371,14 @@ func TestEntityPivotForwardsUnknownTypeAndPassesThroughTopLevelKeys(t *testing.T
 		if !reflect.DeepEqual(body, want) {
 			t.Fatalf("unknown type was not forwarded: %+v", body)
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":false,"observations":[{"future":true}],"future_flag":"x","results":[{"input":{"value":"x"}}]}`)), Header: http.Header{}}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":false,"observations":{"status":"unavailable","reason":"schema_missing","queries":0,"rows":0},"future_flag":"x","results":[{"input":{"value":"x"}}]}`)), Header: http.Header{}}, nil
 	})}
 	result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "x", "type": "a_type_added_by_the_backend_later"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := entityResult(t, result)
-	if out["future_flag"] != "x" || len(out["observations"].([]interface{})) != 1 || len(out["candidates"].([]interface{})) != 1 {
+	if out["future_flag"] != "x" || !reflect.DeepEqual(out["observations"], map[string]interface{}{"status": "unavailable", "reason": "schema_missing", "queries": float64(0), "rows": float64(0)}) || len(out["candidates"].([]interface{})) != 1 {
 		t.Fatalf("top-level resolve keys dropped: %+v", out)
 	}
 	if _, present := out["results"]; present {
@@ -454,5 +454,227 @@ func TestEntitySightingsSurfacesMissingPermission(t *testing.T) {
 	result, err := listEntitySightings(ctx, map[string]interface{}{"entity_id": entityFixtureID})
 	if err != nil || result == nil || !result.IsError {
 		t.Fatalf("403 was not surfaced as an error: %+v", result)
+	}
+}
+
+const entityObservedResolveResponse = `{"index_ready":true,"sightings":"ok",
+"observations":{"status":"incomplete","reason":"deadline","queries":3,"rows":41,"truncated":true},
+"observed_matches":[{"selector":{"type":"vendor_device_id","value":"dev-1","platform":"sophos"},"truncated":true,
+ "devices":[{"origin_sid":"22222222-2222-4222-8222-222222222222","platform":"sophos","vendor_device_id":"dev-1","day":"2026-10-01","names":["laptop-7"],"local_ips":["10.0.0.7"],"approximate":true,"candidates":[{"entity":{"id":"eh_bbbbbbbbbbbbbbbbbbbbbbbbbb","kind":"host"},"confidence":"corroborated","reason":"same hostname and internal IP"}]}]}],
+"results":[{"input":{"value":"laptop-7","type":"hostname"},"ambiguous":false,"matches":[],"possible":[]}]}`
+
+func TestEntityResolveSendsValidatedObservationSelectorsAndPassesObservedFieldsThrough(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		want := map[string]interface{}{
+			"identifiers": []interface{}{map[string]interface{}{"value": "laptop-7", "type": "hostname"}},
+			"at":          float64(1790000000),
+			"observation_selectors": []interface{}{
+				map[string]interface{}{"type": "vendor_device_id", "value": "dev-1", "platform": "sophos", "origin_sid": "22222222-2222-4222-8222-222222222222"},
+				map[string]interface{}{"type": "foreign_hostname", "value": "LAPTOP-7"},
+			},
+		}
+		if !reflect.DeepEqual(body, want) {
+			t.Fatalf("body changed %+v", body)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(entityObservedResolveResponse)), Header: http.Header{}}, nil
+	})}
+	result, err := resolveEntities(ctx, map[string]interface{}{
+		"identifiers": []interface{}{map[string]interface{}{"value": "laptop-7", "type": "hostname"}},
+		"at":          1790000000,
+		"observation_selectors": []interface{}{
+			map[string]interface{}{"type": "vendor_device_id", "value": "dev-1", "platform": "sophos", "origin_sid": "22222222-2222-4222-8222-222222222222", "dropped": "x"},
+			map[string]interface{}{"type": "foreign_hostname", "value": "LAPTOP-7"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]interface{}
+	_ = json.Unmarshal([]byte(entityObservedResolveResponse), &want)
+	if got := entityResult(t, result); !reflect.DeepEqual(got, want) {
+		t.Fatalf("observed fields not returned unchanged: %+v", got)
+	}
+}
+
+func TestEntityResolveOmitsSelectorsWhenAbsentOrEmpty(t *testing.T) {
+	for name, args := range map[string]map[string]interface{}{
+		"absent": {},
+		"empty":  {"observation_selectors": []interface{}{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := entityContext(t)
+			old := httpClient
+			t.Cleanup(func() { httpClient = old })
+			httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+				var body map[string]interface{}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if _, present := body["observation_selectors"]; present {
+					t.Fatalf("selectors sent without being asked: %+v", body)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":true,"results":[]}`)), Header: http.Header{}}, nil
+			})}
+			args["identifiers"] = []interface{}{map[string]interface{}{"value": "a@example.com"}}
+			if result, err := resolveEntities(ctx, args); err != nil || result.IsError {
+				t.Fatalf("resolve failed: %+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestEntityPivotForwardsSelectorsAndDoesNotReadObservedCandidateCards(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	const observedHost = "eh_bbbbbbbbbbbbbbbbbbbbbbbbbb"
+	gets := 0
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Method == "GET" {
+			gets++
+			if strings.HasSuffix(r.URL.Path, observedHost) {
+				t.Fatal("pivot read the card of an observed candidate")
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"card":{"entity":{"id":"` + entityFixtureID + `"}},"index_ready":true,"observations":{"status":"ok","queries":2,"rows":3},"also_seen_as":[{"platform":"sophos","candidates":[]}],"cloud_sign_ins":[{"platform":"okta","principal":"a@example.com","samples":[]}]}`)), Header: http.Header{}}, nil
+		}
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		want := []interface{}{map[string]interface{}{"type": "foreign_hostname", "value": "LAPTOP-7"}}
+		if !reflect.DeepEqual(body["observation_selectors"], want) {
+			t.Fatalf("pivot did not forward selectors: %+v", body)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":true,"observations":{"status":"ok","queries":1,"rows":1},"observed_matches":[{"selector":{"type":"foreign_hostname","value":"LAPTOP-7"},"devices":[{"candidates":[{"entity":{"id":"` + observedHost + `"},"confidence":"corroborated"}]}]}],"results":[{"ambiguous":false,"matches":[{"entity_id":"` + entityFixtureID + `","confidence":"authoritative"}]}]}`)), Header: http.Header{}}, nil
+	})}
+	result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "host", "observation_selectors": []interface{}{map[string]interface{}{"type": "foreign_hostname", "value": "LAPTOP-7"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := entityResult(t, result)
+	cards := out["cards"].([]interface{})
+	if gets != 1 || len(cards) != 1 || len(out["observed_matches"].([]interface{})) != 1 || out["observations"].(map[string]interface{})["status"] != "ok" {
+		t.Fatalf("observed fields lost or extra cards read: %+v gets=%d", out, gets)
+	}
+	card := cards[0].(map[string]interface{})
+	if len(card["also_seen_as"].([]interface{})) != 1 || len(card["cloud_sign_ins"].([]interface{})) != 1 || card["observations"].(map[string]interface{})["queries"] != float64(2) {
+		t.Fatalf("card observed pivots reshaped: %+v", card)
+	}
+}
+
+func TestEntityGetPassesThroughObservedFieldsAndChromeIdentity(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	const payload = `{"card":{"entity":{"id":"eu_aaaa","kind":"user"},"telemetry_sources":[{"platform":"chrome","identity_source":"mapping"}]},"index_ready":true,"redirect_to":"eu_aaaa","observations":{"status":"unavailable","reason":"query_budget","queries":0,"rows":0},"also_seen_as":[],"cloud_sign_ins":[]}`
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload)), Header: http.Header{}}, nil
+	})}
+	result, err := getEntity(ctx, map[string]interface{}{"entity_id": entityFixtureID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want map[string]interface{}
+	_ = json.Unmarshal([]byte(payload), &want)
+	if got := entityResult(t, result); !reflect.DeepEqual(got, want) {
+		t.Fatalf("get response not returned unchanged: %+v", got)
+	}
+}
+
+func TestEntityObservationSelectorsAreValidatedBeforeAnyHTTPCall(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("invalid observation selector made an HTTP request")
+		return nil, nil
+	})}
+	sel := func(typ string, kv ...interface{}) interface{} {
+		m := map[string]interface{}{"type": typ}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i].(string)] = kv[i+1]
+		}
+		return m
+	}
+	good := sel("foreign_hostname", "value", "h")
+	five := []interface{}{good, good, good, good, good}
+	const sid = "22222222-2222-4222-8222-222222222222"
+	for name, selectors := range map[string]interface{}{
+		"not an array":            "foreign_hostname",
+		"too many":                five,
+		"item not an object":      []interface{}{"h"},
+		"unknown type":            []interface{}{sel("hostname", "value", "h")},
+		"missing type":            []interface{}{map[string]interface{}{"value": "h"}},
+		"missing value":           []interface{}{sel("foreign_hostname")},
+		"non-string value":        []interface{}{sel("foreign_hostname", "value", 7)},
+		"blank value":             []interface{}{sel("foreign_hostname", "value", " \t")},
+		"invalid utf8":            []interface{}{sel("foreign_hostname", "value", "a\xffb")},
+		"hostname too long":       []interface{}{sel("foreign_hostname", "value", strings.Repeat("h", 513))},
+		"hostname with platform":  []interface{}{sel("foreign_hostname", "value", "h", "platform", "sophos")},
+		"hostname with origin":    []interface{}{sel("foreign_hostname", "value", "h", "origin_sid", sid)},
+		"device without platform": []interface{}{sel("vendor_device_id", "value", "d")},
+		"device unknown platform": []interface{}{sel("vendor_device_id", "value", "d", "platform", "github")},
+		"device platform case":    []interface{}{sel("vendor_device_id", "value", "d", "platform", "Sophos")},
+		"device non-string plat":  []interface{}{sel("vendor_device_id", "value", "d", "platform", 3)},
+		"device id too long":      []interface{}{sel("vendor_device_id", "value", strings.Repeat("d", 129), "platform", "okta")},
+		"origin uppercase":        []interface{}{sel("vendor_device_id", "value", "d", "platform", "okta", "origin_sid", strings.ToUpper("abcdefab-abcd-4abc-8abc-abcdefabcdef"))},
+		"origin not a uuid":       []interface{}{sel("vendor_device_id", "value", "d", "platform", "okta", "origin_sid", "abc")},
+		"one bad among good":      []interface{}{good, sel("vendor_device_id", "value", "d")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			identifiers := []interface{}{map[string]interface{}{"value": "h"}}
+			if result, err := resolveEntities(ctx, map[string]interface{}{"identifiers": identifiers, "observation_selectors": selectors}); err != nil || result == nil || !result.IsError {
+				t.Fatal("invalid selectors accepted by resolve")
+			}
+			if result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "h", "observation_selectors": selectors}); err != nil || result == nil || !result.IsError {
+				t.Fatal("invalid selectors accepted by pivot")
+			}
+		})
+	}
+}
+
+func TestEntityObservationSelectorsAcceptBoundaryValues(t *testing.T) {
+	for _, platform := range []string{"sophos", "crowdstrike", "office365", "entraid", "okta", "duo"} {
+		selectors, ok, err := entitySelectors(map[string]interface{}{"observation_selectors": []interface{}{
+			map[string]interface{}{"type": "vendor_device_id", "value": strings.Repeat("d", 128), "platform": platform},
+		}})
+		if err != nil || !ok || len(selectors) != 1 {
+			t.Fatalf("platform %s refused: %v", platform, err)
+		}
+	}
+	four := []interface{}{}
+	for i := 0; i < 4; i++ {
+		four = append(four, map[string]interface{}{"type": "foreign_hostname", "value": strings.Repeat("h", 512)})
+	}
+	if selectors, ok, err := entitySelectors(map[string]interface{}{"observation_selectors": four}); err != nil || !ok || len(selectors) != 4 {
+		t.Fatalf("four 512-byte hostnames refused: %v", err)
+	}
+	// Typed as []map[string]interface{} the way in-process callers may build it.
+	if _, ok, err := entitySelectors(map[string]interface{}{"observation_selectors": []map[string]interface{}{{"type": "foreign_hostname", "value": "h"}}}); err != nil || !ok {
+		t.Fatalf("typed slice refused: %v", err)
+	}
+}
+
+func TestEntityObservationToolsDescribeTheContract(t *testing.T) {
+	for _, name := range []string{"cloudsec_entity_resolve", "cloudsec_entity_pivot"} {
+		registration, ok := tools.GetTool(name)
+		if !ok {
+			t.Fatal(name)
+		}
+		if _, present := registration.Schema.InputSchema.Properties["observation_selectors"]; !present {
+			t.Fatalf("%s lacks observation_selectors", name)
+		}
+	}
+	for _, name := range []string{"cloudsec_entity_resolve", "cloudsec_entity_pivot", "cloudsec_entity_get"} {
+		registration, _ := tools.GetTool(name)
+		for _, term := range []string{"UNKNOWN", "schema_missing", "query_budget", "observations", "redirect_to"} {
+			if name == "cloudsec_entity_get" && term == "observations" {
+				continue
+			}
+			if !strings.Contains(registration.Schema.Description, term) {
+				t.Fatalf("%s description lacks %q", name, term)
+			}
+		}
 	}
 }

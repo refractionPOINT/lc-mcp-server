@@ -28,15 +28,116 @@ func entityMember(values []string, value string) bool {
 	}
 	return false
 }
+
+const entityObservationNote = "observations is an object {status, reason?, queries, rows, truncated?}: status is ok, incomplete, unavailable or forbidden, and reason (schema_missing, deadline, query_budget, error or bounds) says why a bound or failure applied. incomplete, unavailable and forbidden (no insight.evt.get, so no observation query ran) mean UNKNOWN, never none: an empty observed_matches, also_seen_as or cloud_sign_ins list only means nothing was found when status is ok."
+
+const entityChromeNote = "Chrome profile identity: a signed-in Chrome sensor is a User (eu_) entity, so an old Host eh_ id for it may carry redirect_to pointing at an eu_ id, and telemetry_sources[].identity_source (parser or mapping) with platform chrome tells where the identity came from."
+
+const entityAtDescription = "Optional Unix-second timestamp: historical IP resolution, and it pins the UTC day that observation_selectors are answered for (without it the most recent days are returned, newest first)"
+
+const entitySelectorsDescription = "Optional, at most 4 observation selectors {type, value, platform?, origin_sid?} that ask which existing Hosts a vendor device may be (needs insight.evt.get, otherwise observations.status is forbidden). type vendor_device_id: value is the vendor's device id (at most 128 bytes), platform is required and one of sophos, crowdstrike, office365, entraid, okta, duo, origin_sid is an optional lowercase UUID naming one collector. type foreign_hostname: value is the hostname as the vendor spelled it (at most 512 bytes), with no platform or origin_sid. Values must be non-blank UTF-8. Results come back in observed_matches and are evidence only, never a merge."
+
+const entityMaxObservationSelectors = 4
+
+var entityObservationPlatforms = []string{"sophos", "crowdstrike", "office365", "entraid", "okta", "duo"}
+var entityOriginSIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+func entitySelectorsOption() mcp.ToolOption {
+	return mcp.WithArray("observation_selectors", mcp.Items(map[string]any{"type": "object", "properties": map[string]any{
+		"type":       map[string]any{"type": "string", "enum": []string{"vendor_device_id", "foreign_hostname"}, "description": "Selector type"},
+		"value":      map[string]any{"type": "string", "description": "Vendor device id (at most 128 bytes) or foreign hostname (at most 512 bytes); non-blank UTF-8"},
+		"platform":   map[string]any{"type": "string", "enum": entityObservationPlatforms, "description": "Required for vendor_device_id, not allowed for foreign_hostname"},
+		"origin_sid": map[string]any{"type": "string", "description": "Optional lowercase UUID of one collector; vendor_device_id only"},
+	}, "required": []string{"type", "value"}}), mcp.Description(entitySelectorsDescription))
+}
+
+// entitySelectors validates the optional observation_selectors argument the way
+// the API does and returns clean selector objects containing only known fields.
+// ok is false when nothing should be sent (absent or empty).
+func entitySelectors(args map[string]interface{}) (selectors []interface{}, ok bool, err error) {
+	value, present := args["observation_selectors"]
+	if !present {
+		return nil, false, nil
+	}
+	var items []interface{}
+	switch v := value.(type) {
+	case []interface{}:
+		items = v
+	case []map[string]interface{}:
+		for _, item := range v {
+			items = append(items, item)
+		}
+	default:
+		return nil, false, fmt.Errorf("observation_selectors must be an array of {type, value, platform?, origin_sid?} objects")
+	}
+	if len(items) > entityMaxObservationSelectors {
+		return nil, false, fmt.Errorf("observation_selectors must contain at most %d entries", entityMaxObservationSelectors)
+	}
+	if len(items) == 0 {
+		return nil, false, nil
+	}
+	for _, item := range items {
+		m, isMap := item.(map[string]interface{})
+		if !isMap {
+			return nil, false, fmt.Errorf("each observation selector must be an object")
+		}
+		str := func(key string) (string, bool, bool) {
+			raw, has := m[key]
+			if !has {
+				return "", false, true
+			}
+			s, isString := raw.(string)
+			return s, true, isString
+		}
+		typ, _, typOK := str("type")
+		val, _, valOK := str("value")
+		platform, hasPlatform, platformOK := str("platform")
+		origin, hasOrigin, originOK := str("origin_sid")
+		if !typOK || !valOK || !platformOK || !originOK {
+			return nil, false, fmt.Errorf("observation selector fields must be strings")
+		}
+		if !utf8.ValidString(val) || strings.TrimSpace(val) == "" {
+			return nil, false, fmt.Errorf("observation selector value must be non-blank UTF-8")
+		}
+		out := map[string]interface{}{"type": typ, "value": val}
+		switch typ {
+		case "vendor_device_id":
+			if len(val) > 128 {
+				return nil, false, fmt.Errorf("vendor_device_id value must be at most 128 bytes")
+			}
+			if !entityMember(entityObservationPlatforms, platform) {
+				return nil, false, fmt.Errorf("vendor_device_id requires platform, one of %s", strings.Join(entityObservationPlatforms, ", "))
+			}
+			out["platform"] = platform
+			if hasOrigin {
+				if !entityOriginSIDPattern.MatchString(origin) {
+					return nil, false, fmt.Errorf("origin_sid must be a lowercase canonical UUID")
+				}
+				out["origin_sid"] = origin
+			}
+		case "foreign_hostname":
+			if len(val) > 512 {
+				return nil, false, fmt.Errorf("foreign_hostname value must be at most 512 bytes")
+			}
+			if hasPlatform || hasOrigin {
+				return nil, false, fmt.Errorf("foreign_hostname takes no platform or origin_sid")
+			}
+		default:
+			return nil, false, fmt.Errorf("observation selector type must be vendor_device_id or foreign_hostname")
+		}
+		selectors = append(selectors, out)
+	}
+	return selectors, true, nil
+}
 func registerEntity() {
 	register(toolDef{name: "cloudsec_entity_search", description: "Find User (eu_) and Host (eh_) entities whose known identifiers start with a prefix. Use it to discover entities when you only have a partial name; use cloudsec_entity_pivot or cloudsec_entity_resolve when you have a full identifier. Requires at least two characters (at most 512 UTF-8 bytes). Returns one bounded page: keep requesting with next_cursor (same q, kind and limit) while it is present, and do not treat index_ready:false or an incomplete page as absence.", readOnly: true,
 		params: []mcp.ToolOption{mcp.WithString("q", mcp.Required(), mcp.Description("Identifier prefix: at least two characters and at most 512 UTF-8 bytes")), mcp.WithString("kind", mcp.Description("Optional user or host")), mcp.WithNumber("limit", mcp.Description("Page size from 1 to 100")), mcp.WithString("cursor", mcp.Description("Opaque next_cursor from the previous page, at most 8192 bytes"))}, handler: searchEntities})
 
-	register(toolDef{name: "cloudsec_entity_pivot", description: "Default tool for 'what is this identifier?': resolve one identifier (email, hostname, DOMAIN\\user, IP, sensor id, GitHub id or login, cloud instance id, ...) to User/Host entity cards across EDR, Email Security and Cloud Security in one call. Returns candidates (the raw resolve results: detected type, evidence, ambiguity, possible matches), cards (fetched only for unambiguous authoritative or corroborated matches, at most 10) and the other top-level resolve fields such as index_ready, sources and sightings. possible and ambiguous candidates are unconfirmed: never pick one or pivot on it automatically; ask the user or gather more evidence. If a card carries redirect_to, the id was merged and the card is the surviving entity's. card_errors/truncated:true means some cards were not fetched; use cloudsec_entity_get on those ids. Next: cloudsec_entity_activity or cloudsec_entity_sightings with a card's entity id.", readOnly: true,
-		params: []mcp.ToolOption{mcp.WithString("identifier", mcp.Required(), mcp.Description("One identifier, at most 1024 bytes")), mcp.WithString("type", mcp.Description("Optional identifier type, at most 64 bytes (for example email, hostname, ip, sensor_id, github_login, github_user_id, windows_sid, aws_arn); omit for shape detection. The backend validates the value and may support more types than listed")), mcp.WithNumber("at", mcp.Description("Optional Unix-second timestamp for historical IP resolution"))}, handler: pivotEntity})
-	register(toolDef{name: "cloudsec_entity_resolve", description: "Batch-resolve 1 to 100 identifiers to entity candidates without fetching cards. Use it instead of cloudsec_entity_pivot when you have many identifiers or only need the entity ids; follow up with cloudsec_entity_get per id. Returns the backend response unchanged: results[] (one per input, in order, each with matches, possible, ambiguous), index_ready, sources and sightings. Matches with confidence authoritative or corroborated are confirmed; possible matches and any ambiguous result are unconfirmed and must not be auto-selected. sightings:\"forbidden\" means the caller lacks insight.evt.get, so sighting-derived matches are omitted.", readOnly: true,
-		params: []mcp.ToolOption{mcp.WithArray("identifiers", mcp.Required(), mcp.Items(map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string", "description": "Identifier, at most 1024 bytes"}, "type": map[string]any{"type": "string", "description": "Optional identifier type, at most 64 bytes; omit for shape detection"}}, "required": []string{"value"}}), mcp.Description("1 to 100 objects of the form {value, type?}")), mcp.WithNumber("at", mcp.Description("Optional Unix-second timestamp for historical IP resolution"))}, handler: resolveEntities})
-	register(toolDef{name: "cloudsec_entity_get", description: "Fetch the full card for one entity id (from resolve, pivot or search): attributes, identifiers, telemetry sources, owned hosts or users and pivot hints, plus index_ready and optionally recent sightings (sightings_days). If redirect_to is present the id was merged: the returned card is the surviving entity's, so use that id from now on. card:null with index_ready:true means the id is unknown (or its surviving entity was retired, in which case redirect_to is still set), not an error. sightings:\"forbidden\" means the caller lacks insight.evt.get. Next: cloudsec_entity_activity for a cross-product preview or cloudsec_entity_sightings for raw observations.", readOnly: true,
+	register(toolDef{name: "cloudsec_entity_pivot", description: "Default tool for 'what is this identifier?': resolve one identifier (email, hostname, DOMAIN\\user, IP, sensor id, GitHub id or login, cloud instance id, ...) to User/Host entity cards across EDR, Email Security and Cloud Security in one call. Returns candidates (the raw resolve results: detected type, evidence, ambiguity, possible matches), cards (fetched only for unambiguous authoritative or corroborated matches, at most 10) and the other top-level resolve fields such as index_ready, sources and sightings. possible and ambiguous candidates are unconfirmed: never pick one or pivot on it automatically; ask the user or gather more evidence. If a card carries redirect_to, the id was merged (for example an old Host eh_ id that now points at a User eu_ id) and the card is the surviving entity's. card_errors/truncated:true means some cards were not fetched; use cloudsec_entity_get on those ids. Observed pivots (needs insight.evt.get): pass observation_selectors to find the Hosts a vendor device or a foreign-vendor hostname may be; the response then carries observed_matches and observations, and fetched cards may carry also_seen_as and cloud_sign_ins. " + entityObservationNote + " Pivot never reads the cards of observed candidates: use cloudsec_entity_get on a candidate's entity id. A resolve input explicitly typed hostname that the inventory does not know also triggers a foreign_hostname lookup; untyped words never do. " + entityChromeNote + " Next: cloudsec_entity_activity or cloudsec_entity_sightings with a card's entity id.", readOnly: true,
+		params: []mcp.ToolOption{mcp.WithString("identifier", mcp.Required(), mcp.Description("One identifier, at most 1024 bytes")), mcp.WithString("type", mcp.Description("Optional identifier type, at most 64 bytes (for example email, hostname, ip, sensor_id, github_login, github_user_id, windows_sid, aws_arn); omit for shape detection. The backend validates the value and may support more types than listed")), mcp.WithNumber("at", mcp.Description(entityAtDescription)), entitySelectorsOption()}, handler: pivotEntity})
+	register(toolDef{name: "cloudsec_entity_resolve", description: "Batch-resolve 1 to 100 identifiers to entity candidates without fetching cards. Use it instead of cloudsec_entity_pivot when you have many identifiers or only need the entity ids; follow up with cloudsec_entity_get per id. Returns the backend response unchanged: results[] (one per input, in order, each with matches, possible, ambiguous), index_ready, sources and sightings. Matches with confidence authoritative or corroborated are confirmed; possible matches and any ambiguous result are unconfirmed and must not be auto-selected. sightings:\"forbidden\" means the caller lacks insight.evt.get, so sighting-derived matches are omitted. Observed pivots: observation_selectors (up to 4) ask which existing Hosts a vendor device (vendor_device_id) or a foreign-vendor hostname (foreign_hostname) may be; the answer is observed_matches[] (each with the selector, devices[] and candidates[].entity Host ids, plus truncated) and observations. Observed candidates are evidence only: never merge them into an identity or treat them as confirmed matches, and use cloudsec_entity_get to read a candidate. " + entityObservationNote + " A resolve input explicitly typed hostname that the inventory does not know also triggers a foreign_hostname lookup (it counts toward the 4-selector bound); untyped words never do. " + entityChromeNote + "", readOnly: true,
+		params: []mcp.ToolOption{mcp.WithArray("identifiers", mcp.Required(), mcp.Items(map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string", "description": "Identifier, at most 1024 bytes"}, "type": map[string]any{"type": "string", "description": "Optional identifier type, at most 64 bytes; omit for shape detection"}}, "required": []string{"value"}}), mcp.Description("1 to 100 objects of the form {value, type?}")), mcp.WithNumber("at", mcp.Description(entityAtDescription)), entitySelectorsOption()}, handler: resolveEntities})
+	register(toolDef{name: "cloudsec_entity_get", description: "Fetch the full card for one entity id (from resolve, pivot or search): attributes, identifiers, telemetry sources, owned hosts or users and pivot hints, plus index_ready and optionally recent sightings (sightings_days). If redirect_to is present the id was merged: the returned card is the surviving entity's, so use that id from now on. card:null with index_ready:true means the id is unknown (or its surviving entity was retired, in which case redirect_to is still set), not an error. sightings:\"forbidden\" means the caller lacks insight.evt.get. With insight.evt.get the card may also carry also_seen_as[] (vendor devices that may be this Host) and cloud_sign_ins[] (sampled cloud sign-ins that may involve this entity) and observations. " + entityObservationNote + " " + entityChromeNote + " Next: cloudsec_entity_activity for a cross-product preview or cloudsec_entity_sightings for raw observations.", readOnly: true,
 		params: []mcp.ToolOption{mcp.WithString("entity_id", mcp.Required(), mcp.Description("Entity id such as eu_... or eh_..., from resolve, pivot or search")), mcp.WithNumber("sightings_days", mcp.Description("Optional recent-sightings window in days, 1 to 365"))}, handler: getEntity})
 	register(toolDef{name: "cloudsec_entity_sightings", description: "Page through the raw sightings (observed users, logons, internal/external IPs, hostnames) behind an entity, optionally filtered by kind and a since (inclusive) / until (exclusive) Unix-second window. Use it when the card's summary is not enough, for example to see which IPs or logons an entity used. Requires insight.evt.get; without it the call fails with a permission error. Continue calling with the returned next_cursor (same filters) for as long as next_cursor is present; a page without it is the last one.", readOnly: true,
 		params: []mcp.ToolOption{mcp.WithString("entity_id", mcp.Required(), mcp.Description("Entity id such as eu_... or eh_...")), mcp.WithString("kind", mcp.Description("Optional filter: user, logon, int_ip, ext_ip or hostname")), mcp.WithNumber("since", mcp.Description("Inclusive Unix seconds")), mcp.WithNumber("until", mcp.Description("Exclusive Unix seconds; must not be before since")), mcp.WithNumber("limit", mcp.Description("Page size from 1 to 500")), mcp.WithString("cursor", mcp.Description("Opaque next_cursor from the previous page, at most 8192 bytes"))}, handler: listEntitySightings})
@@ -111,6 +212,11 @@ func pivotEntity(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 		return tools.ErrorResult(err.Error()), nil
 	} else if present {
 		body["at"] = at
+	}
+	if selectors, ok, err := entitySelectors(args); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	} else if ok {
+		body["observation_selectors"] = selectors
 	}
 	org, err := tools.GetOrganization(ctx)
 	if err != nil {
@@ -315,6 +421,11 @@ func resolveEntities(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 		return tools.ErrorResult(err.Error()), nil
 	} else if present {
 		body["at"] = at
+	}
+	if selectors, ok, err := entitySelectors(args); err != nil {
+		return tools.ErrorResult(err.Error()), nil
+	} else if ok {
+		body["observation_selectors"] = selectors
 	}
 	org, err := tools.GetOrganization(ctx)
 	if err != nil {

@@ -201,15 +201,20 @@ can pivot to the User or Host behind them:
   card responses, preserving `redirect_to` and `index_ready`. `candidates` retains
   detected types, evidence, ambiguity and possible matches. Every other top-level
   field of the resolve response (`index_ready`, `sources`, `sightings`, and any
-  field the backend adds later) is passed through. Possible matches are
-  unconfirmed and are never followed automatically.
+  field the backend adds later, including `observed_matches` and `observations`)
+  is passed through. Possible matches are unconfirmed and are never followed
+  automatically, and neither are the Hosts of observed candidates: pivot does not
+  read their cards, use `cloudsec_entity_get` on a candidate's entity ID. It also
+  accepts `observation_selectors` (below).
 - `cloudsec_entity_resolve`: pass `identifiers`, an array of 1 to 100
-  `{"value": ..., "type": ...}` objects (`type` optional), and optionally `at`.
+  `{"value": ..., "type": ...}` objects (`type` optional), and optionally `at` and
+  `observation_selectors` (below).
   Resolves in batch and returns the backend response unchanged, without fetching
   cards. Use it for many identifiers or when only entity IDs are needed.
 - `cloudsec_entity_get`: pass `entity_id` (`eu_...` or `eh_...`) and optionally
   `sightings_days` (1–365). Returns the full card, `index_ready`, `redirect_to`
-  and recent sightings unchanged.
+  and recent sightings unchanged. With `insight.evt.get` the card may also carry
+  `also_seen_as[]`, `cloud_sign_ins[]` and `observations` (below).
 - `cloudsec_entity_sightings`: pass `entity_id`, optionally `kind`
   (`user|logon|int_ip|ext_ip|hostname`), `since` (inclusive), `until` (exclusive,
   not before `since`), `limit` (1–500) and `cursor`. Pages through the raw
@@ -234,6 +239,40 @@ to resolve a hostname with `{"identifier":"host.example","type":"hostname"}`, th
 inspect activity with
 `{"entity_id":"eh_aaaaaaaaaaaaaaaaaaaaaaaaaa","sources":["sensor","cloud"]}`.
 Entity IDs come from resolution or search; treat them as opaque.
+
+Observed pivots: `cloudsec_entity_resolve` and `cloudsec_entity_pivot` accept up
+to 4 `observation_selectors`, each `{type, value, platform?, origin_sid?}`, that ask
+which existing Hosts a vendor device may be. They need `insight.evt.get`.
+
+- `vendor_device_id`: `value` is the vendor's device ID (at most 128 bytes),
+  `platform` is required and one of `sophos`, `crowdstrike`, `office365`,
+  `entraid`, `okta`, `duo`, and `origin_sid` is an optional lowercase UUID naming
+  one collector.
+- `foreign_hostname`: `value` is the hostname as the vendor spelled it (at most
+  512 bytes), with no `platform` or `origin_sid`.
+- Values must be non-blank UTF-8. The tools refuse an invalid selector before
+  sending anything.
+- `at` pins the UTC day the selectors are answered for; without it the most recent
+  days are returned, newest first.
+- A resolve input explicitly typed `hostname` that the inventory does not know also
+  triggers a `foreign_hostname` lookup (it counts toward the 4 selectors). Untyped
+  words never do.
+
+The answer is `observed_matches[]` (the selector, its `devices[]` with
+`candidates[].entity` Host IDs, and `truncated`) plus `observations`.
+Candidates are evidence only: never merge them or treat them as confirmed matches.
+
+`observations` is `{status, reason?, queries, rows, truncated?}`. `status` is `ok`,
+`incomplete`, `unavailable` or `forbidden` (no `insight.evt.get`; no observation
+query ran). `reason` is one of `schema_missing`, `deadline`, `query_budget`, `error`
+or `bounds`. Anything other than `ok` means the answer is unknown, never none: an
+empty `observed_matches`, `also_seen_as` or `cloud_sign_ins` only means nothing was
+found when `status` is `ok`.
+
+Chrome profile identity: a signed-in Chrome sensor is a User (`eu_`) entity. An old
+Host `eh_` ID for it may carry `redirect_to` pointing at an `eu_` ID, and
+`telemetry_sources[].identity_source` (`parser` or `mapping`, with platform
+`chrome`) says where the identity came from.
 
 Reading results:
 
