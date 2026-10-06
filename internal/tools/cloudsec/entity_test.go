@@ -386,6 +386,149 @@ func TestEntityPivotForwardsUnknownTypeAndPassesThroughTopLevelKeys(t *testing.T
 	}
 }
 
+func entitySelectorFixtures() []interface{} {
+	return []interface{}{
+		map[string]interface{}{"type": "vendor_device_id", "platform": "sophos", "value": "dev-1", "origin_sid": "11111111-2222-4333-8444-555555555555"},
+		map[string]interface{}{"type": "foreign_hostname", "value": "laptop-7"},
+		map[string]interface{}{"type": "a_selector_type_added_by_the_backend_later", "platform": "a_platform_added_later", "value": "x"},
+	}
+}
+
+func TestEntityResolveAndPivotForwardObservationSelectorsAndPassObservedMatches(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	const payload = `{"index_ready":true,"observations":{"status":"incomplete","reason":"bounded","queries":3,"rows":20,"truncated":true},"observed_matches":[{"selector":{"type":"foreign_hostname","value":"laptop-7"},"devices":[{"hostname":"laptop-7"}],"truncated":true}],"results":[{"input":{"value":"x"},"matches":[]}]}`
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !reflect.DeepEqual(body["observation_selectors"], entitySelectorFixtures()) {
+			t.Fatalf("selectors not forwarded unchanged (unknown type and platform must pass): %+v", body)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload)), Header: http.Header{}}, nil
+	})}
+	var want map[string]interface{}
+	_ = json.Unmarshal([]byte(payload), &want)
+
+	result, err := resolveEntities(ctx, map[string]interface{}{"identifiers": []interface{}{map[string]interface{}{"value": "x"}}, "observation_selectors": entitySelectorFixtures()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := entityResult(t, result); !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolve response not returned unchanged: %+v", got)
+	}
+
+	result, err = pivotEntity(ctx, map[string]interface{}{"identifier": "x", "observation_selectors": entitySelectorFixtures()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := entityResult(t, result)
+	if !reflect.DeepEqual(out["observed_matches"], want["observed_matches"]) || !reflect.DeepEqual(out["observations"], want["observations"]) || len(out["candidates"].([]interface{})) != 1 {
+		t.Fatalf("pivot dropped observed_matches or observations: %+v", out)
+	}
+}
+
+func TestEntityObservationSelectorsAbsentOrEmptyAreNotForwarded(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if _, present := body["observation_selectors"]; present {
+			t.Fatalf("empty selectors forwarded: %+v", body)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":false,"results":[]}`)), Header: http.Header{}}, nil
+	})}
+	for _, extra := range []map[string]interface{}{{}, {"observation_selectors": []interface{}{}}} {
+		args := map[string]interface{}{"identifier": "x"}
+		for k, v := range extra {
+			args[k] = v
+		}
+		if result, err := pivotEntity(ctx, args); err != nil || result.IsError {
+			t.Fatalf("pivot failed %+v", args)
+		}
+	}
+}
+
+func TestEntityObservationSelectorsRejectBadShapeBeforeHTTP(t *testing.T) {
+	ctx := entityContext(t)
+	old := httpClient
+	t.Cleanup(func() { httpClient = old })
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("invalid selectors made HTTP request")
+		return nil, nil
+	})}
+	sel := func(kv ...interface{}) map[string]interface{} {
+		m := map[string]interface{}{"type": "foreign_hostname", "value": "h"}
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i].(string)] = kv[i+1]
+		}
+		return m
+	}
+	five := []interface{}{sel(), sel(), sel(), sel(), sel()}
+	for name, bad := range map[string]interface{}{
+		"more than four":      five,
+		"not an array":        "foreign_hostname",
+		"item not an object":  []interface{}{"h"},
+		"missing type":        []interface{}{map[string]interface{}{"value": "h"}},
+		"missing value":       []interface{}{map[string]interface{}{"type": "foreign_hostname"}},
+		"empty value":         []interface{}{sel("value", " ")},
+		"non-string value":    []interface{}{sel("value", 5)},
+		"value over 512":      []interface{}{sel("value", strings.Repeat("v", 513))},
+		"non-string type":     []interface{}{sel("type", true)},
+		"empty type":          []interface{}{sel("type", "")},
+		"non-string platform": []interface{}{sel("platform", 1)},
+		"platform too long":   []interface{}{sel("platform", strings.Repeat("p", 65))},
+		"non-string origin":   []interface{}{sel("origin_sid", []interface{}{})},
+		"origin too long":     []interface{}{sel("origin_sid", strings.Repeat("o", 65))},
+		"extra key":           []interface{}{sel("extra", "x")},
+	} {
+		if result, err := resolveEntities(ctx, map[string]interface{}{"identifiers": []interface{}{map[string]interface{}{"value": "x"}}, "observation_selectors": bad}); err != nil || result == nil || !result.IsError {
+			t.Fatalf("resolve accepted %s", name)
+		}
+		if result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "x", "observation_selectors": bad}); err != nil || result == nil || !result.IsError {
+			t.Fatalf("pivot accepted %s", name)
+		}
+	}
+	// Exactly four, and a value of exactly 512 bytes, are accepted shapes.
+	httpClient = &http.Client{Transport: provenanceTransport(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"index_ready":false,"results":[]}`)), Header: http.Header{}}, nil
+	})}
+	four := []interface{}{sel("value", strings.Repeat("v", 512)), sel(), sel(), sel()}
+	if result, err := pivotEntity(ctx, map[string]interface{}{"identifier": "x", "observation_selectors": four}); err != nil || result.IsError {
+		t.Fatalf("four selectors with a 512-byte value rejected: %+v", result)
+	}
+}
+
+func TestEntityObservationSelectorsSchemaDescribesItems(t *testing.T) {
+	for _, name := range []string{"cloudsec_entity_pivot", "cloudsec_entity_resolve"} {
+		registration, ok := tools.GetTool(name)
+		if !ok {
+			t.Fatalf("missing %s", name)
+		}
+		raw, _ := json.Marshal(registration.Schema.InputSchema.Properties["observation_selectors"])
+		var prop struct {
+			Type  string                 `json:"type"`
+			Items map[string]interface{} `json:"items"`
+		}
+		if json.Unmarshal(raw, &prop) != nil || prop.Type != "array" || prop.Items["type"] != "object" || prop.Items["additionalProperties"] != false {
+			t.Fatalf("%s observation_selectors schema incomplete: %s", name, raw)
+		}
+		props, _ := prop.Items["properties"].(map[string]interface{})
+		for _, key := range []string{"type", "value", "platform", "origin_sid"} {
+			if _, ok := props[key]; !ok {
+				t.Fatalf("%s selector schema lacks %s", name, key)
+			}
+		}
+		for _, required := range registration.Schema.InputSchema.Required {
+			if required == "observation_selectors" {
+				t.Fatalf("%s must keep observation_selectors optional", name)
+			}
+		}
+	}
+}
+
 func TestEntityGetHTTPContract(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
