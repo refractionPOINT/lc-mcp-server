@@ -185,11 +185,6 @@ func invoke(ctx context.Context, d definition, args map[string]interface{}) (*mc
 			query.Set(p.name, fmt.Sprint(v))
 		}
 	}
-	if d.name == "mailsec_revise_verdict" {
-		if _, ok := body["mode"]; !ok {
-			body["mode"] = "ai"
-		}
-	}
 	response, err := request(ctx, d.method, path, query, body)
 	if err != nil {
 		return tools.ErrorResultf("mailsec request failed: %v", err), nil
@@ -282,9 +277,6 @@ func validate(d definition, v, original map[string]interface{}) error {
 				return fmt.Errorf("rationale lines must be nonempty and at most 280 characters")
 			}
 		}
-	}
-	if mode, ok := v["mode"].(string); ok && mode != "ai" && mode != "analyst" {
-		return fmt.Errorf("mode must be ai or analyst")
 	}
 	if reason, ok := v["reason"].(string); ok && d.name == "mailsec_purge_tenant" && utf8.RuneCountInString(reason) > 1024 {
 		return fmt.Errorf("purge reason must be at most 1024 characters")

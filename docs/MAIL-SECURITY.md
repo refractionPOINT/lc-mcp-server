@@ -119,8 +119,9 @@ analyst-labelled matches, not perfect precision. Save validated rules explicitly
 through the `dr-mail` Hive.
 
 A verdict revision changes the classification and history, not mailbox placement.
-Revisions from the MCP agent default to `mode: "ai"`; identity is authenticated,
-not supplied by the assistant. Resolving a report also does not remediate mail.
+Who decided is recorded by the server from the credential used (`analyst` for a
+user login, `api` for an API key; older revisions may read `ai`), never supplied
+by the assistant. Resolving a report also does not remediate mail.
 
 Single-message actions use typed names such as `quarantine_message` or
 `restore_message`; outbound mail is observation-only. For campaign actions,

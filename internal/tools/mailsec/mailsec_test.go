@@ -133,13 +133,10 @@ func TestRegisteredRouteContracts(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 						t.Fatal(err)
 					}
-					for _, key := range []string{"oid", "actor", "by", "source", "url", "msg_uuid", "campaign_id", "report_id", "record"} {
+					for _, key := range []string{"oid", "actor", "by", "source", "mode", "principal", "url", "msg_uuid", "campaign_id", "report_id", "record"} {
 						if _, exists := body[key]; exists {
 							t.Fatalf("identity/path field leaked into body: %s", key)
 						}
-					}
-					if tc.name == "mailsec_revise_verdict" && body["mode"] != "ai" {
-						t.Fatal("agent revision should default to ai mode")
 					}
 				}
 				switch tc.name {
@@ -156,7 +153,7 @@ func TestRegisteredRouteContracts(t *testing.T) {
 					return response(200, `{"ok":true}`), nil
 				}
 			})
-			args := map[string]interface{}{"oid": "foreign", "actor": "forged", "by": "forged", "source": "forged", "url": "https://untrusted.invalid"}
+			args := map[string]interface{}{"oid": "foreign", "actor": "forged", "by": "forged", "source": "forged", "mode": "ai", "principal": "user", "url": "https://untrusted.invalid"}
 			for k, v := range tc.args {
 				args[k] = v
 			}
@@ -263,7 +260,6 @@ func TestInvalidConstraintsRefusedBeforeAnyRequest(t *testing.T) {
 		{"mailsec_list_similar_messages", map[string]interface{}{"msg_uuid": "message", "limit": 2}},
 		{"mailsec_revise_verdict", map[string]interface{}{"msg_uuid": "message", "verdict": "malicious", "rationale": []string{" "}}},
 		{"mailsec_revise_verdict", map[string]interface{}{"msg_uuid": "message", "verdict": "malicious", "rationale": []string{strings.Repeat("é", 281)}}},
-		{"mailsec_revise_verdict", map[string]interface{}{"msg_uuid": "message", "verdict": "malicious", "rationale": []string{"evidence"}, "mode": "impersonate"}},
 		{"mailsec_preview_campaign_action", map[string]interface{}{"campaign_id": "campaign", "action": "trash_message", "confirm": "would execute"}},
 		{"mailsec_preview_campaign_action", map[string]interface{}{"campaign_id": "campaign", "action": "trash_message", "force": false}},
 		{"mailsec_act_on_campaign", map[string]interface{}{"campaign_id": "campaign", "action": "trash_message"}},
@@ -424,5 +420,16 @@ func TestPrivilegedEMLResponseHasRoomBeyondOrdinaryJSONCap(t *testing.T) {
 	call(t, ctx, "mailsec_get_message_eml", map[string]interface{}{"msg_uuid": "message", "justification": "Incident investigation"}, false)
 	if maxEMLResponseBytes < (100<<20)*4/3 {
 		t.Fatal("EML cap cannot represent the parser's raw-byte ceiling")
+	}
+}
+
+// Who decided is recorded by the server from the credential, so no tool offers a decision mode.
+func TestNoMailsecToolDeclaresADecisionMode(t *testing.T) {
+	for _, d := range definitions() {
+		for _, p := range d.params {
+			if p.name == "mode" {
+				t.Errorf("%s declares a mode parameter", d.name)
+			}
+		}
 	}
 }
