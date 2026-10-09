@@ -166,16 +166,32 @@ func TestRegisteredRouteContracts(t *testing.T) {
 }
 
 func TestSelectorsAndOpaqueCursorPreserved(t *testing.T) {
-	want := url.Values{"verdict": {"malicious", "suspicious"}, "state": {"quarantined", "delivered"}, "direction": {"inbound", "internal"}, "user_reported": {"false"}, "since": {"2026-09-01T00:00:00Z"}, "until": {"1790726400"}, "cursor": {"opaque +/= token"}, "q": {"invoice"}, "limit": {"17"}, "lane": {"backfill"}, "min_score": {"0"}}
+	want := url.Values{"verdict": {"malicious", "suspicious"}, "state": {"quarantined", "delivered"}, "exclude_state": {"spam", "trashed"}, "direction": {"inbound", "internal"}, "user_reported": {"false"}, "since": {"2026-09-01T00:00:00Z"}, "until": {"1790726400"}, "cursor": {"opaque +/= token"}, "q": {"invoice"}, "limit": {"17"}, "lane": {"backfill"}, "min_score": {"0"}}
 	ctx := fixtureContext(t, func(r *http.Request) (*http.Response, error) {
 		if !reflect.DeepEqual(r.URL.Query(), want) {
 			t.Fatalf("filters changed: got %v want %v", r.URL.Query(), want)
 		}
 		return response(200, `{"messages":[],"next_cursor":"next +/= token"}`), nil
 	})
-	result := call(t, ctx, "mailsec_list_messages", map[string]interface{}{"verdict": []interface{}{"malicious", "suspicious"}, "state": []string{"quarantined", "delivered"}, "direction": []string{"inbound", "internal"}, "user_reported": false, "since": "2026-09-01T00:00:00Z", "until": "1790726400", "cursor": "opaque +/= token", "q": "invoice", "limit": float64(17), "lane": "backfill", "min_score": 0}, false)
+	result := call(t, ctx, "mailsec_list_messages", map[string]interface{}{"verdict": []interface{}{"malicious", "suspicious"}, "state": []string{"quarantined", "delivered"}, "exclude_state": []interface{}{"spam", "trashed"}, "direction": []string{"inbound", "internal"}, "user_reported": false, "since": "2026-09-01T00:00:00Z", "until": "1790726400", "cursor": "opaque +/= token", "q": "invoice", "limit": float64(17), "lane": "backfill", "min_score": 0}, false)
 	if !strings.Contains(resultText(t, result), "next +/= token") {
 		t.Fatal("response cursor changed")
+	}
+}
+
+func TestExcludeStateOnlySentWhenSet(t *testing.T) {
+	var got url.Values
+	ctx := fixtureContext(t, func(r *http.Request) (*http.Response, error) {
+		got = r.URL.Query()
+		return response(200, `{"messages":[]}`), nil
+	})
+	call(t, ctx, "mailsec_list_messages", map[string]interface{}{"verdict": []string{"malicious"}}, false)
+	if _, present := got["exclude_state"]; present {
+		t.Fatalf("exclude_state sent when absent: %v", got)
+	}
+	call(t, ctx, "mailsec_list_messages", map[string]interface{}{"exclude_state": []string{"spam"}}, false)
+	if !reflect.DeepEqual(got["exclude_state"], []string{"spam"}) {
+		t.Fatalf("exclude_state not forwarded: %v", got)
 	}
 }
 
@@ -241,6 +257,8 @@ func TestInvalidConstraintsRefusedBeforeAnyRequest(t *testing.T) {
 		{"mailsec_list_messages", map[string]interface{}{"user_reported": "false"}},
 		{"mailsec_list_messages", map[string]interface{}{"verdict": []interface{}{"malicious", 3}}},
 		{"mailsec_list_messages", map[string]interface{}{"state": []string{}}},
+		{"mailsec_list_messages", map[string]interface{}{"exclude_state": []string{}}},
+		{"mailsec_list_messages", map[string]interface{}{"exclude_state": "spam"}},
 		{"mailsec_list_messages", map[string]interface{}{"limit": 0}},
 		{"mailsec_list_messages", map[string]interface{}{"limit": 1001}},
 		{"mailsec_list_messages", map[string]interface{}{"limit": 1.5}},
