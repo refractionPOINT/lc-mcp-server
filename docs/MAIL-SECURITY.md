@@ -75,6 +75,12 @@ Follow `next_cursor` with unchanged filters; a short page does not end paginatio
 Repeatable filters OR within a key and AND across keys. Omitting `user_reported`
 means either reported or unreported, whereas `false` selects unreported mail.
 
+`state` keeps only messages in the listed placement states; `exclude_state` hides
+messages in the listed states (`delivered`, `quarantined`, `trashed`, `restored`,
+`bannered`, `spam`), for example `{"exclude_state": ["spam"]}` to hide mail the
+provider already filed as spam. Both can be given: the include list applies first,
+then the exclusion. The same value in both is refused by the API.
+
 Free-text `q` needs a bounded read: `since`, an exact mailbox/sender/campaign/IOC
 pivot, or one verdict. The `lane` filter accepts `live` or `backfill` and cannot
 combine with `mailbox`, `sender_email` or `campaign_id`. The indexed queue spans

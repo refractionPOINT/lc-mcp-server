@@ -41,6 +41,7 @@ func definitions() []definition {
 			params: append(append([]parameter{
 				field("verdict", "strings", "malicious, suspicious, graymail, benign or unknown; repeatable."),
 				field("state", "strings", "Message placement/lifecycle states; repeatable."),
+				field("exclude_state", "strings", "Hide messages whose placement state is in this list; repeatable. Values: delivered, quarantined, trashed, restored, bannered, spam. Applied after state: a message is returned only if its state is not excluded, so it composes with state. The same value in both state and exclude_state is refused by the API. Omit to hide nothing."),
 				field("direction", "strings", "inbound, outbound or internal; repeatable. Outbound is observation only."),
 				field("mailbox", "string", "Exact protected mailbox address."), field("sender_email", "string", "Exact sender address."),
 				field("sender_root_domain", "string", "Sender registrable root domain."), field("campaign_id", "string", "Exact campaign ID."),
