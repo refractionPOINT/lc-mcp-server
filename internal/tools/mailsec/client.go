@@ -37,7 +37,7 @@ func request(ctx context.Context, method, suffix string, query url.Values, body 
 			return nil, fmt.Errorf("cannot encode JSON: %w", err)
 		}
 		if len(encoded) > maxRequestBytes {
-			return nil, fmt.Errorf("JSON body exceeds the API's 1 MiB limit")
+			return nil, fmt.Errorf("JSON body exceeds this tool's 1 MiB request limit")
 		}
 	}
 	org, err := tools.GetOrganization(ctx)
