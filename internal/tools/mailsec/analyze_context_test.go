@@ -71,3 +71,43 @@ func TestAnalyzeOrganizationContextSelectionAndPreviewResponse(t *testing.T) {
 		t.Fatal("wrong type silently dropped", resultText(t, bad))
 	}
 }
+
+// Literal sizes independently protect the public route-specific contract.
+func TestAnalyzeLargeEMLRequestLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		base64Bytes int
+		wantError   bool
+	}{
+		{"above ordinary limit is sent", 2 << 20, false},
+		{"above analyze limit is refused", 17 << 20, true},
+		{"JSON envelope counts toward limit", 16 << 20, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eml := strings.Repeat("A", tc.base64Bytes)
+			requests := 0
+			ctx := fixtureContext(t, func(r *http.Request) (*http.Response, error) {
+				requests++
+				if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/analyze") {
+					t.Fatal("wrong large EML route", r.Method, r.URL)
+				}
+				var body map[string]interface{}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["eml_b64"] != eml {
+					t.Fatal("large EML was truncated or discarded")
+				}
+				return response(200, `{"context":"preview"}`), nil
+			})
+			result := call(t, ctx, "mailsec_analyze", map[string]interface{}{"eml_b64": eml}, tc.wantError)
+			if tc.wantError {
+				if requests != 0 || !strings.Contains(resultText(t, result), "16 MiB (16777216 bytes)") {
+					t.Fatal("oversized analyze must fail locally with the envelope limit", requests, resultText(t, result))
+				}
+			} else if requests != 1 {
+				t.Fatal("large supported analyze was not sent", requests)
+			}
+		})
+	}
+}

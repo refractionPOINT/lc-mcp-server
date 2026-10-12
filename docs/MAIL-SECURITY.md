@@ -129,7 +129,10 @@ Default previews do not read these lookup feeds; lookup-rule testing needs the
 flag. Current state can differ from delivery-time state. Explosion/OCR and
 detonation never run. Omitted direction derives received-mail direction from
 known organization domains; sent mail requires explicit `direction: outbound`.
-This tool has a 1 MiB JSON request limit and returns a clear local error above it.
+This tool accepts up to 16 MiB of JSON, matching the analyze API request limit
+(roughly 12 MiB of raw EML when base64 encoded). The complete JSON envelope
+counts toward the limit; larger requests return a clear local error. Other
+mailsec tools retain their 1 MiB JSON request limit.
 
 It does not test an unsaved candidate. Use `mailsec_validate_rule` with a single `rule` body, then
 `mailsec_backtest_rule` for a `pre_verdict` candidate. Inspect `valid`,
