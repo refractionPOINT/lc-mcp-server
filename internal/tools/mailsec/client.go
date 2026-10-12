@@ -19,6 +19,7 @@ var httpClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request
 
 const maxResponseBytes = 32 << 20
 const maxRequestBytes = 1 << 20
+const maxAnalyzeRequestBytes = 16 << 20
 
 // The parser accepts up to 100 MiB raw MIME. Base64 adds a third, so a
 // privileged original-byte download needs more room than ordinary JSON reads.
@@ -36,8 +37,12 @@ func request(ctx context.Context, method, suffix string, query url.Values, body 
 		if err != nil {
 			return nil, fmt.Errorf("cannot encode JSON: %w", err)
 		}
-		if len(encoded) > maxRequestBytes {
-			return nil, fmt.Errorf("JSON body exceeds the API's 1 MiB limit")
+		requestLimit := maxRequestBytes
+		if suffix == "analyze" {
+			requestLimit = maxAnalyzeRequestBytes
+		}
+		if len(encoded) > requestLimit {
+			return nil, fmt.Errorf("JSON body exceeds this tool's %d MiB (%d bytes) request limit", requestLimit>>20, requestLimit)
 		}
 	}
 	org, err := tools.GetOrganization(ctx)

@@ -117,8 +117,24 @@ changes in separately named, untagged records and disable vendor originals.
 ## Test rules and request responses deliberately
 
 `mailsec_analyze` judges the submitted `eml_b64` or `eml` against the organization's
-current enabled rules, persists nothing and touches no mailbox. It does not test
-an unsaved candidate. Use `mailsec_validate_rule` with a single `rule` body, then
+current enabled rules, persists nothing and touches no mailbox. Its response is
+`context: preview`: inspect `unavailable_evidence`, `unevaluated_rules` and each
+top signal's `depends_on_missing_context`. Missing inputs can affect detections
+and exemptions, so a preview is not a delivery-equivalent re-score.
+
+Set optional boolean `with_org_context: true` to read bounded, audited CURRENT
+sender/domain history, organization domains, popularity, cached RDAP, VIP lists,
+thread history and scoring lookup feeds without ingestion or history updates.
+Default previews do not read these lookup feeds; lookup-rule testing needs the
+flag. Current state can differ from delivery-time state. Explosion/OCR and
+detonation never run. Omitted direction derives received-mail direction from
+known organization domains; sent mail requires explicit `direction: outbound`.
+This tool accepts up to 16 MiB of JSON, matching the analyze API request limit
+(roughly 12 MiB of raw EML when base64 encoded). The complete JSON envelope
+counts toward the limit; larger requests return a clear local error. Other
+mailsec tools retain their 1 MiB JSON request limit.
+
+It does not test an unsaved candidate. Use `mailsec_validate_rule` with a single `rule` body, then
 `mailsec_backtest_rule` for a `pre_verdict` candidate. Inspect `valid`,
 `coverage_note`, skipped rows and truncation; `precision: null` means no
 analyst-labelled matches, not perfect precision. Save validated rules explicitly

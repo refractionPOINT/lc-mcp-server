@@ -418,7 +418,7 @@ func TestReadOnlyRuleAndReportBodiesArePreserved(t *testing.T) {
 }
 
 func TestOversizedJSONRefusedBeforeAuthentication(t *testing.T) {
-	result := call(t, context.Background(), "mailsec_analyze", map[string]interface{}{"eml": strings.Repeat("x", maxRequestBytes)}, true)
+	result := call(t, context.Background(), "mailsec_validate_rule", map[string]interface{}{"rule": map[string]interface{}{"name": strings.Repeat("x", 1<<20)}}, true)
 	if !strings.Contains(resultText(t, result), "1 MiB") {
 		t.Fatal("oversized payload did not fail before authentication")
 	}
