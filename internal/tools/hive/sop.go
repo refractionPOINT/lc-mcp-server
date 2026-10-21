@@ -25,11 +25,18 @@ func RegisterListSops() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_sops",
-			mcp.WithDescription("List all Standard Operating Procedures in the organization. The full listing carries every procedure body; use brief to get just the index."),
+			mcp.WithDescription("List all Standard Operating Procedures in the organization. The full listing carries every procedure body; use brief to get just the index. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withBriefParam("the 'description' field"),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			brief := briefArg(args)
 
 			org, err := getOrganization(ctx)
@@ -37,38 +44,18 @@ func RegisterListSops() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for SOPs
-			hive := lc.NewHiveClient(org)
-
-			// List all SOPs from the sop hive
-			sops, err := hive.List(lc.HiveArgs{
-				HiveName:     "sop",
-				PartitionKey: org.GetOID(),
-			})
+			briefFn := func(d map[string]interface{}) map[string]interface{} { return d }
+			if brief {
+				briefFn = func(d map[string]interface{}) map[string]interface{} {
+					return BriefData(d, "description")
+				}
+			}
+			resp, err := ListRecords(lc.NewHiveClient(org), "sop", org.GetOID(), "sops", listReq, briefFn)
 			if err != nil {
 				return tools.ErrorResultf("failed to list SOPs: %v", err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range sops {
-				payload := data.Data
-				if brief {
-					payload = BriefData(payload, "description")
-				}
-				result[name] = map[string]interface{}{
-					"data":     payload,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"sops":  result,
-				"count": len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

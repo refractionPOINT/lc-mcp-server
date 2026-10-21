@@ -32,11 +32,18 @@ func RegisterListAiSkills() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_ai_skills",
-			mcp.WithDescription("List all AI skill definitions (Claude Code skills) in the organization. The full listing carries every SKILL.md body and bundled file; use brief to get just the index."),
+			mcp.WithDescription("List all AI skill definitions (Claude Code skills) in the organization. The full listing carries every SKILL.md body and bundled file; use brief to get just the index. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withBriefParam("the 'name', 'description' and 'when_to_use' fields"),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			brief := briefArg(args)
 
 			org, err := getOrganization(ctx)
@@ -44,34 +51,18 @@ func RegisterListAiSkills() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			hive := lc.NewHiveClient(org)
-			skills, err := hive.List(lc.HiveArgs{
-				HiveName:     aiSkillHive,
-				PartitionKey: org.GetOID(),
-			})
+			briefFn := func(d map[string]interface{}) map[string]interface{} { return d }
+			if brief {
+				briefFn = func(d map[string]interface{}) map[string]interface{} {
+					return BriefData(d, aiSkillIndexFields...)
+				}
+			}
+			resp, err := ListRecords(lc.NewHiveClient(org), aiSkillHive, org.GetOID(), "ai_skills", listReq, briefFn)
 			if err != nil {
 				return tools.ErrorResultf("failed to list AI skills: %v", err), nil
 			}
 
-			result := make(map[string]interface{})
-			for name, data := range skills {
-				payload := data.Data
-				if brief {
-					payload = BriefData(payload, aiSkillIndexFields...)
-				}
-				result[name] = map[string]interface{}{
-					"data":     payload,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"ai_skills": result,
-				"count":     len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

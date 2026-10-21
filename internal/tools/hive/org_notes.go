@@ -25,11 +25,18 @@ func RegisterListOrgNotes() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_org_notes",
-			mcp.WithDescription("List all organization notes. The full listing carries every note body; use brief to get just the index."),
+			mcp.WithDescription("List all organization notes. The full listing carries every note body; use brief to get just the index. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withBriefParam("the 'description' field"),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			brief := briefArg(args)
 
 			org, err := getOrganization(ctx)
@@ -37,38 +44,18 @@ func RegisterListOrgNotes() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for org notes
-			hive := lc.NewHiveClient(org)
-
-			// List all org notes from the org_notes hive
-			orgNotes, err := hive.List(lc.HiveArgs{
-				HiveName:     "org_notes",
-				PartitionKey: org.GetOID(),
-			})
+			briefFn := func(d map[string]interface{}) map[string]interface{} { return d }
+			if brief {
+				briefFn = func(d map[string]interface{}) map[string]interface{} {
+					return BriefData(d, "description")
+				}
+			}
+			resp, err := ListRecords(lc.NewHiveClient(org), "org_notes", org.GetOID(), "org_notes", listReq, briefFn)
 			if err != nil {
 				return tools.ErrorResultf("failed to list org notes: %v", err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range orgNotes {
-				payload := data.Data
-				if brief {
-					payload = BriefData(payload, "description")
-				}
-				result[name] = map[string]interface{}{
-					"data":     payload,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"org_notes": result,
-				"count":     len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

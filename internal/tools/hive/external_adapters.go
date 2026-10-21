@@ -25,43 +25,28 @@ func RegisterListExternalAdapters() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_external_adapters",
-			mcp.WithDescription("List all external adapter configurations"),
+			mcp.WithDescription("List all external adapter configurations. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for external adapters
-			hive := lc.NewHiveClient(org)
-
-			// List all external adapters
-			adapters, err := hive.List(lc.HiveArgs{
-				HiveName:     "external_adapter",
-				PartitionKey: org.GetOID(),
-			})
+			resp, err := ListRecords(lc.NewHiveClient(org), "external_adapter", org.GetOID(), "adapters", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list external adapters: %v", err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range adapters {
-				result[name] = map[string]interface{}{
-					"data":     data.Data,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"adapters": result,
-				"count":    len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }
