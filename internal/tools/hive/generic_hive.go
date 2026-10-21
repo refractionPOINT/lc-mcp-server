@@ -3,6 +3,7 @@ package hive
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -18,6 +19,22 @@ func init() {
 	RegisterDeleteRule()
 }
 
+// secretHiveName is the hive holding secret values.
+const secretHiveName = "secret"
+
+// restrictListing applies the listing rules that depend on the hive: secret
+// values must never be returned in bulk, so that hive is always listed
+// metadata-only whatever the caller asked for.
+func restrictListing(hiveName string, req ListRequest) ListRequest {
+	if strings.EqualFold(strings.TrimSpace(hiveName), secretHiveName) {
+		req.MetadataOnly = true
+		if req.Limit > MaxListLimit {
+			req.Limit = MaxListLimit
+		}
+	}
+	return req
+}
+
 // RegisterListRules registers the list_rules tool
 func RegisterListRules() {
 	tools.RegisterTool(&tools.ToolRegistration{
@@ -26,10 +43,12 @@ func RegisterListRules() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_rules",
-			mcp.WithDescription("List all rules from a specific hive (e.g., 'dr-general', 'dr-managed', 'fp')"),
+			mcp.WithDescription("List the rules of a specific hive (e.g., 'dr-general', 'dr-managed', 'fp'), one page at a time. The 'secret' hive is always listed metadata-only: secret values are never returned in bulk."),
 			mcp.WithString("hive_name",
 				mcp.Required(),
 				mcp.Description("Name of the hive (e.g., 'dr-general', 'dr-managed', 'fp')")),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -38,39 +57,23 @@ func RegisterListRules() {
 				return tools.ErrorResult("hive_name parameter is required"), nil
 			}
 
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+			listReq = restrictListing(hiveName, listReq)
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client
-			hive := lc.NewHiveClient(org)
-
-			// List all rules from the specified hive
-			rules, err := hive.List(lc.HiveArgs{
-				HiveName:     hiveName,
-				PartitionKey: org.GetOID(),
-			})
+			resp, err := ListRecords(lc.NewHiveClient(org), hiveName, org.GetOID(), "rules", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list rules from hive '%s': %v", hiveName, err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range rules {
-				result[name] = map[string]interface{}{
-					"data":     data.Data,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"rules": result,
-				"count": len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

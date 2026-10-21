@@ -28,42 +28,27 @@ func RegisterListSavedQueries() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_saved_queries",
 			mcp.WithDescription("List all saved LCQL queries"),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for saved queries
-			hive := lc.NewHiveClient(org)
-
-			// List all saved queries from the query hive
-			queries, err := hive.List(lc.HiveArgs{
-				HiveName:     "query",
-				PartitionKey: org.GetOID(),
-			})
+			resp, err := ListRecords(lc.NewHiveClient(org), "query", org.GetOID(), "queries", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list saved queries: %v", err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range queries {
-				result[name] = map[string]interface{}{
-					"data":     data.Data,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"queries": result,
-				"count":   len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

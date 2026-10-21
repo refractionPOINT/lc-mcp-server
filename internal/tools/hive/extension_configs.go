@@ -26,42 +26,27 @@ func RegisterListExtensionConfigs() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_extension_configs",
 			mcp.WithDescription("List all extension configurations"),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for extension configs
-			hive := lc.NewHiveClient(org)
-
-			// List all extension configs
-			configs, err := hive.List(lc.HiveArgs{
-				HiveName:     "extension_config",
-				PartitionKey: org.GetOID(),
-			})
+			resp, err := ListRecords(lc.NewHiveClient(org), "extension_config", org.GetOID(), "configs", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list extension configs: %v", err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range configs {
-				result[name] = map[string]interface{}{
-					"data":     data.Data,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"configs": result,
-				"count":   len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

@@ -29,43 +29,30 @@ func RegisterListLookups() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_lookups",
-			mcp.WithDescription("List all lookup tables in the organization"),
+			mcp.WithDescription("List the lookup tables of the organization, one page at a time. Tables can be very large, so by default only their metadata is returned (no table data); use get_lookup to read one table, or include_data to list tables with their data."),
+			mcp.WithBoolean("include_data",
+				mcp.Description("If true, include each table's data in the listing (page size is then smaller and bounded by size). Default false: metadata only.")),
+			hive.WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			includeData, _ := args["include_data"].(bool)
+			listReq, err := hive.ParseListArgs(args, !includeData)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for lookups
-			client := lc.NewHiveClient(org)
-
-			// List all lookups from the lookup hive
-			lookups, err := client.List(lc.HiveArgs{
-				HiveName:     "lookup",
-				PartitionKey: org.GetOID(),
-			})
+			resp, err := hive.ListRecords(lc.NewHiveClient(org), "lookup", org.GetOID(), "lookups", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list lookups: %v", err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range lookups {
-				result[name] = map[string]interface{}{
-					"data":     data.Data,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"lookups": result,
-				"count":   len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

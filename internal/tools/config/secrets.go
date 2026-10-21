@@ -26,37 +26,37 @@ func RegisterListSecrets() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_secrets",
-			mcp.WithDescription("List all secret names (not values) in the organization"),
+			mcp.WithDescription("List secret names (not values) in the organization, one page at a time"),
+			hive.WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := hive.ParseListArgs(args, true)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for secrets
-			client := lc.NewHiveClient(org)
-
-			// List all secrets from the secret hive
-			secrets, err := client.List(lc.HiveArgs{
-				HiveName:     "secret",
-				PartitionKey: org.GetOID(),
-			})
+			// Names only: the records are listed metadata-only, so the backend
+			// never loads the secret values.
+			names, next, err := hive.ListNames(lc.NewHiveClient(org), "secret", org.GetOID(), listReq)
 			if err != nil {
 				return tools.ErrorResultf("failed to list secrets: %v", err), nil
 			}
 
-			// Extract secret names (keys only, not values)
-			secretNames := make([]string, 0, len(secrets))
-			for name := range secrets {
-				secretNames = append(secretNames, name)
+			resp := map[string]interface{}{
+				"secrets":  names,
+				"count":    len(names),
+				"has_more": next != "",
 			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"secrets": secretNames,
-				"count":   len(secretNames),
-			}), nil
+			if next != "" {
+				resp["next_cursor"] = next
+			}
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }

@@ -26,42 +26,27 @@ func RegisterListInvestigations() {
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_investigations",
 			mcp.WithDescription("List all investigations in the organization"),
+			withMetadataOnlyParam(),
+			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+			listReq, err := ParseListArgs(args, false)
+			if err != nil {
+				return tools.ErrorResult(err.Error()), nil
+			}
+
 			org, err := getOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			// Create hive client for investigations
-			hive := lc.NewHiveClient(org)
-
-			// List all investigations from the investigation hive
-			investigations, err := hive.List(lc.HiveArgs{
-				HiveName:     "investigation",
-				PartitionKey: org.GetOID(),
-			})
+			resp, err := ListRecords(lc.NewHiveClient(org), "investigation", org.GetOID(), "investigations", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list investigations: %v", err), nil
 			}
 
-			// Convert to response format
-			result := make(map[string]interface{})
-			for name, data := range investigations {
-				result[name] = map[string]interface{}{
-					"data":     data.Data,
-					"enabled":  data.UsrMtd.Enabled,
-					"tags":     data.UsrMtd.Tags,
-					"comment":  data.UsrMtd.Comment,
-					"metadata": data.SysMtd,
-				}
-			}
-
-			return tools.SuccessResult(map[string]interface{}{
-				"investigations": result,
-				"count":          len(result),
-			}), nil
+			return tools.SuccessResult(resp), nil
 		},
 	})
 }
