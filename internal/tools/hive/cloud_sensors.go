@@ -25,7 +25,7 @@ func RegisterListCloudSensors() {
 		Profile:     "fleet_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_cloud_sensors",
-			mcp.WithDescription("List all cloud sensor configurations"),
+			mcp.WithDescription("List all cloud sensor configurations. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),

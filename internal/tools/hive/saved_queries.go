@@ -27,7 +27,7 @@ func RegisterListSavedQueries() {
 		Profile:     "historical_data",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_saved_queries",
-			mcp.WithDescription("List all saved LCQL queries"),
+			mcp.WithDescription("List all saved LCQL queries. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),

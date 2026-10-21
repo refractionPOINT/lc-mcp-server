@@ -25,7 +25,7 @@ func RegisterListOrgNotes() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_org_notes",
-			mcp.WithDescription("List all organization notes. The full listing carries every note body; use brief to get just the index."),
+			mcp.WithDescription("List all organization notes. The full listing carries every note body; use brief to get just the index. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withBriefParam("the 'description' field"),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),

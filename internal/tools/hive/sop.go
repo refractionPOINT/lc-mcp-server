@@ -25,7 +25,7 @@ func RegisterListSops() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_sops",
-			mcp.WithDescription("List all Standard Operating Procedures in the organization. The full listing carries every procedure body; use brief to get just the index."),
+			mcp.WithDescription("List all Standard Operating Procedures in the organization. The full listing carries every procedure body; use brief to get just the index. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withBriefParam("the 'description' field"),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),

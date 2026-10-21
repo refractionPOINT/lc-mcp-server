@@ -25,7 +25,7 @@ func RegisterListInvestigations() {
 		Profile:     "investigation_management",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_investigations",
-			mcp.WithDescription("List all investigations in the organization"),
+			mcp.WithDescription("List all investigations in the organization. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),

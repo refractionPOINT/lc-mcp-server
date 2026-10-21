@@ -32,7 +32,7 @@ func RegisterListAiSkills() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_ai_skills",
-			mcp.WithDescription("List all AI skill definitions (Claude Code skills) in the organization. The full listing carries every SKILL.md body and bundled file; use brief to get just the index."),
+			mcp.WithDescription("List all AI skill definitions (Claude Code skills) in the organization. The full listing carries every SKILL.md body and bundled file; use brief to get just the index. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withBriefParam("the 'name', 'description' and 'when_to_use' fields"),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),

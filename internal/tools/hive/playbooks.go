@@ -25,7 +25,7 @@ func RegisterListPlaybooks() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_playbooks",
-			mcp.WithDescription("List all playbooks in the organization"),
+			mcp.WithDescription("List all playbooks in the organization. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),

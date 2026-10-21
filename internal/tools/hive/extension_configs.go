@@ -25,7 +25,7 @@ func RegisterListExtensionConfigs() {
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("list_extension_configs",
-			mcp.WithDescription("List all extension configurations"),
+			mcp.WithDescription("List all extension configurations. Returns one page at a time: when has_more is true, pass next_cursor as cursor to get the next page."),
 			withMetadataOnlyParam(),
 			WithListPagingParams(),
 			mcp.WithReadOnlyHintAnnotation(true),
