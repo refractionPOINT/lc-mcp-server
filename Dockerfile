@@ -1,5 +1,5 @@
 # Use the official Go image
-FROM golang:1.27.1
+FROM golang:1.27.3
 
 # Set environment variables
 ENV CGO_ENABLED=0 \
