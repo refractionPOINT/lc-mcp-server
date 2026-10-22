@@ -57,3 +57,16 @@ func buildCommandString(command string, positionalArgs []string, flagParams map[
 
 	return b.String()
 }
+
+// sensorCommandLogAttrs describes a sensor task for the INFO logs without its
+// values: the command name, how many positional arguments it has, and its flag
+// names (sorted). Values are what the caller typed (a search string, a path,
+// a pid) and must not be logged.
+func sensorCommandLogAttrs(command string, positionalArgs []string, flagParams map[string]interface{}) []any {
+	names := make([]string, 0, len(flagParams))
+	for k := range flagParams {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return []any{"command", command, "positional_args", len(positionalArgs), "flags", strings.Join(names, ",")}
+}

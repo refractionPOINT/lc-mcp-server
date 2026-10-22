@@ -396,14 +396,16 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (
 	}, nil
 }
 
-// RevokeToken revokes an access or refresh token
+// RevokeToken revokes an access or refresh token.
+// It never logs any part of the token: a prefix of a bearer token is part of
+// a credential.
 func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint string) error {
 	revoked := false
 
 	// Try to revoke as access token
 	if tokenTypeHint != "refresh_token" {
 		if err := m.stateManager.RevokeAccessToken(ctx, token); err == nil {
-			m.logger.Info("Revoked access token", "token_prefix", token[:min(10, len(token))]+"...")
+			m.logger.Info("Revoked access token")
 			revoked = true
 		}
 	}
@@ -411,13 +413,13 @@ func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint s
 	// Try to revoke as refresh token
 	if tokenTypeHint != "access_token" {
 		if err := m.stateManager.RevokeRefreshToken(ctx, token); err == nil {
-			m.logger.Info("Revoked refresh token", "token_prefix", token[:min(10, len(token))]+"...")
+			m.logger.Info("Revoked refresh token")
 			revoked = true
 		}
 	}
 
 	if !revoked {
-		m.logger.Warn("Token not found for revocation (may already be revoked)", "token_prefix", token[:min(10, len(token))]+"...")
+		m.logger.Warn("Token not found for revocation (may already be revoked)", "token_type_hint", tokenTypeHint)
 	}
 
 	return nil // Always return success per OAuth 2.0 spec
