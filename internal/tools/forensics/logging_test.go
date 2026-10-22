@@ -50,3 +50,22 @@ func TestSensorCommandLogOmitsValues(t *testing.T) {
 	assert.EqualValues(t, 1, entry["positional_args"])
 	assert.Equal(t, "pid,string", entry["flags"])
 }
+
+// Every sensor command line (sending, failed, completed) is built from
+// sensorCommandLogAttrs, so it must carry no value of any kind.
+func TestSensorCommandLogAttrsOmitValues(t *testing.T) {
+	attrs := sensorCommandLogAttrs("dir_list", []string{"secret-path"}, map[string]interface{}{
+		"depth":  7531,
+		"filter": "secret-glob",
+		"names":  []string{"secret-a", "secret-b"},
+	})
+
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("test", attrs...)
+	out := buf.String()
+	assert.NotContains(t, out, "secret-")
+	assert.NotContains(t, out, "7531")
+	assert.Contains(t, out, `"command":"dir_list"`)
+	assert.Contains(t, out, `"positional_args":1`)
+	assert.Contains(t, out, `"flags":"depth,filter,names"`)
+}

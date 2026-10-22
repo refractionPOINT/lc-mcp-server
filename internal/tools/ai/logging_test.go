@@ -138,3 +138,26 @@ func TestMemoryToolCallLogsOmitKeyAndName(t *testing.T) {
 		})
 	}
 }
+
+// start_ai_session logs the call without the definition name the caller chose.
+func TestStartAISessionLogOmitsDefinitionName(t *testing.T) {
+	logs := captureDefaultLog(t)
+	definitionName := "definition-secret-name"
+
+	tool, ok := tools.GetTool("start_ai_session")
+	require.True(t, ok)
+	result, err := tool.Handler(toolCallContext(), map[string]interface{}{
+		"definition_name": definitionName,
+		"prompt":          "prompt-secret-text",
+	})
+	require.NoError(t, err)
+	require.True(t, result.IsError, "handler should fail without an SDK cache")
+
+	out := logs.String()
+	assert.NotContains(t, out, "-secret-", "the definition name and prompt must not be logged")
+
+	entry := findLogLine(t, out, "Tool called: start_ai_session")
+	assert.Equal(t, "test-oid", entry["oid"])
+	assert.Equal(t, "req-123", entry["request_id"])
+	assert.EqualValues(t, len(definitionName), entry["definition_name_len"])
+}
