@@ -194,7 +194,9 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Validate callback
 	queryString, err := h.firebaseClient.ValidateProviderCallback(r.URL.RequestURI())
 	if err != nil {
-		h.logger.Error("Failed to validate provider callback", "error", err, "uri", r.URL.RequestURI())
+		// Never log the query: it carries the provider's authorization code.
+		h.logger.Error("Failed to validate provider callback", "error", err, "path", r.URL.Path,
+			"has_code", r.URL.Query().Has("code"), "has_state", r.URL.Query().Has("state"))
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>Invalid callback</p>")
 		return
 	}

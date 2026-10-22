@@ -136,12 +136,12 @@ func RegisterStartAISession() {
 				return tools.ErrorResult("definition_name parameter is required"), nil
 			}
 
+			slog.Info("Tool called: start_ai_session", toolCallAttrs(ctx, "definition_name_len", len(definitionName))...)
+
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
-
-			slog.Info("Tool called: start_ai_session", "definition_name", definitionName)
 
 			opts := &lc.StartSessionOptions{
 				Prompt:           optStringPtr(args, "prompt"),

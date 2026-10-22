@@ -1,6 +1,7 @@
 package token
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -564,4 +565,89 @@ func TestValidateAccessToken_TransientVsDead(t *testing.T) {
 		assert.False(t, result.Valid)
 		assert.True(t, result.Transient)
 	})
+}
+
+// RevokeToken must not log any part of the token it was given, whether it
+// revoked it or not.
+func TestRevokeToken_DoesNotLogToken(t *testing.T) {
+	var logs bytes.Buffer
+	stateManager, _ := setupTestStateManager(t)
+	manager := NewManager(stateManager, newMockFirebaseClient(), slog.New(slog.NewJSONHandler(&logs, nil)))
+	manager.WithJWTExchange(mockJWTExchange("mock-limacharlie-jwt", nil))
+	ctx := context.Background()
+
+	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid")
+	require.NoError(t, err)
+
+	cases := []struct {
+		name  string
+		token string
+		hint  string
+		msg   string
+	}{
+		{"access token", tokens.AccessToken, "access_token", "Revoked access token"},
+		{"refresh token", tokens.RefreshToken, "refresh_token", "Revoked refresh token"},
+		// The state manager's delete succeeds for an unknown token too, so only
+		// check that the token is absent.
+		{"unknown token, no hint", "unknown-token-value", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logs.Reset()
+			require.NoError(t, manager.RevokeToken(ctx, tc.token, tc.hint))
+
+			out := logs.String()
+			if tc.msg != "" {
+				assert.Contains(t, out, tc.msg)
+			}
+			assert.NotContains(t, out, tc.token[:10], "no part of the token may be logged")
+		})
+	}
+}
+
+// ValidateAccessToken runs on every OAuth MCP call. None of its log lines, at
+// any level, may carry part of the access token.
+func TestValidateAccessToken_DoesNotLogToken(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+
+	cases := []struct {
+		name              string
+		token             string
+		expiresAt         time.Time
+		firebaseExpiresAt time.Time
+		extensions        int
+		msg               string
+	}{
+		{"unknown token", "Unknown7Qx-token", time.Time{}, time.Time{}, 0, "Access token not found"},
+		{"grace period, extension limit", "GraceMax7Q-token", now.Add(-1 * time.Hour), now.Add(1 * time.Hour), state.MaxTokenExtensions, "Token extension limit reached, forcing re-authentication"},
+		{"grace period, auto-extend", "GraceExt7Q-token", now.Add(-1 * time.Hour), now.Add(1 * time.Hour), 0, "MCP access token expired but within grace period, auto-extending..."},
+		{"expiring, extension limit", "SoonMax7Qx-token", now.Add(30 * time.Minute), now.Add(1 * time.Hour), state.MaxTokenExtensions, "Token extension limit reached, not extending further"},
+		{"expiring, proactive refresh", "SoonExt7Qx-token", now.Add(30 * time.Minute), now.Add(1 * time.Hour), 0, "MCP access token expiring soon, proactively refreshing..."},
+		{"Firebase token expiring", "FbSoon7Qxy-token", now.Add(12 * time.Hour), now.Add(1 * time.Minute), 0, "Firebase token expiring soon, refreshing..."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			stateManager, _ := setupTestStateManager(t)
+			manager := NewManager(stateManager, newMockFirebaseClient(),
+				slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			manager.WithJWTExchange(mockJWTExchange("mock-limacharlie-jwt", nil))
+
+			if !tc.expiresAt.IsZero() {
+				tokenData := state.NewAccessTokenData(tc.token, "user", "fb-id", "fb-refresh",
+					tc.firebaseExpiresAt.Unix(), "openid", state.TokenTTL)
+				tokenData.ExpiresAt = tc.expiresAt.Unix()
+				tokenData.ExtensionCount = tc.extensions
+				require.NoError(t, stateManager.StoreAccessToken(ctx, tokenData))
+			}
+
+			_, err := manager.ValidateAccessToken(ctx, tc.token, true)
+			require.NoError(t, err)
+
+			out := logs.String()
+			assert.Contains(t, out, tc.msg, "the case should reach its log line")
+			assert.NotContains(t, out, tc.token[:10], "no part of the token may be logged")
+		})
+	}
 }

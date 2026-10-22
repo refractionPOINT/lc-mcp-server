@@ -48,12 +48,12 @@ func RegisterSetAIMemory() {
 				return tools.ErrorResult("content parameter is required"), nil
 			}
 
+			slog.Info("Tool called: set_ai_memory", toolCallAttrs(ctx, "key_len", len(key), "memory_name_len", len(memoryName))...)
+
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
-
-			slog.Info("Tool called: set_ai_memory", "key", key, "memory_name", memoryName)
 
 			if err := org.SetAIMemory(key, memoryName, content); err != nil {
 				return tools.ErrorResultf("failed to set AI memory '%s' on '%s': %v", memoryName, key, err), nil
@@ -95,12 +95,12 @@ func RegisterDeleteAIMemory() {
 				return tools.ErrorResult("memory_name parameter is required"), nil
 			}
 
+			slog.Info("Tool called: delete_ai_memory", toolCallAttrs(ctx, "key_len", len(key), "memory_name_len", len(memoryName))...)
+
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
-
-			slog.Info("Tool called: delete_ai_memory", "key", key, "memory_name", memoryName)
 
 			if err := org.DeleteAIMemory(key, memoryName); err != nil {
 				return tools.ErrorResultf("failed to delete AI memory '%s' on '%s': %v", memoryName, key, err), nil

@@ -87,7 +87,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	}
 
 	if tokenData == nil {
-		m.logger.Debug("Access token not found", "token", accessToken[:min(10, len(accessToken))]+"...")
+		m.logger.Debug("Access token not found")
 		return &ValidationResult{
 			Valid: false,
 			Error: "invalid or expired access token",
@@ -105,7 +105,6 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			// SECURITY: Check extension limits before allowing recovery
 			if tokenData.ExtensionCount >= state.MaxTokenExtensions {
 				m.logger.Warn("Token extension limit reached, forcing re-authentication",
-					"token", accessToken[:min(10, len(accessToken))]+"...",
 					"uid", tokenData.UID,
 					"extension_count", tokenData.ExtensionCount,
 					"max_extensions", state.MaxTokenExtensions)
@@ -116,7 +115,6 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			}
 
 			m.logger.Info("MCP access token expired but within grace period, auto-extending...",
-				"token", accessToken[:min(10, len(accessToken))]+"...",
 				"expired_ago_seconds", -mcpTokenExpiresIn,
 				"uid", tokenData.UID,
 				"extension_count", tokenData.ExtensionCount)
@@ -182,7 +180,6 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 
 		// Token expired and either outside grace period or refresh not available
 		m.logger.Debug("Access token expired beyond grace period",
-			"token", accessToken[:min(10, len(accessToken))]+"...",
 			"expired_ago_seconds", -mcpTokenExpiresIn)
 		return &ValidationResult{
 			Valid: false,
@@ -203,7 +200,6 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	// SECURITY: Check extension limits before proactive MCP token extension
 	if mcpNeedsRefresh && tokenData.ExtensionCount >= state.MaxTokenExtensions {
 		m.logger.Warn("Token extension limit reached, not extending further",
-			"token", accessToken[:min(10, len(accessToken))]+"...",
 			"uid", tokenData.UID,
 			"extension_count", tokenData.ExtensionCount,
 			"max_extensions", state.MaxTokenExtensions,
@@ -216,14 +212,12 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 	if needsRefresh {
 		if mcpNeedsRefresh {
 			m.logger.Info("MCP access token expiring soon, proactively refreshing...",
-				"token", accessToken[:min(10, len(accessToken))]+"...",
 				"mcp_expires_in", mcpTokenExpiresIn,
 				"firebase_expires_in", firebaseExpiresIn,
 				"uid", tokenData.UID,
 				"extension_count", tokenData.ExtensionCount)
 		} else {
 			m.logger.Info("Firebase token expiring soon, refreshing...",
-				"token", accessToken[:min(10, len(accessToken))]+"...",
 				"firebase_expires_in", firebaseExpiresIn,
 				"uid", tokenData.UID)
 		}
@@ -396,14 +390,16 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (
 	}, nil
 }
 
-// RevokeToken revokes an access or refresh token
+// RevokeToken revokes an access or refresh token.
+// It never logs any part of the token: a prefix of a bearer token is part of
+// a credential.
 func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint string) error {
 	revoked := false
 
 	// Try to revoke as access token
 	if tokenTypeHint != "refresh_token" {
 		if err := m.stateManager.RevokeAccessToken(ctx, token); err == nil {
-			m.logger.Info("Revoked access token", "token_prefix", token[:min(10, len(token))]+"...")
+			m.logger.Info("Revoked access token")
 			revoked = true
 		}
 	}
@@ -411,13 +407,13 @@ func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint s
 	// Try to revoke as refresh token
 	if tokenTypeHint != "access_token" {
 		if err := m.stateManager.RevokeRefreshToken(ctx, token); err == nil {
-			m.logger.Info("Revoked refresh token", "token_prefix", token[:min(10, len(token))]+"...")
+			m.logger.Info("Revoked refresh token")
 			revoked = true
 		}
 	}
 
 	if !revoked {
-		m.logger.Warn("Token not found for revocation (may already be revoked)", "token_prefix", token[:min(10, len(token))]+"...")
+		m.logger.Warn("Token not found for revocation (may already be revoked)", "token_type_hint", tokenTypeHint)
 	}
 
 	return nil // Always return success per OAuth 2.0 spec

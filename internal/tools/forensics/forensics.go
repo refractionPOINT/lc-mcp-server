@@ -32,43 +32,22 @@ func init() {
 
 // sendSensorCommand sends a command to a sensor and returns the response
 func sendSensorCommand(ctx context.Context, sid string, command string, params map[string]interface{}) (interface{}, error) {
-	sensor, cleanup, err := getSensor(ctx, sid)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get sensor: %w", err)
-	}
-	defer cleanup() // Ensure Spout is shut down when request completes
-
-	cmdStr := buildCommandString(command, nil, params)
-
-	// Log the command being sent
-	logger := slog.Default()
-	requestID := auth.GetRequestID(ctx)
-	logger.Info("Sending sensor command", "request_id", requestID, "sensor_id", sid, "command", cmdStr)
-	startTime := time.Now()
-
-	// Log that we're about to enter SimpleRequest (which may block for a long time)
-	// With SDK logging enabled, we'll see internal logs from MakeInteractive, Spout, etc.
-	logger.Debug("Entering SimpleRequest", "request_id", requestID, "timeout", "10m")
-
-	// Use SimpleRequest with a 10-minute timeout to support long-running sensor commands
-	result, err := sensor.SimpleRequest(cmdStr, lc.SimpleRequestOptions{
-		Timeout: 10 * time.Minute,
-	})
-
-	duration := time.Since(startTime)
-	logger.Debug("Exited SimpleRequest", "request_id", requestID, "duration_ms", duration.Milliseconds(), "success", err == nil)
-
-	if err != nil {
-		logger.Info("Sensor command failed", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
-		return nil, fmt.Errorf("sensor command failed: %w", err)
-	}
-
-	logger.Info("Sensor command completed successfully", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
-	return result, nil
+	return sendSensorCommandWithPositional(ctx, sid, command, nil, params)
 }
 
 // sendSensorCommandWithPositional sends a command with positional arguments to a sensor
 func sendSensorCommandWithPositional(ctx context.Context, sid string, command string, positionalArgs []string, flagParams map[string]interface{}) (interface{}, error) {
+	// Log the command being sent. The lines below are kept at INFO in prod, so
+	// they carry the command name and flag names only, never the values (a
+	// mem_find_string search string, a path, a pid...).
+	logger := slog.Default()
+	requestID := auth.GetRequestID(ctx)
+	logAttrs := func(extra ...any) []any {
+		attrs := append([]any{"request_id", requestID, "sensor_id", sid}, sensorCommandLogAttrs(command, positionalArgs, flagParams)...)
+		return append(attrs, extra...)
+	}
+	logger.Info("Sending sensor command", logAttrs()...)
+
 	sensor, cleanup, err := getSensor(ctx, sid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sensor: %w", err)
@@ -76,11 +55,6 @@ func sendSensorCommandWithPositional(ctx context.Context, sid string, command st
 	defer cleanup() // Ensure Spout is shut down when request completes
 
 	cmdStr := buildCommandString(command, positionalArgs, flagParams)
-
-	// Log the command being sent
-	logger := slog.Default()
-	requestID := auth.GetRequestID(ctx)
-	logger.Info("Sending sensor command", "request_id", requestID, "sensor_id", sid, "command", cmdStr)
 	startTime := time.Now()
 
 	// Log that we're about to enter SimpleRequest (which may block for a long time)
@@ -96,11 +70,11 @@ func sendSensorCommandWithPositional(ctx context.Context, sid string, command st
 	logger.Debug("Exited SimpleRequest", "request_id", requestID, "duration_ms", duration.Milliseconds(), "success", err == nil)
 
 	if err != nil {
-		logger.Info("Sensor command failed", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds(), "error", err.Error())
+		logger.Info("Sensor command failed", logAttrs("duration_ms", duration.Milliseconds(), "error", err.Error())...)
 		return nil, fmt.Errorf("sensor command failed: %w", err)
 	}
 
-	logger.Info("Sensor command completed successfully", "request_id", requestID, "sensor_id", sid, "command", cmdStr, "duration_ms", duration.Milliseconds())
+	logger.Info("Sensor command completed successfully", logAttrs("duration_ms", duration.Milliseconds())...)
 	return result, nil
 }
 

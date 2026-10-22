@@ -44,13 +44,14 @@ func RegisterGenerateLCQLQuery() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
+			logGeneratorCall(ctx, "generate_lcql_query", query)
+
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
 			startTime := time.Now()
-			slog.Info("Tool called: generate_lcql_query", "query", query)
 
 			// Get the prompt template
 			promptTemplate, err := getPromptTemplate("gen_lcql")
@@ -128,7 +129,7 @@ func RegisterGenerateLCQLQuery() {
 
 			// All iterations failed
 			elapsed := time.Since(startTime)
-			slog.Info("Failed to generate valid LCQL query", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error", lastError)
+			slog.Info("Failed to generate valid LCQL query", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error_len", len(lastError))
 
 			return tools.ErrorResultf("Failed to generate valid LCQL query after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
@@ -156,13 +157,14 @@ func RegisterGenerateDRRuleDetection() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
+			logGeneratorCall(ctx, "generate_dr_rule_detection", query)
+
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
 			startTime := time.Now()
-			slog.Info("Tool called: generate_dr_rule_detection", "query", query)
 
 			// Get the prompt template
 			promptTemplate, err := getPromptTemplate("gen_dr_detect")
@@ -265,7 +267,7 @@ func RegisterGenerateDRRuleDetection() {
 
 			// All iterations failed
 			elapsed := time.Since(startTime)
-			slog.Info("Failed to generate valid D&R detection", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error", lastError)
+			slog.Info("Failed to generate valid D&R detection", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error_len", len(lastError))
 
 			return tools.ErrorResultf("Failed to generate valid D&R detection after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
@@ -293,13 +295,14 @@ func RegisterGenerateDRRuleRespond() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
+			logGeneratorCall(ctx, "generate_dr_rule_respond", query)
+
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
 			startTime := time.Now()
-			slog.Info("Tool called: generate_dr_rule_respond", "query", query)
 
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_dr_respond")
@@ -401,7 +404,7 @@ func RegisterGenerateDRRuleRespond() {
 
 			// All iterations failed
 			elapsed := time.Since(startTime)
-			slog.Info("Failed to generate valid D&R respond", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error", lastError)
+			slog.Info("Failed to generate valid D&R respond", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error_len", len(lastError))
 
 			return tools.ErrorResultf("Failed to generate valid D&R respond after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
@@ -429,8 +432,8 @@ func RegisterGenerateSensorSelector() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
+			logGeneratorCall(ctx, "generate_sensor_selector", query)
 			startTime := time.Now()
-			slog.Info("Tool called: generate_sensor_selector", "query", query)
 
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_sensor_selector")
@@ -490,8 +493,8 @@ func RegisterGeneratePythonPlaybook() {
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
+			logGeneratorCall(ctx, "generate_python_playbook", query)
 			startTime := time.Now()
-			slog.Info("Tool called: generate_python_playbook", "query", query)
 
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_playbook")

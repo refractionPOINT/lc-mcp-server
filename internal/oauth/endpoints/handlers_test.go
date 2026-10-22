@@ -1,8 +1,11 @@
 package endpoints
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -402,6 +405,27 @@ func TestHandleCallback_ValidCallback(t *testing.T) {
 	require.NotNil(t, authCode)
 	assert.Equal(t, "test-uid-123", authCode.UID)
 	assert.Equal(t, "test-client", authCode.ClientID)
+}
+
+// A rejected callback must not log the provider's authorization code.
+func TestHandleCallback_InvalidCallbackDoesNotLogCode(t *testing.T) {
+	handlers, _, mockFB, _ := testHandlers(t)
+	var logs bytes.Buffer
+	handlers.logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	mockFB.validateCallbackFunc = func(fullRequestURI string) (string, error) {
+		return "", errors.New("invalid callback")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=secret-provider-code&state=secret-state", nil)
+	w := httptest.NewRecorder()
+
+	handlers.HandleCallback(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	out := logs.String()
+	assert.Contains(t, out, "Failed to validate provider callback")
+	assert.Contains(t, out, `"has_code":true`)
+	assert.NotContains(t, out, "secret-", "the callback query must not be logged")
 }
 
 func TestHandleCallback_MissingFirebaseState(t *testing.T) {
