@@ -609,3 +609,45 @@ func TestOAuthWorkflow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, tokenData)
 }
+
+func TestSetNX(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	ctx := context.Background()
+
+	ok, err := client.SetNX(ctx, "k", "first", time.Minute)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = client.SetNX(ctx, "k", "second", time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok, "an existing key is not overwritten")
+	v, _ := client.Get(ctx, "k")
+	assert.Equal(t, "first", v)
+	assert.Equal(t, time.Minute, mr.TTL("k"))
+
+	ok, err = client.SetNX(ctx, "forever", "v", 0)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Zero(t, mr.TTL("forever"), "zero means no expiry")
+
+	_, err = client.SetNX(ctx, "neg", "v", -time.Second)
+	assert.Error(t, err)
+}
+
+func TestSetXXKeepTTL(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	ctx := context.Background()
+
+	ok, err := client.SetXXKeepTTL(ctx, "missing", "v")
+	require.NoError(t, err)
+	assert.False(t, ok, "a missing key is not created")
+	assert.False(t, mr.Exists("missing"))
+
+	require.NoError(t, client.Set(ctx, "k", "old", 90*time.Second))
+	ok, err = client.SetXXKeepTTL(ctx, "k", "new")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	v, _ := client.Get(ctx, "k")
+	assert.Equal(t, "new", v)
+	assert.Equal(t, 90*time.Second, mr.TTL("k"), "the expiry is kept")
+}
