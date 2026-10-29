@@ -275,10 +275,8 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		f.logger.Warn("CIMD fetch shed: per-host/URL limit", "client_host", host, "known", known)
 		return shed(msg)
 	}
-	if !limiter.Allow() {
-		f.logger.Warn("CIMD fetch shed: process rate limit", "client_host", host, "known", known)
-		return shed("too many client metadata lookups in progress; try again shortly")
-	}
+	// The per-domain cap on known refreshes comes before the rate limiter, so
+	// a refresh it sheds spends no shared token.
 	if known {
 		domain := registrableDomain(host)
 		if !f.acquireKnownDomain(domain) {
@@ -286,6 +284,10 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 			return shed("too many client metadata lookups in progress; try again shortly")
 		}
 		defer f.releaseKnownDomain(domain)
+	}
+	if !limiter.Allow() {
+		f.logger.Warn("CIMD fetch shed: process rate limit", "client_host", host, "known", known)
+		return shed("too many client metadata lookups in progress; try again shortly")
 	}
 	select {
 	case sem <- struct{}{}:

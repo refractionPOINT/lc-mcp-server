@@ -1220,8 +1220,13 @@ func TestKnownPool_OneDomainHoldsAtMostItsShare(t *testing.T) {
 		return env.fetcher.knownByDomain[registrableDomain(hostOf(ids[0]))] == maxKnownFetchesPerDomain
 	}, 2*time.Second, 10*time.Millisecond)
 
-	_, err := env.fetcher.Resolve(context.Background(), ids[maxKnownFetchesPerDomain])
-	assert.Equal(t, KindBusy, kindOf(t, err), "a third hanging refresh from the same domain is shed")
+	tokensBefore := env.fetcher.knownLimiter.Tokens()
+	for i := 0; i < 5; i++ {
+		_, err := env.fetcher.Resolve(context.Background(), ids[maxKnownFetchesPerDomain])
+		assert.Equal(t, KindBusy, kindOf(t, err), "a third hanging refresh from the same domain is shed")
+		env.mr.Del(URLPrefix + cacheKey(ids[maxKnownFetchesPerDomain])) // stay under the per-URL budget
+	}
+	assert.GreaterOrEqual(t, env.fetcher.knownLimiter.Tokens(), tokensBefore, "refreshes shed by the domain cap spend no shared tokens")
 	assert.Less(t, len(env.fetcher.knownSem), cap(env.fetcher.knownSem), "the rest of the known pool stays free for other domains")
 	wg.Wait()
 }
