@@ -4,7 +4,6 @@ import (
 	"context"
 	"maps"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -319,14 +318,9 @@ func (s *Server) handleProviderSelectionWithProvider(w http.ResponseWriter, r *h
 	// Add provider to parameters
 	params["provider"] = provider
 
-	// Build authorize URL with all parameters using proper URL encoding
-	q := url.Values{}
-	for k, v := range params {
-		q.Set(k, v)
-	}
-
-	authorizeURL := "/authorize?" + q.Encode()
-	http.Redirect(w, r, authorizeURL, http.StatusFound)
+	// Back to /authorize with all parameters (CIMD clients also get their
+	// selection acknowledgement here)
+	s.oauthHandlers.RedirectToAuthorize(w, r, params)
 }
 
 func (s *Server) handleMFAChallenge(w http.ResponseWriter, r *http.Request) {
