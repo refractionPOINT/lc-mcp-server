@@ -27,6 +27,7 @@ const (
 	ErrInvalidClient           = "invalid_client"
 	ErrInvalidGrant            = "invalid_grant"
 	ErrUnsupportedGrantType    = "unsupported_grant_type"
+	ErrInvalidTarget           = "invalid_target" // RFC 8707 section 2
 )
 
 // NewOAuthError creates a new OAuth error

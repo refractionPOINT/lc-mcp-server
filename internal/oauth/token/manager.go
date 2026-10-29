@@ -2,6 +2,7 @@ package token
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,8 +31,14 @@ type ValidationResult struct {
 	FirebaseRefreshToken string
 	LimaCharlieJWT       string // JWT exchanged from Firebase token for LimaCharlie API
 	Scope                string
-	Error                string
-	Refreshed            bool
+	// Resource is the canonical resource (audience) the token is bound to;
+	// empty for a legacy token issued before resource binding existed.
+	Resource  string
+	Error     string
+	Refreshed bool
+	// AudienceMismatch is set when Valid is false only because the token is
+	// bound to a resource that does not cover the request.
+	AudienceMismatch bool
 	// Transient is set when Valid is false because a backend (Firebase, the
 	// JWT service, Redis) failed, not because the token is dead. Callers must
 	// not send the client back through sign-in for it: a retry may succeed,
@@ -58,6 +65,7 @@ type IntrospectionResponse struct {
 	Exp       int64  `json:"exp,omitempty"`
 	Iat       int64  `json:"iat,omitempty"`
 	Sub       string `json:"sub,omitempty"` // Firebase UID
+	Aud       string `json:"aud,omitempty"` // Resource (audience) the token is bound to, when known
 }
 
 // NewManager creates a new OAuth token manager
@@ -76,10 +84,35 @@ func (m *Manager) WithJWTExchange(fn JWTExchangeFunc) *Manager {
 	return m
 }
 
+// ErrInvalidTarget marks a resource (RFC 8707) that the token being issued or
+// refreshed may not have. The token endpoint answers it with "invalid_target".
+var ErrInvalidTarget = errors.New("invalid_target")
+
+// AudienceCheck decides whether a token bound to tokenResource ("" for a
+// legacy token) may be used for the request at hand. A non-nil error rejects
+// the token with that message.
+type AudienceCheck func(tokenResource string) error
+
+// ResourceResolver chooses the resource of the tokens issued by a refresh,
+// given the resource the refresh token is bound to ("" for a legacy one). It
+// returns an error wrapping ErrInvalidTarget to refuse the refresh.
+type ResourceResolver func(authorized string) (string, error)
+
 // ValidateAccessToken validates an MCP access token and optionally refreshes Firebase tokens
 // IMPORTANT: This method now also handles automatic MCP token lifetime extension
 // to ensure tokens remain valid transparently for the client (e.g., Claude Code)
+//
+// It does not check which resource the token is bound to; request handlers
+// use ValidateAccessTokenForAudience.
 func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, autoRefresh bool) (*ValidationResult, error) {
+	return m.ValidateAccessTokenForAudience(ctx, accessToken, autoRefresh, nil)
+}
+
+// ValidateAccessTokenForAudience is ValidateAccessToken for a request that
+// must also be covered by the token's audience. The check runs before any
+// refresh or lifetime extension, so a token presented at the wrong endpoint
+// has no side effects. A nil check accepts any audience.
+func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToken string, autoRefresh bool, audience AudienceCheck) (*ValidationResult, error) {
 	// Look up token in Redis
 	tokenData, err := m.stateManager.GetAccessTokenData(ctx, accessToken)
 	if err != nil {
@@ -92,6 +125,21 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 			Valid: false,
 			Error: "invalid or expired access token",
 		}, nil
+	}
+
+	if tokenData.Resource == "" {
+		m.logger.Debug("Access token has no resource binding (legacy), accepting for every endpoint", "uid", tokenData.UID)
+	}
+	if audience != nil {
+		if err := audience(tokenData.Resource); err != nil {
+			m.logger.Warn("Access token rejected: audience mismatch", "uid", tokenData.UID, "resource", tokenData.Resource, "reason", err.Error())
+			return &ValidationResult{
+				Valid:            false,
+				Error:            err.Error(),
+				Resource:         tokenData.Resource,
+				AudienceMismatch: true,
+			}, nil
+		}
 	}
 
 	now := time.Now().Unix()
@@ -174,6 +222,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 				FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
 				LimaCharlieJWT:       limaCharlieJWT,
 				Scope:                tokenData.Scope,
+				Resource:             tokenData.Resource,
 				Refreshed:            true,
 			}, nil
 		}
@@ -272,6 +321,7 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 					FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
 					LimaCharlieJWT:       limaCharlieJWT,
 					Scope:                tokenData.Scope,
+					Resource:             tokenData.Resource,
 					Refreshed:            true,
 				}, nil
 			}
@@ -298,13 +348,19 @@ func (m *Manager) ValidateAccessToken(ctx context.Context, accessToken string, a
 		FirebaseRefreshToken: tokenData.FirebaseRefreshToken,
 		LimaCharlieJWT:       limaCharlieJWT,
 		Scope:                tokenData.Scope,
+		Resource:             tokenData.Resource,
 		Refreshed:            false,
 	}, nil
 }
 
 // RefreshAccessToken issues a new access token using a refresh token
 // SECURITY: Implements refresh token rotation to detect token theft
-func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (*TokenResponse, error) {
+//
+// The new tokens are bound to the resource chosen by resolve from the one the
+// refresh token is bound to; a nil resolve keeps it unchanged. The resolver
+// runs before anything is refreshed or rotated, so a refused request leaves
+// the refresh token usable.
+func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string, resolve ResourceResolver) (*TokenResponse, error) {
 	// Look up refresh token
 	refreshData, err := m.stateManager.GetRefreshTokenData(ctx, refreshToken)
 	if err != nil {
@@ -320,6 +376,17 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (
 	firebaseRefreshToken := refreshData.FirebaseRefreshToken
 	scope := refreshData.Scope
 	oldAccessToken := refreshData.AccessToken
+
+	resource := refreshData.Resource
+	if resource == "" {
+		m.logger.Debug("Refresh token has no resource binding (legacy)", "uid", uid)
+	}
+	if resolve != nil {
+		var err error
+		if resource, err = resolve(refreshData.Resource); err != nil {
+			return nil, err
+		}
+	}
 
 	// Refresh Firebase token first
 	newFirebaseIDToken, newFirebaseExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, firebaseRefreshToken)
@@ -349,6 +416,7 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (
 		scope,
 		state.TokenTTL,
 	)
+	accessTokenData.Resource = resource
 	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store access token: %w", err)
 	}
@@ -361,6 +429,7 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string) (
 		firebaseRefreshToken,
 		scope,
 	)
+	refreshTokenData.Resource = resource
 	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -443,6 +512,7 @@ func (m *Manager) IntrospectToken(ctx context.Context, token string) (*Introspec
 		Exp:       tokenData.ExpiresAt,
 		Iat:       tokenData.CreatedAt,
 		Sub:       tokenData.UID, // Firebase UID as subject
+		Aud:       tokenData.Resource,
 	}, nil
 }
 
@@ -477,8 +547,9 @@ func min(a, b int) int {
 }
 
 // CreateTokenResponse creates OAuth token response with new MCP tokens
-// Called after successful authorization to issue tokens
-func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken, firebaseRefreshToken string, firebaseExpiresAt int64, scope string) (*TokenResponse, error) {
+// Called after successful authorization to issue tokens. resource is the
+// canonical resource the tokens are bound to; "" issues unbound (legacy) tokens.
+func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken, firebaseRefreshToken string, firebaseExpiresAt int64, scope, resource string) (*TokenResponse, error) {
 	// Generate MCP tokens
 	accessToken, err := m.stateManager.GenerateAccessToken()
 	if err != nil {
@@ -500,6 +571,7 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 		scope,
 		state.TokenTTL,
 	)
+	accessTokenData.Resource = resource
 	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store access token: %w", err)
 	}
@@ -512,11 +584,12 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 		firebaseRefreshToken,
 		scope,
 	)
+	refreshTokenData.Resource = resource
 	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}
 
-	m.logger.Info("Successfully created new token pair", "uid", uid, "scope", scope)
+	m.logger.Info("Successfully created new token pair", "uid", uid, "scope", scope, "resource", resource)
 
 	return &TokenResponse{
 		AccessToken:  accessToken,

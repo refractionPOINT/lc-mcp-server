@@ -15,6 +15,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/resource"
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/token"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -461,10 +463,16 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 		// Verify and extract UID, LimaCharlie JWT, and Firebase token from MCP access token
 		s.logger.Info("Extracting UID from token", "request_id", requestID)
 		tokenStartTime := time.Now()
-		uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
+		uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken, r.URL.Path)
 		tokenDuration := time.Since(tokenStartTime)
 		if err != nil {
 			s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
+			var audienceErr *audienceError
+			if errors.As(err, &audienceErr) {
+				// A valid token presented at an endpoint it was not issued
+				// for: the client must sign in again for that resource.
+				return nil, &authFailure{challenge: true, oauthError: "invalid_token", detail: audienceErr.Error()}
+			}
 			if errors.Is(err, errInvalidCredentials) {
 				return nil, &authFailure{challenge: true, oauthError: "invalid_token", detail: "The access token is invalid or expired"}
 			}
@@ -672,7 +680,17 @@ func oidCoveredByClaims(claimOIDs []string, oid string) bool {
 	return !concrete
 }
 
-func (s *Server) extractUIDFromToken(token string) (string, string, string, error) {
+// audienceError is a token rejected because its audience (RFC 8707 resource)
+// does not cover the endpoint it was presented at. It is an invalid credential
+// for the endpoint, with a message safe to show the client.
+type audienceError struct{ msg string }
+
+func (e *audienceError) Error() string { return e.msg }
+func (e *audienceError) Unwrap() error { return errInvalidCredentials }
+
+// extractUIDFromToken verifies a bearer token presented at requestPath. An MCP
+// OAuth token must be bound to a resource covering requestPath (RFC 8707).
+func (s *Server) extractUIDFromToken(token, requestPath string) (string, string, string, error) {
 	// Try parsing as LimaCharlie JWT first (for API gateway / internal services)
 	if auth.IsJWTFormat(token) {
 		claims, err := parseLimaCharlieJWT(token)
@@ -704,14 +722,18 @@ func (s *Server) extractUIDFromToken(token string) (string, string, string, erro
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Validate and get token info
-	validation, err := s.tokenManager.ValidateAccessToken(ctx, token, true)
+	// Validate and get token info. The audience is checked before the token is
+	// refreshed or extended, so a token at the wrong endpoint has no effect.
+	validation, err := s.tokenManager.ValidateAccessTokenForAudience(ctx, token, true, s.audienceCheck(requestPath))
 	if err != nil {
 		s.logger.Error("Token validation error", "error", err)
 		return "", "", "", fmt.Errorf("token validation failed: %w", err)
 	}
 
 	if !validation.Valid {
+		if validation.AudienceMismatch {
+			return "", "", "", &audienceError{msg: validation.Error}
+		}
 		if validation.Transient {
 			return "", "", "", fmt.Errorf("token could not be validated: %s", validation.Error)
 		}
@@ -721,6 +743,24 @@ func (s *Server) extractUIDFromToken(token string) (string, string, string, erro
 	// Return the Firebase UID, LimaCharlie JWT (exchanged from Firebase token), and Firebase ID token
 	// The Firebase ID token is needed for regenerating JWTs with OID when switching orgs
 	return validation.UID, validation.LimaCharlieJWT, validation.FirebaseIDToken, nil
+}
+
+// audienceCheck returns the check that a token's resource covers the MCP
+// endpoint at requestPath. Without OAuth metadata (no server URL to bind to)
+// there is nothing to check against.
+func (s *Server) audienceCheck(requestPath string) token.AudienceCheck {
+	if s.metadataProvider == nil {
+		return nil
+	}
+	policy := resource.NewPolicy(s.metadataProvider.GetServerURL())
+	requestResource, ok := policy.ForRequestPath(requestPath)
+	return func(tokenResource string) error {
+		if !ok {
+			// Not an MCP endpoint path: no token is bound to it. Fail closed.
+			return errors.New("The access token cannot be used at this path")
+		}
+		return policy.CheckToken(tokenResource, requestResource)
+	}
 }
 
 // writeJSONRPCError writes a JSON-RPC error carried by an HTTP 200, the

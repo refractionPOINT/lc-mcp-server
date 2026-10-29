@@ -31,6 +31,9 @@ type AuthorizationCode struct {
 	Scope               string  `json:"scope"`
 	CodeChallenge       *string `json:"code_challenge,omitempty"`
 	CodeChallengeMethod *string `json:"code_challenge_method,omitempty"`
+	// Resource is the canonical RFC 8707 resource the code was authorized for.
+	// Empty on codes written before resource binding existed (legacy).
+	Resource string `json:"resource,omitempty"`
 }
 
 // AccessTokenData represents an access token with Firebase token mapping
@@ -46,6 +49,10 @@ type AccessTokenData struct {
 	// Extension tracking for security auditing and limits
 	ExtensionCount int   `json:"extension_count"`  // Number of times token has been auto-extended
 	LastExtendedAt int64 `json:"last_extended_at"` // Timestamp of last extension (0 if never extended)
+	// Resource is the canonical RFC 8707 resource (token audience) this token
+	// was issued for. Empty on tokens issued before resource binding existed
+	// (legacy): they are accepted for every endpoint of this server.
+	Resource string `json:"resource,omitempty"`
 }
 
 // RefreshTokenData represents a refresh token mapping
@@ -56,6 +63,9 @@ type RefreshTokenData struct {
 	FirebaseRefreshToken string `json:"firebase_refresh_token"` // Encrypted in Redis
 	Scope                string `json:"scope"`
 	CreatedAt            int64  `json:"created_at"`
+	// Resource is the canonical RFC 8707 resource the token family is bound to;
+	// it is carried over, or narrowed, on every rotation. Empty means legacy.
+	Resource string `json:"resource,omitempty"`
 }
 
 // ClientRegistration represents a dynamically registered OAuth client

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/resource"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/token"
 	"log/slog"
@@ -79,7 +81,6 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	codeChallenge := params.Get("code_challenge")
 	codeChallengeMethod := params.Get("code_challenge_method")
 	scope := params.Get("scope")
-	resource := params.Get("resource")
 	provider := params.Get("provider")
 
 	// Validate required parameters
@@ -101,6 +102,16 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if !h.isValidRedirectURI(r.Context(), redirectURI, clientID) {
 		h.logger.Warn("Invalid redirect_uri (not in whitelist)", "uri", redirectURI, "client_id", clientID)
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri not allowed for this client", http.StatusBadRequest))
+		return
+	}
+
+	// RFC 8707: bind the authorization to the MCP resource the client names, or
+	// to the whole server when it names none. The canonical form is what is
+	// stored, so every later comparison is between canonical values.
+	canonicalResource, err := h.authorizeResource(params["resource"])
+	if err != nil {
+		h.logger.Warn("Invalid resource in authorization request", "error", err, "client_id", clientID)
+		WriteOAuthError(w, NewOAuthError(ErrInvalidTarget, "resource is not a valid resource of this server", http.StatusBadRequest))
 		return
 	}
 
@@ -130,7 +141,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"code_challenge":        codeChallenge,
 			"code_challenge_method": codeChallengeMethod,
 			"scope":                 scope,
-			"resource":              resource,
+			"resource":              canonicalResource,
 		}
 
 		if err := h.stateManager.StoreSelectionSession(r.Context(), sessionID, paramsMap); err != nil {
@@ -153,11 +164,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store OAuth state
-	if resource == "" {
-		resource = h.metadataProvider.GetServerURL()
-	}
-
-	oauthState := state.NewOAuthState(stateParam, codeChallenge, codeChallengeMethod, redirectURI, clientID, scope, resource, providerID)
+	oauthState := state.NewOAuthState(stateParam, codeChallenge, codeChallengeMethod, redirectURI, clientID, scope, canonicalResource, providerID)
 	if err := h.stateManager.StoreOAuthState(r.Context(), oauthState); err != nil {
 		h.logger.Error("Failed to store OAuth state", "error", err, "state", stateParam)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store state", http.StatusInternalServerError))
@@ -288,6 +295,12 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Unix() + expiresIn
 
 	authCode := state.NewAuthorizationCode(code, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
+	authCode.Resource, err = h.stateResource(oauthState)
+	if err != nil {
+		h.logger.Error("OAuth state carries an invalid resource", "error", err, "client_id", oauthState.ClientID)
+		WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrInvalidTarget, "resource is not a valid resource of this server")
+		return
+	}
 	if err := h.stateManager.StoreAuthorizationCode(r.Context(), authCode); err != nil {
 		h.logger.Error("Failed to store authorization code", "error", err)
 		WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
@@ -379,8 +392,17 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// RFC 8707: a resource named on the token request may narrow, never widen,
+	// what the user authorized. Without one the tokens get the authorized resource.
+	tokenResource, err := h.codeGrantResource(authCode, r.Form["resource"])
+	if err != nil {
+		h.logger.Warn("Invalid resource in token request", "error", err, "client_id", clientID, "authorized", authCode.Resource)
+		WriteOAuthError(w, NewOAuthError(ErrInvalidTarget, "resource is not covered by the authorized resource", http.StatusBadRequest))
+		return
+	}
+
 	// Create token response
-	tokenResp, err := h.tokenManager.CreateTokenResponse(r.Context(), authCode.UID, authCode.FirebaseIDToken, authCode.FirebaseRefreshToken, authCode.FirebaseExpiresAt, authCode.Scope)
+	tokenResp, err := h.tokenManager.CreateTokenResponse(r.Context(), authCode.UID, authCode.FirebaseIDToken, authCode.FirebaseRefreshToken, authCode.FirebaseExpiresAt, authCode.Scope, tokenResource)
 	if err != nil {
 		h.logger.Error("Failed to create token response", "error", err, "uid", authCode.UID)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to issue tokens", http.StatusInternalServerError))
@@ -399,7 +421,11 @@ func (h *Handlers) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Refresh access token
-	tokenResp, err := h.tokenManager.RefreshAccessToken(r.Context(), refreshToken)
+	tokenResp, err := h.tokenManager.RefreshAccessToken(r.Context(), refreshToken, h.refreshResourceResolver(r.Form["resource"]))
+	if errors.Is(err, token.ErrInvalidTarget) {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidTarget, "resource is not covered by the authorized resource", http.StatusBadRequest))
+		return
+	}
 	if err != nil {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidGrant, "Invalid or expired refresh token", http.StatusBadRequest))
 		return
@@ -455,6 +481,123 @@ func (h *Handlers) HandleIntrospect(w http.ResponseWriter, r *http.Request) {
 }
 
 // Helper functions
+
+// resourcePolicy is the RFC 8707 policy for this server's public URL.
+func (h *Handlers) resourcePolicy() *resource.Policy {
+	return resource.NewPolicy(h.metadataProvider.GetServerURL())
+}
+
+// requestedResource returns the single resource named by a request's
+// "resource" parameters, or "" when it names none. Several resources (allowed
+// by RFC 8707) are refused: a token here has exactly one audience.
+func requestedResource(values []string) (string, error) {
+	var requested []string
+	for _, v := range values {
+		if v != "" {
+			requested = append(requested, v)
+		}
+	}
+	switch len(requested) {
+	case 0:
+		return "", nil
+	case 1:
+		return requested[0], nil
+	}
+	return "", fmt.Errorf("%w: multiple resources are not supported", resource.ErrInvalidResource)
+}
+
+// authorizeResource returns the canonical resource an authorization request is
+// for: the named one, validated, or the whole server when none is named.
+func (h *Handlers) authorizeResource(values []string) (string, error) {
+	policy := h.resourcePolicy()
+	requested, err := requestedResource(values)
+	if err != nil {
+		return "", err
+	}
+	if requested == "" {
+		return policy.Origin(), nil
+	}
+	return policy.Canonicalize(requested)
+}
+
+// stateResource returns the canonical resource of a stored authorization
+// request. A state without one (written before resource binding existed) is
+// for the whole server, which is what the authorization endpoint defaulted it
+// to. A stored resource that is no longer valid for this server (for example
+// after MCP_SERVER_URL changed) is an error.
+func (h *Handlers) stateResource(oauthState *state.OAuthState) (string, error) {
+	policy := h.resourcePolicy()
+	if oauthState.Resource == "" {
+		return policy.Origin(), nil
+	}
+	return policy.Canonicalize(oauthState.Resource)
+}
+
+// codeGrantResource decides the resource of the tokens issued for an
+// authorization code, from the resource the code was authorized for and the
+// one named on the token request, if any.
+func (h *Handlers) codeGrantResource(authCode *state.AuthorizationCode, values []string) (string, error) {
+	policy := h.resourcePolicy()
+	authorized := authCode.Resource
+	if authorized == "" {
+		authorized = policy.Origin() // code written before resource binding existed
+	} else {
+		var err error
+		if authorized, err = policy.Canonicalize(authorized); err != nil {
+			return "", err
+		}
+	}
+	requested, err := requestedResource(values)
+	if err != nil {
+		return "", err
+	}
+	if requested == "" {
+		return authorized, nil
+	}
+	canonical, err := policy.Canonicalize(requested)
+	if err != nil {
+		return "", err
+	}
+	if !policy.Covers(authorized, canonical) {
+		return "", fmt.Errorf("%w: %q is not covered by %q", resource.ErrInvalidResource, canonical, authorized)
+	}
+	return canonical, nil
+}
+
+// refreshResourceResolver decides the resource of the tokens issued by a
+// refresh: the one the refresh token is bound to, or a narrower one named on
+// the request. A refresh token without a resource predates resource binding;
+// it stays unbound (every endpoint, as before) whatever the request names, so
+// that a client that is signed in today is not turned away. What it names is
+// logged to see when legacy tokens can be bound.
+func (h *Handlers) refreshResourceResolver(values []string) token.ResourceResolver {
+	return func(authorized string) (string, error) {
+		policy := h.resourcePolicy()
+		requested, err := requestedResource(values)
+		if authorized == "" {
+			if err == nil && requested != "" {
+				canonical, cerr := policy.Canonicalize(requested)
+				h.logger.Info("Refreshing a legacy token that has no resource binding",
+					"requested_resource", requested, "valid", cerr == nil, "canonical", canonical)
+			}
+			return "", nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", token.ErrInvalidTarget, err)
+		}
+		if requested == "" {
+			return authorized, nil
+		}
+		canonical, err := policy.Canonicalize(requested)
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", token.ErrInvalidTarget, err)
+		}
+		if !policy.Covers(authorized, canonical) {
+			return "", fmt.Errorf("%w: %q is not covered by %q", token.ErrInvalidTarget, canonical, authorized)
+		}
+		return canonical, nil
+	}
+}
 
 func (h *Handlers) normalizeProvider(provider string) string {
 	switch provider {
@@ -710,6 +853,15 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	}
 
 	authCodeData := state.NewAuthorizationCode(authCode, oauthState.State, uid, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
+	if authCodeData.Resource, err = h.stateResource(oauthState); err != nil {
+		h.logger.Error("OAuth state carries an invalid resource", "error", err, "client_id", oauthState.ClientID)
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":           false,
+			"error":             ErrInvalidTarget,
+			"error_description": "resource is not a valid resource of this server",
+		})
+		return
+	}
 	h.logger.Info("Storing authorization code after MFA",
 		"uid", uid,
 		"source", uidSource,
