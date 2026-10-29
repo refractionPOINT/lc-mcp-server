@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -547,6 +548,16 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	// SECURITY FIX: Check and increment attempts BEFORE processing MFA verification
 	// This prevents brute force attacks on MFA codes
 	attempts, err := h.stateManager.IncrementMFAAttempts(r.Context(), sessionID)
+	if errors.Is(err, state.ErrMFASessionNotFound) {
+		// Missing/expired session is a client error, not a server fault
+		h.logger.Warn("MFA session not found or expired", "session_id", sessionID)
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":           false,
+			"error":             "invalid_request",
+			"error_description": "Session expired or invalid. Please restart authentication.",
+		})
+		return
+	}
 	if err != nil {
 		h.logger.Error("Failed to increment MFA attempts", "error", err, "session_id", sessionID)
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{

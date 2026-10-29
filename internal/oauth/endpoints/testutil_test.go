@@ -48,6 +48,9 @@ func setupTestRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	// Setup Redis client
 	redisClient, err := redis.New(&redis.Config{
 		URL: "redis://" + mr.Addr(),
+		// Fail fast: tests inject Redis errors (e.g. READONLY) that go-redis
+		// would otherwise retry with multi-second backoff.
+		MaxRetries: -1,
 	}, testLogger())
 	require.NoError(t, err)
 

@@ -153,8 +153,7 @@ func TestMFAAttemptLimiting(t *testing.T) {
 
 	t.Run("cannot increment attempts for non-existent session", func(t *testing.T) {
 		_, err := manager.IncrementMFAAttempts(ctx, "non-existent")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not found")
+		assert.ErrorIs(t, err, ErrMFASessionNotFound)
 	})
 }
 

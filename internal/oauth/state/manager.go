@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -565,6 +566,9 @@ func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState s
 
 // ===== MFA Session Management =====
 
+// ErrMFASessionNotFound is returned when an MFA session does not exist or has expired.
+var ErrMFASessionNotFound = errors.New("MFA session not found or expired")
+
 // GenerateMFASessionID generates a session ID for MFA challenge
 func (m *Manager) GenerateMFASessionID() (string, error) {
 	b := make([]byte, 32)
@@ -650,8 +654,11 @@ func (m *Manager) GetMFAAttemptCount(ctx context.Context, sessionID string) (int
 func (m *Manager) IncrementMFAAttempts(ctx context.Context, sessionID string) (int, error) {
 	// Verify session exists first
 	session, err := m.GetMFASession(ctx, sessionID)
-	if err != nil || session == nil {
-		return 0, fmt.Errorf("MFA session not found: %w", err)
+	if err != nil {
+		return 0, err
+	}
+	if session == nil {
+		return 0, ErrMFASessionNotFound
 	}
 
 	// Use separate counter key for atomic increment
