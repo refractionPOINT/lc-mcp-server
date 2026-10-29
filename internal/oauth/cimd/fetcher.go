@@ -15,8 +15,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"golang.org/x/net/publicsuffix"
 	"golang.org/x/sync/singleflight"
 	"golang.org/x/time/rate"
 )
@@ -59,19 +61,26 @@ const (
 	// far below the 64 KiB fetch limit. A larger document is still served, it
 	// is just not cached.
 	maxCachedDocBytes = 8 << 10
-	// A host can get this many distinct new documents cached per day, and the
-	// whole cluster this many per hour, whatever the number of hosts (wildcard
-	// DNS makes hostnames free). A legitimate deployment has a handful of
-	// distinct client documents; beyond the caps documents are served but not
-	// cached, which only costs a fetch per use. Worst case the global cap
-	// bounds the footprint at 120 x 8 KiB per hour, kept at most 24 h.
-	newDocsPerHostPerDay = 20
-	newDocsPerHour       = 120
+	// A registrable domain (eTLD+1, so wildcard DNS and subdomains share one
+	// budget) can get this many distinct new documents cached per day, and the
+	// whole cluster this many per hour. A legitimate deployment has a handful
+	// of distinct client documents. Beyond the budgets a document is still
+	// cached, but only for minCacheTTL and without being marked known, so a
+	// client in real use keeps getting cache hits however the budgets were
+	// spent, while the footprint stays bounded by the fetch rate (per process
+	// at most globalRatePerSecond x minCacheTTL documents of maxCachedDocBytes).
+	newDocsPerDomainPerDay = 20
+	newDocsPerHour         = 1000
 
 	maxConcurrentFetches = 16
-	globalRatePerSecond  = 20
-	globalRateBurst      = 40
-	perHostFetchesPerMin = 30
+	// Pool reserved for refreshes of known URLs (see Fetcher.knownLimiter).
+	maxConcurrentKnownFetches = 8
+	knownRatePerSecond        = 10
+	knownRateBurst            = 20
+	maxKnownFetchesPerDomain  = 2
+	globalRatePerSecond       = 20
+	globalRateBurst           = 40
+	perHostFetchesPerMin      = 30
 	// perURLFetchesPerMin bounds refreshes of a document we already resolved
 	// before. They do not spend the per-host budget (so junk paths on a shared
 	// host can't starve them) but are still bounded per URL.
@@ -124,6 +133,16 @@ type Fetcher struct {
 	group   singleflight.Group
 	sem     chan struct{}
 	limiter *rate.Limiter
+	// Refreshes of known URLs have their own rate and concurrency pool, so
+	// lookups of unknown client_ids (anyone can send them: /authorize is
+	// unauthenticated) can't starve clients already in use.
+	knownSem     chan struct{}
+	knownLimiter *rate.Limiter
+	// knownByDomain counts in-flight known refreshes per registrable domain,
+	// so one domain (whose documents could be made to hang) can hold at most
+	// maxKnownFetchesPerDomain of the knownSem slots.
+	knownMu       sync.Mutex
+	knownByDomain map[string]int
 }
 
 // NewFetcher builds the production fetcher: SSRF-guarded dialer, no proxy, no
@@ -145,12 +164,15 @@ func NewFetcherForTesting(store Store, logger *slog.Logger, transport http.Round
 
 func newFetcher(store Store, logger *slog.Logger, client *http.Client, pol urlPolicy) *Fetcher {
 	return &Fetcher{
-		store:   store,
-		logger:  logger,
-		client:  client,
-		policy:  pol,
-		sem:     make(chan struct{}, maxConcurrentFetches),
-		limiter: rate.NewLimiter(globalRatePerSecond, globalRateBurst),
+		store:         store,
+		logger:        logger,
+		client:        client,
+		policy:        pol,
+		sem:           make(chan struct{}, maxConcurrentFetches),
+		limiter:       rate.NewLimiter(globalRatePerSecond, globalRateBurst),
+		knownSem:      make(chan struct{}, maxConcurrentKnownFetches),
+		knownLimiter:  rate.NewLimiter(knownRatePerSecond, knownRateBurst),
+		knownByDomain: map[string]int{},
 	}
 }
 
@@ -237,13 +259,14 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 	shed := func(msg string) (*Document, error) {
 		return nil, &Error{Kind: KindBusy, Message: msg}
 	}
-	if !f.limiter.Allow() {
-		f.logger.Warn("CIMD fetch shed: global rate limit", "client_host", host)
-		return shed("too many client metadata lookups in progress; try again shortly")
-	}
-	budgetKey, budget, msg := HostPrefix+hashHex(strings.ToLower(host)), int64(perHostFetchesPerMin), "too many lookups for this client's host; try again shortly"
+	// The per-domain (or per-URL) counter comes first, so lookups it sheds
+	// never spend the process-wide rate tokens; known URLs then draw on their
+	// own rate and concurrency pool.
+	budgetKey, budget, msg := HostPrefix+hashHex(registrableDomain(host)), int64(perHostFetchesPerMin), "too many lookups for this client's host; try again shortly"
+	limiter, sem := f.limiter, f.sem
 	if known {
 		budgetKey, budget, msg = URLPrefix+key, perURLFetchesPerMin, "too many lookups for this client; try again shortly"
+		limiter, sem = f.knownLimiter, f.knownSem
 	}
 	n, err := f.store.IncrEphemeral(ctx, budgetKey, time.Minute)
 	if err != nil {
@@ -252,9 +275,23 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		f.logger.Warn("CIMD fetch shed: per-host/URL limit", "client_host", host, "known", known)
 		return shed(msg)
 	}
+	// The per-domain cap on known refreshes comes before the rate limiter, so
+	// a refresh it sheds spends no shared token.
+	if known {
+		domain := registrableDomain(host)
+		if !f.acquireKnownDomain(domain) {
+			f.logger.Warn("CIMD fetch shed: per-domain known refresh concurrency", "client_host", host)
+			return shed("too many client metadata lookups in progress; try again shortly")
+		}
+		defer f.releaseKnownDomain(domain)
+	}
+	if !limiter.Allow() {
+		f.logger.Warn("CIMD fetch shed: process rate limit", "client_host", host, "known", known)
+		return shed("too many client metadata lookups in progress; try again shortly")
+	}
 	select {
-	case f.sem <- struct{}{}:
-		defer func() { <-f.sem }()
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
 	case <-ctx.Done():
 		return shed("too many client metadata lookups in progress; try again shortly")
 	}
@@ -414,9 +451,14 @@ func (f *Fetcher) storeDoc(ctx context.Context, host, key string, doc *Document,
 		return
 	}
 	// Refreshing a known URL does not add a distinct entry; a new one must fit
-	// the budgets.
+	// the budgets. Beyond them the document is cached briefly and not marked
+	// known: spending the budgets (anyone can, /authorize is unauthenticated)
+	// must not stop a client in real use from being served from cache.
 	if !known && !f.mayCacheNewDoc(ctx, host) {
-		f.logger.Warn("CIMD new-document cache budget exhausted; not caching", "client_host", host)
+		f.logger.Warn("CIMD new-document cache budget exhausted; caching briefly", "client_host", host)
+		if err := f.store.SetEphemeral(ctx, DocPrefix+key, string(b), min(ttl, minCacheTTL)); err != nil {
+			f.logger.Warn("CIMD cache write failed", "error", err)
+		}
 		return
 	}
 	if err := f.store.SetEphemeral(ctx, DocPrefix+key, string(b), ttl); err != nil {
@@ -427,12 +469,44 @@ func (f *Fetcher) storeDoc(ctx context.Context, host, key string, doc *Document,
 	}
 }
 
-// mayCacheNewDoc spends one unit of the per-host (daily) and cluster-wide
+func (f *Fetcher) acquireKnownDomain(domain string) bool {
+	f.knownMu.Lock()
+	defer f.knownMu.Unlock()
+	if f.knownByDomain[domain] >= maxKnownFetchesPerDomain {
+		return false
+	}
+	f.knownByDomain[domain]++
+	return true
+}
+
+func (f *Fetcher) releaseKnownDomain(domain string) {
+	f.knownMu.Lock()
+	defer f.knownMu.Unlock()
+	if f.knownByDomain[domain] <= 1 {
+		delete(f.knownByDomain, domain)
+		return
+	}
+	f.knownByDomain[domain]--
+}
+
+// registrableDomain is the budget identity of a host: its registrable domain
+// (eTLD+1, e.g. "evil.example" for "a.b.evil.example"), so subdomains and
+// wildcard DNS can't multiply per-host budgets. Hosts without one (an eTLD
+// itself, or a name the public suffix list doesn't cover) count as themselves.
+func registrableDomain(host string) string {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if d, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil && d != "" {
+		return d
+	}
+	return host
+}
+
+// mayCacheNewDoc spends one unit of the per-domain (daily) and cluster-wide
 // (hourly) budgets for caching a document for a URL not cached before. It
 // fails closed: when a counter cannot be read nothing new is cached.
 func (f *Fetcher) mayCacheNewDoc(ctx context.Context, host string) bool {
-	n, err := f.store.IncrEphemeral(ctx, CachedHostPrefix+hashHex(strings.ToLower(host)), 24*time.Hour)
-	if err != nil || n > newDocsPerHostPerDay {
+	n, err := f.store.IncrEphemeral(ctx, CachedHostPrefix+hashHex(registrableDomain(host)), 24*time.Hour)
+	if err != nil || n > newDocsPerDomainPerDay {
 		return false
 	}
 	n, err = f.store.IncrEphemeral(ctx, CachedAllKey, time.Hour)

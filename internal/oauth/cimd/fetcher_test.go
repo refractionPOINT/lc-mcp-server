@@ -371,7 +371,15 @@ func TestResolve_RejectsBadClientIDsWithoutFetching(t *testing.T) {
 // ===== caching =====
 
 func (e *testEnv) docTTL(id string) time.Duration { return e.mr.TTL(DocPrefix + cacheKey(id)) }
-func (e *testEnv) hasDoc(id string) bool          { return e.mr.Exists(DocPrefix + cacheKey(id)) }
+
+// setLimiters sets both process rate limiters (unknown and known URLs) to l's
+// rate and burst.
+func (e *testEnv) setLimiters(l *rate.Limiter) {
+	e.fetcher.limiter = l
+	e.fetcher.knownLimiter = rate.NewLimiter(l.Limit(), l.Burst())
+}
+
+func (e *testEnv) hasDoc(id string) bool { return e.mr.Exists(DocPrefix + cacheKey(id)) }
 
 func TestCache_HonoursMaxAgeWithinBounds(t *testing.T) {
 	cases := []struct {
@@ -557,7 +565,7 @@ func TestSingleFlight_CancelledCallerDoesNotFailOthers(t *testing.T) {
 
 func TestLimits_GlobalRateShedsLoadWithoutCaching(t *testing.T) {
 	env := newTestEnv(t, okDoc)
-	env.fetcher.limiter = rate.NewLimiter(0, 0)
+	env.setLimiters(rate.NewLimiter(0, 0))
 
 	id := env.url("/client.json")
 	_, err := env.fetcher.Resolve(context.Background(), id)
@@ -567,14 +575,14 @@ func TestLimits_GlobalRateShedsLoadWithoutCaching(t *testing.T) {
 		assert.NotContains(t, k, "oauth:cimd:doc:", "load shedding must not cache anything")
 	}
 
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	_, err = env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err)
 }
 
 func TestLimits_PerHostCapBoundsFetchesAcrossURLs(t *testing.T) {
 	env := newTestEnv(t, okDoc)
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 
 	var busy int
 	for i := 0; i < perHostFetchesPerMin+5; i++ {
@@ -610,7 +618,7 @@ func TestLimits_ConcurrencyCapQueuesFetches(t *testing.T) {
 		inflight.Add(-1)
 		writeDoc(w, self, nil)
 	})
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	env.fetcher.sem = make(chan struct{}, 2)
 
 	var wg sync.WaitGroup
@@ -671,7 +679,7 @@ func TestShed_BudgetBurntByJunkPathsDoesNotLockOutKnownClient(t *testing.T) {
 		w.Header().Set("Cache-Control", "max-age=300")
 		writeDoc(w, self, nil)
 	})
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	id := env.url("/client.json")
 	resolveThenExpire(t, env, id)
 
@@ -707,7 +715,7 @@ func TestShed_FailsClosedOnceTheCacheHasExpired(t *testing.T) {
 	hits := env.hits.Load()
 
 	t.Run("global rate limit", func(t *testing.T) {
-		env.fetcher.limiter = rate.NewLimiter(0, 0)
+		env.setLimiters(rate.NewLimiter(0, 0))
 		_, err := env.fetcher.Resolve(context.Background(), id)
 		assert.Equal(t, KindBusy, kindOf(t, err))
 		assert.Equal(t, hits, env.hits.Load(), "no fetch")
@@ -715,7 +723,10 @@ func TestShed_FailsClosedOnceTheCacheHasExpired(t *testing.T) {
 	})
 
 	t.Run("per-URL budget", func(t *testing.T) {
-		env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+		env.setLimiters(rate.NewLimiter(rate.Inf, 1))
+		// The previous subtest's lookup spent a unit of this URL's budget
+		// before the limiter shed it (the counter runs first).
+		env.mr.Del(URLPrefix + cacheKey(id))
 		var shed, fetched int
 		for i := 0; i < perURLFetchesPerMin+3; i++ {
 			before := env.hits.Load()
@@ -738,7 +749,7 @@ func TestShed_FailsClosedOnceTheCacheHasExpired(t *testing.T) {
 
 func TestShed_NotServedForUnknownURLs(t *testing.T) {
 	env := newTestEnv(t, okDoc)
-	env.fetcher.limiter = rate.NewLimiter(0, 0)
+	env.setLimiters(rate.NewLimiter(0, 0))
 	_, err := env.fetcher.Resolve(context.Background(), env.url("/never-seen.json"))
 	assert.Equal(t, KindBusy, kindOf(t, err))
 }
@@ -755,7 +766,7 @@ func TestShed_DeletedDocumentIsNotResurrected(t *testing.T) {
 		w.Header().Set("Cache-Control", "max-age=300")
 		writeDoc(w, self, nil)
 	})
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	id := env.url("/client.json")
 	resolveThenExpire(t, env, id)
 	gone.Store(true)
@@ -767,7 +778,7 @@ func TestShed_DeletedDocumentIsNotResurrected(t *testing.T) {
 	assert.False(t, env.hasDoc(id))
 	assert.False(t, env.hasKnown(id), "a withdrawn document is no longer known")
 
-	env.fetcher.limiter = rate.NewLimiter(0, 0)
+	env.setLimiters(rate.NewLimiter(0, 0))
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	assert.Equal(t, KindBusy, kindOf(t, err), "throttled lookup fails closed")
 	requireNoDocumentCopies(t, env)
@@ -789,7 +800,7 @@ func TestShed_RemovedRedirectURIIsNotReauthorized(t *testing.T) {
 			m["redirect_uris"] = []string{"https://app.example.com/callback", oldURI}
 		})
 	})
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	id := env.url("/client.json")
 	resolveThenExpire(t, env, id)
 	replaced.Store(true)
@@ -800,7 +811,7 @@ func TestShed_RemovedRedirectURIIsNotReauthorized(t *testing.T) {
 		assert.NotContains(t, doc.RedirectURIs, oldURI)
 	}
 
-	env.fetcher.limiter = rate.NewLimiter(0, 0)
+	env.setLimiters(rate.NewLimiter(0, 0))
 	doc, err := env.fetcher.Resolve(context.Background(), id)
 	if err == nil {
 		assert.NotContains(t, doc.RedirectURIs, oldURI, "the old redirect must never be authorized again")
@@ -860,7 +871,7 @@ func TestCache_EntryIsInvalidatedByDefinitiveAnswers(t *testing.T) {
 				}
 				tc.serve(w, r, self)
 			})
-			env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+			env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 			id := env.url("/client.json")
 			_, err := env.fetcher.Resolve(context.Background(), id)
 			require.NoError(t, err)
@@ -913,7 +924,7 @@ func TestShed_NeverServedWhenTheFetchHappenedAndFailed(t *testing.T) {
 				}
 				tc.serve(w, r, self)
 			})
-			env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+			env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 			id := env.url("/client.json")
 			resolveThenExpire(t, env, id)
 			healthy.Store(false)
@@ -923,7 +934,7 @@ func TestShed_NeverServedWhenTheFetchHappenedAndFailed(t *testing.T) {
 			assert.False(t, env.hasDoc(id), "errors are not cached")
 
 			// Even a shed fetch cannot bring the old document back.
-			env.fetcher.limiter = rate.NewLimiter(0, 0)
+			env.setLimiters(rate.NewLimiter(0, 0))
 			_, err = env.fetcher.Resolve(context.Background(), id)
 			assert.Equal(t, KindBusy, kindOf(t, err))
 			requireNoDocumentCopies(t, env)
@@ -984,12 +995,23 @@ func TestCacheBounds_OversizedDocumentServedButNotCached(t *testing.T) {
 	assert.False(t, env.hasKnown(id))
 }
 
-func TestCacheBounds_PerHostDailyCapOnNewDocuments(t *testing.T) {
+// briefOnly asserts a document is cached for at most minCacheTTL and not
+// marked known: what happens to a valid document beyond the new-document
+// budgets.
+func (e *testEnv) briefOnly(t *testing.T, id string) {
+	t.Helper()
+	assert.False(t, e.hasKnown(id), "beyond the budgets a document is never marked known")
+	if e.hasDoc(id) {
+		assert.LessOrEqual(t, e.mr.TTL(DocPrefix+cacheKey(id)), minCacheTTL)
+	}
+}
+
+func TestCacheBounds_PerDomainDailyCapOnNewDocuments(t *testing.T) {
 	env := newTestEnv(t, okDoc)
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	// Spread the fetches over time so the per-minute host budget is not what limits us.
 	var ids []string
-	for i := 0; i < newDocsPerHostPerDay+5; i++ {
+	for i := 0; i < newDocsPerDomainPerDay+5; i++ {
 		id := env.url(fmt.Sprintf("/c%d.json", i))
 		ids = append(ids, id)
 		_, err := env.fetcher.Resolve(context.Background(), id)
@@ -997,23 +1019,70 @@ func TestCacheBounds_PerHostDailyCapOnNewDocuments(t *testing.T) {
 		env.mr.FastForward(61 * time.Second)
 		// FastForward also ages cache entries; the per-day window is 24h, so stay below it.
 	}
-	cached := 0
+	known := 0
 	for _, id := range ids {
 		if env.hasKnown(id) {
-			cached++
+			known++
 		}
 	}
-	assert.Equal(t, newDocsPerHostPerDay, cached, "beyond the daily cap documents are served but not cached")
-	for _, id := range ids[newDocsPerHostPerDay:] {
-		assert.False(t, env.hasDoc(id))
+	assert.Equal(t, newDocsPerDomainPerDay, known, "beyond the daily cap documents are only cached briefly")
+	for _, id := range ids[newDocsPerDomainPerDay:] {
+		env.briefOnly(t, id)
 	}
 
-	// A day later the host can cache new documents again.
+	// A day later the domain can cache new documents again.
 	env.mr.FastForward(24 * time.Hour)
 	id := env.url("/next-day.json")
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err)
-	assert.True(t, env.hasDoc(id))
+	assert.True(t, env.hasKnown(id))
+}
+
+func TestRegistrableDomain(t *testing.T) {
+	for host, want := range map[string]string{
+		"a.b.evil.example.com": "example.com",
+		"EVIL.example.co.uk.":  "example.co.uk",
+		"tenant1.example":      "tenant1.example",
+		"x.tenant1.example":    "tenant1.example",
+		"localhost":            "localhost",
+		"app.github.io":        "app.github.io", // github.io is a public suffix
+		"x.app.github.io":      "app.github.io",
+		"127.0.0.1":            "127.0.0.1",
+		"one.two.three.test":   "three.test",
+	} {
+		assert.Equal(t, want, registrableDomain(host), host)
+	}
+}
+
+func TestCacheBounds_SubdomainsShareTheDomainBudget(t *testing.T) {
+	env := newTestEnv(t, okDoc)
+	ctx := context.Background()
+	for i := 0; i < newDocsPerDomainPerDay; i++ {
+		require.True(t, env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("x%d.evil.example", i)))
+	}
+	assert.False(t, env.fetcher.mayCacheNewDoc(ctx, "another-sub.evil.example"), "wildcard subdomains don't get fresh budgets")
+	assert.True(t, env.fetcher.mayCacheNewDoc(ctx, "client.unrelated.example"), "other domains are unaffected")
+}
+
+func TestCacheBounds_SpentBudgetsDontStopANewClient(t *testing.T) {
+	// Anyone can spend the new-document budgets (/authorize is
+	// unauthenticated). A new client that turns up afterwards must still be
+	// served from cache, not refetched on every use until its host's
+	// per-minute fetch budget refuses it.
+	env := newTestEnv(t, okDoc)
+	ctx := context.Background()
+	for i := 0; i < newDocsPerHour; i++ {
+		env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("tenant%d.example", i))
+	}
+	require.False(t, env.fetcher.mayCacheNewDoc(ctx, "probe.example"), "global budget spent")
+
+	id := env.url("/client.json")
+	for i := 0; i < perHostFetchesPerMin*2; i++ {
+		_, err := env.fetcher.Resolve(ctx, id)
+		require.NoError(t, err, "resolve %d", i)
+	}
+	assert.EqualValues(t, 1, env.hits.Load(), "served from the brief cache after the first fetch")
+	env.briefOnly(t, id)
 }
 
 func TestCacheBounds_RefreshOfKnownDocumentIsNotCountedAsNew(t *testing.T) {
@@ -1021,10 +1090,10 @@ func TestCacheBounds_RefreshOfKnownDocumentIsNotCountedAsNew(t *testing.T) {
 		w.Header().Set("Cache-Control", "max-age=300")
 		writeDoc(w, self, nil)
 	})
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	id := env.url("/client.json")
 	// More refreshes than the daily cap, one document.
-	for i := 0; i < newDocsPerHostPerDay*3; i++ {
+	for i := 0; i < newDocsPerDomainPerDay*3; i++ {
 		_, err := env.fetcher.Resolve(context.Background(), id)
 		require.NoError(t, err)
 		require.True(t, env.hasDoc(id), "refresh %d must still be cached", i)
@@ -1032,41 +1101,149 @@ func TestCacheBounds_RefreshOfKnownDocumentIsNotCountedAsNew(t *testing.T) {
 	}
 }
 
-func TestCacheBounds_GlobalHourlyCapAcrossHosts(t *testing.T) {
-	// Hostnames are free (wildcard DNS), so the per-host cap alone does not
-	// bound the cache: the cluster-wide counter does. Model many hosts by
-	// pre-spending the per-host budget under distinct host names.
+func TestCacheBounds_GlobalHourlyCapAcrossDomains(t *testing.T) {
+	// Registrable domains cost money but are still plentiful, so the
+	// per-domain cap alone does not bound the cache: the cluster-wide counter
+	// does. Model many domains by pre-spending budget under distinct ones.
 	env := newTestEnv(t, okDoc)
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	ctx := context.Background()
 	for i := 0; i < newDocsPerHour; i++ {
-		require.True(t, env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("host%d.example.com", i)))
+		require.True(t, env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("tenant%d.example", i)))
 	}
-	assert.False(t, env.fetcher.mayCacheNewDoc(ctx, "one-more.example.com"))
+	assert.False(t, env.fetcher.mayCacheNewDoc(ctx, "one-more.example"))
 
 	id := env.url("/client.json")
 	_, err := env.fetcher.Resolve(ctx, id)
 	require.NoError(t, err)
-	assert.False(t, env.hasDoc(id), "over the global cap: served, not cached")
+	env.briefOnly(t, id)
 
 	env.mr.FastForward(time.Hour + time.Second)
 	_, err = env.fetcher.Resolve(ctx, env.url("/client2.json"))
 	require.NoError(t, err)
-	assert.True(t, env.hasDoc(env.url("/client2.json")))
+	assert.True(t, env.hasKnown(env.url("/client2.json")))
 }
 
 func TestCacheBounds_FailsClosedWhenCountersUnavailable(t *testing.T) {
 	env := newTestEnv(t, okDoc)
-	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.setLimiters(rate.NewLimiter(rate.Inf, 1))
 	env.fetcher.store = failingIncrStore{env.fetcher.store}
 	id := env.url("/client.json")
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err, "the document is still served")
-	assert.False(t, env.hasDoc(id), "nothing new is cached when the budget can't be checked")
+	// When the budget can't be checked the document is only cached briefly.
+	env.briefOnly(t, id)
 }
 
 type failingIncrStore struct{ Store }
 
 func (failingIncrStore) IncrEphemeral(context.Context, string, time.Duration) (int64, error) {
 	return 0, fmt.Errorf("redis down")
+}
+
+// ===== unknown client_ids can't starve known clients =====
+
+func TestShed_UnknownLookupsDontStarveKnownClients(t *testing.T) {
+	// Review repro: junk client_ids (cheap: /authorize is unauthenticated)
+	// empty the process rate limiter; a known client whose cached document
+	// expired must still refresh.
+	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, nil)
+	})
+	id := env.url("/client.json")
+	resolveThenExpire(t, env, id)
+	require.True(t, env.hasKnown(id))
+
+	env.fetcher.limiter = rate.NewLimiter(0, 0) // drained by junk
+	_, err := env.fetcher.Resolve(context.Background(), env.url("/junk.json"))
+	assert.Equal(t, KindBusy, kindOf(t, err), "unknown URLs are shed")
+
+	doc, err := env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err, "the known client refreshes from its own pool")
+	assert.Equal(t, "Example MCP Client", doc.ClientName)
+}
+
+func TestShed_DomainCounterRunsBeforeTheProcessLimiter(t *testing.T) {
+	// Junk on one domain is shed by that domain's counter without spending
+	// the process-wide tokens other domains need.
+	env := newTestEnv(t, okDoc)
+	env.fetcher.limiter = rate.NewLimiter(0, perHostFetchesPerMin) // exactly the tokens one domain's budget can spend
+	for i := 0; i < perHostFetchesPerMin*3; i++ {
+		_, _ = env.fetcher.Resolve(context.Background(), env.url(fmt.Sprintf("/junk-%d.json", i)))
+	}
+	assert.EqualValues(t, perHostFetchesPerMin, env.hits.Load(), "only the domain budget's worth reached the network")
+	// The shed lookups beyond the budget took no tokens: a limiter with one
+	// more token than the budget would still have it.
+	env2 := newTestEnv(t, okDoc)
+	env2.fetcher.limiter = rate.NewLimiter(0, perHostFetchesPerMin+1)
+	for i := 0; i < perHostFetchesPerMin*3; i++ {
+		_, _ = env2.fetcher.Resolve(context.Background(), env2.url(fmt.Sprintf("/junk-%d.json", i)))
+	}
+	assert.InDelta(t, 1.0, env2.fetcher.limiter.Tokens(), 0.01)
+}
+
+func TestKnownPool_OneDomainHoldsAtMostItsShare(t *testing.T) {
+	// Review: a domain that controls several known URLs could make their
+	// refreshes hang and hold every slot of the known pool.
+	release := make(chan struct{})
+	var hang atomic.Bool
+	env := newTestEnv(t, func(w http.ResponseWriter, r *http.Request, self string) {
+		if hang.Load() && strings.HasPrefix(r.URL.Path, "/hang") {
+			<-release
+		}
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, nil)
+	})
+	t.Cleanup(func() { close(release) })
+	var ids []string
+	for i := 0; i < maxKnownFetchesPerDomain+1; i++ {
+		id := env.url(fmt.Sprintf("/hang-%d.json", i))
+		ids = append(ids, id)
+		resolveThenExpire(t, env, id)
+	}
+	hang.Store(true)
+
+	var wg sync.WaitGroup
+	for _, id := range ids[:maxKnownFetchesPerDomain] {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, _ = env.fetcher.Resolve(ctx, id)
+		}(id)
+	}
+	require.Eventually(t, func() bool {
+		env.fetcher.knownMu.Lock()
+		defer env.fetcher.knownMu.Unlock()
+		return env.fetcher.knownByDomain[registrableDomain(hostOf(ids[0]))] == maxKnownFetchesPerDomain
+	}, 2*time.Second, 10*time.Millisecond)
+
+	tokensBefore := env.fetcher.knownLimiter.Tokens()
+	for i := 0; i < 5; i++ {
+		_, err := env.fetcher.Resolve(context.Background(), ids[maxKnownFetchesPerDomain])
+		assert.Equal(t, KindBusy, kindOf(t, err), "a third hanging refresh from the same domain is shed")
+		env.mr.Del(URLPrefix + cacheKey(ids[maxKnownFetchesPerDomain])) // stay under the per-URL budget
+	}
+	assert.GreaterOrEqual(t, env.fetcher.knownLimiter.Tokens(), tokensBefore, "refreshes shed by the domain cap spend no shared tokens")
+	assert.Less(t, len(env.fetcher.knownSem), cap(env.fetcher.knownSem), "the rest of the known pool stays free for other domains")
+	wg.Wait()
+}
+
+func TestKnownPool_DomainAccounting(t *testing.T) {
+	env := newTestEnv(t, okDoc)
+	f := env.fetcher
+	for i := 0; i < maxKnownFetchesPerDomain; i++ {
+		require.True(t, f.acquireKnownDomain("evil.example"))
+	}
+	assert.False(t, f.acquireKnownDomain("evil.example"))
+	assert.True(t, f.acquireKnownDomain("client.example"), "other domains are unaffected")
+	f.releaseKnownDomain("evil.example")
+	assert.True(t, f.acquireKnownDomain("evil.example"), "a slot frees up on release")
+	for i := 0; i < maxKnownFetchesPerDomain; i++ {
+		f.releaseKnownDomain("evil.example")
+	}
+	f.releaseKnownDomain("client.example")
+	assert.Empty(t, f.knownByDomain, "no entries leak")
 }
