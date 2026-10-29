@@ -372,6 +372,7 @@ lc-mcp-server/
 │   │   └── middleware.go    # Auth and rate limiting middleware
 │   │
 │   ├── oauth/               # OAuth 2.1 implementation
+│   │   ├── cimd/            # Client ID Metadata Document resolution (SSRF-guarded)
 │   │   ├── firebase/        # Firebase authentication
 │   │   ├── state/           # OAuth state management
 │   │   └── token/           # Token encryption and storage

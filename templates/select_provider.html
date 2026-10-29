@@ -196,6 +196,44 @@
             text-shadow: 0 0 12px var(--lc-hover-glow);
         }
 
+
+        /* Client identity (Client ID Metadata Document clients) */
+        .client-info {
+            margin: 0 0 24px;
+            padding: 16px;
+            background: var(--lc-glass-bg);
+            border: 1px solid var(--lc-glass-border);
+            border-radius: 12px;
+            font-size: 14px;
+            color: var(--lc-text-primary);
+            text-align: left;
+            overflow-wrap: anywhere;
+        }
+
+        .client-info .client-name {
+            font-weight: 600;
+        }
+
+        .client-info .client-detail {
+            margin-top: 8px;
+            font-size: 13px;
+            color: var(--lc-text-secondary);
+        }
+
+        .client-info code {
+            color: var(--lc-text-primary);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        }
+
+        .client-warning {
+            margin-top: 12px;
+            padding: 10px 12px;
+            border: 1px solid #E2A54A;
+            border-radius: 8px;
+            background: rgba(226, 165, 74, 0.1);
+            font-size: 13px;
+        }
+
         /* Security badge */
         .security-badge {
             display: flex;
@@ -268,6 +306,19 @@
             <p class="subtitle">
                 Choose your authentication provider to continue
             </p>
+
+            {{if .Client}}
+            <div class="client-info" id="client-info">
+                <div><span class="client-name">{{.Client.Name}}</span> is requesting access to your LimaCharlie account.</div>
+                <div class="client-detail">Application: <code>{{.Client.ClientIDHost}}</code> (<code>{{.Client.ClientID}}</code>)</div>
+                <div class="client-detail">After you sign in, you will be sent to: <code>{{.Client.RedirectHost}}</code></div>
+                {{if .Client.Localhost}}
+                <div class="client-warning" role="alert">
+                    Warning: this application will receive your sign-in on your own computer ({{.Client.RedirectHost}}). Anything running on that machine and port can receive it. Continue only if you started this connection yourself.
+                </div>
+                {{end}}
+            </div>
+            {{end}}
 
             <div class="provider-buttons">
                 <a href="/oauth/select-provider/google?session={{.SessionID}}"

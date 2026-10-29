@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/cimd"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/resource"
@@ -31,7 +32,8 @@ type Handlers struct {
 	metadataProvider    *metadata.Provider
 	logger              *slog.Logger
 	templates           *template.Template
-	allowedRedirectURIs []string // Whitelist of allowed redirect URIs for security
+	allowedRedirectURIs []string     // Whitelist of allowed redirect URIs for security
+	cimd                cimdResolver // Client ID Metadata Document resolver; nil rejects URL client_ids
 }
 
 // NewHandlers creates new OAuth endpoint handlers
@@ -61,6 +63,7 @@ func NewHandlers(stateManager *state.Manager, tokenManager *token.Manager, fireb
 		logger:              logger,
 		templates:           tmpl,
 		allowedRedirectURIs: allowedRedirectURIs,
+		cimd:                cimd.NewFetcher(stateManager, logger),
 	}, nil
 }
 
@@ -99,7 +102,15 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	// SECURITY FIX: Validate redirect URI against whitelist with exact match
 	// Prevents open redirect attacks (e.g., https://evil.com)
-	if !h.isValidRedirectURI(r.Context(), redirectURI, clientID) {
+	// A URL client_id is a Client ID Metadata Document client: its document is
+	// the only authority for its redirect URIs.
+	isCIMD := cimd.LooksLikeURL(clientID)
+	if isCIMD {
+		if oerr := h.authorizeCIMDClient(r.Context(), clientID, redirectURI); oerr != nil {
+			WriteOAuthError(w, oerr)
+			return
+		}
+	} else if !h.isValidRedirectURI(r.Context(), redirectURI, clientID) {
 		h.logger.Warn("Invalid redirect_uri (not in whitelist)", "uri", redirectURI, "client_id", clientID)
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "redirect_uri not allowed for this client", http.StatusBadRequest))
 		return
@@ -113,6 +124,14 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("Invalid resource in authorization request", "error", err, "client_id", clientID)
 		WriteOAuthError(w, NewOAuthError(ErrInvalidTarget, "resource is not a valid resource of this server", http.StatusBadRequest))
 		return
+	}
+
+	// CIMD clients must pass through the selection page, which shows who is
+	// asking and where the user will be sent. A direct provider parameter is
+	// honoured only with the acknowledgement that page issues.
+	if isCIMD && provider != "" && !h.consumeSelectionAck(w, r, clientID, redirectURI, stateParam, codeChallenge) {
+		h.logger.Info("CIMD client skipped selection page; showing it", "client_host", clientHost(clientID))
+		provider = ""
 	}
 
 	// Filter scope to supported scopes
@@ -627,26 +646,32 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 			nonce = n
 		}
 
+		client, oerr := h.selectionDisplay(r.Context(), sessionID)
+		if oerr != nil {
+			WriteOAuthError(w, oerr)
+			return
+		}
+
 		data := struct {
 			SessionID string
 			CSPNonce  string
+			Client    *clientDisplay
 		}{
 			SessionID: sessionID,
 			CSPNonce:  nonce,
+			Client:    client,
 		}
 		h.templates.ExecuteTemplate(w, "select_provider.html", data)
 	} else {
 		// Handle POST - provider selected
 		provider := r.FormValue("provider")
 		params, _ := h.stateManager.ConsumeSelectionSession(r.Context(), sessionID)
-		params["provider"] = provider
-		// Build authorize URL with provider
-		q := url.Values{}
-		for k, v := range params {
-			q.Set(k, v)
+		if params == nil {
+			WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
+			return
 		}
-		authorizeURL := "/authorize?" + q.Encode()
-		http.Redirect(w, r, authorizeURL, http.StatusFound)
+		params["provider"] = provider
+		h.RedirectToAuthorize(w, r, params)
 	}
 }
 
@@ -1019,6 +1044,12 @@ func (h *Handlers) HandleRegister(w http.ResponseWriter, r *http.Request) {
 // isValidRedirectURI validates redirect URIs against whitelist and registered clients
 // SECURITY FIX: Now uses exact match against whitelist instead of accepting any HTTPS URL
 func (h *Handlers) isValidRedirectURI(ctx context.Context, uri string, clientID string) bool {
+	// URL client_ids are validated against their metadata document only; they
+	// never reach the registration lookup or the global allow-list below.
+	if cimd.LooksLikeURL(clientID) {
+		return h.authorizeCIMDClient(ctx, clientID, uri) == nil
+	}
+
 	// Parse URL for validation
 	u, err := url.Parse(uri)
 	if err != nil {

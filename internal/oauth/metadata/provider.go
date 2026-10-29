@@ -80,7 +80,11 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 		// OAuth 2.0 endpoints
 		"authorization_endpoint": p.serverURL + "/authorize",
 		"token_endpoint":         p.serverURL + "/token",
-		"registration_endpoint":  p.serverURL + "/register",
+		"registration_endpoint":  p.serverURL + "/register", // deprecated in favour of CIMD
+
+		// OAuth Client ID Metadata Documents: an https URL client_id is resolved
+		// by fetching the document it points to.
+		"client_id_metadata_document_supported": true,
 
 		// Optional endpoints
 		"revocation_endpoint":    p.serverURL + "/revoke",
