@@ -61,6 +61,14 @@ type AuthContext struct {
 	JWTToken        string
 	FirebaseIDToken string // Firebase ID token for JWT regeneration in UID mode
 	Environment     string
+
+	// Scopes holds the OAuth scopes of an MCP access token. Nil for every
+	// credential that is not an MCP OAuth token (API keys, LimaCharlie JWT
+	// passthrough, server-wide credentials), which are not OAuth-scoped and
+	// are left unrestricted. A non-nil grant is enforced on every tool call,
+	// direct and indirect. Clone must carry it: org switching clones the
+	// context, and dropping the grant there would silently lift the limit.
+	Scopes *ScopeGrant
 }
 
 // Clone creates a deep copy of the AuthContext
@@ -73,6 +81,7 @@ func (a *AuthContext) Clone() *AuthContext {
 		JWTToken:        a.JWTToken,
 		FirebaseIDToken: a.FirebaseIDToken,
 		Environment:     a.Environment,
+		Scopes:          a.Scopes,
 	}
 }
 

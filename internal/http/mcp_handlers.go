@@ -298,6 +298,14 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 		ctx = auth.WithAllowedTools(ctx, allowedTools)
 	}
 
+	// OAuth scope: an MCP access token only reaches the tools its granted
+	// scopes cover. Checked before any org is resolved or switched, so a refused
+	// call has no side effects. Other credentials are not OAuth-scoped.
+	if err := auth.CheckScope(ctx, toolName, tool.TransportScope()); err != nil {
+		s.writeInsufficientScope(w, r, id, err)
+		return
+	}
+
 	if tool.NeedsOID() {
 		// Resolve the OID the call will actually execute against: the explicit
 		// argument when given, otherwise the OID already pinned on the auth
@@ -329,6 +337,14 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	result, err := tool.Invoke(ctx, arguments)
 	toolDuration := time.Since(toolStartTime)
 	if err != nil {
+		// A meta tool that dispatched to a tool the token's scopes do not
+		// cover: the same 403 challenge as a direct call, so the client can
+		// step up and retry.
+		var scopeErr *auth.InsufficientScopeError
+		if errors.As(err, &scopeErr) {
+			s.writeInsufficientScope(w, r, id, scopeErr)
+			return
+		}
 		s.logger.Info("Tool execution failed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds(), "error", err.Error())
 		// A failure inside the tool is a tool execution error (isError), not
 		// a protocol error, so the model sees the reason and can adapt.
@@ -424,8 +440,14 @@ func (f *authFailure) write(s *Server, w http.ResponseWriter, r *http.Request, i
 //  1. Bearer token → OAuth access token or LimaCharlie JWT passthrough
 //  2. X-LC-UID + X-LC-API-KEY → user API key (X-LC-OID sets its default org)
 //  3. X-LC-OID + X-LC-API-KEY → organization API key
-//  4. server-wide credentials from the environment
-//  5. none of the above → unauthorized
+//  4. server-wide credentials from the environment, only when the request
+//     carries no credential header at all
+//  5. none of the above → unauthorized (including an incomplete header set,
+//     which never falls back to the server-wide credentials)
+//
+// Only an MCP OAuth access token is OAuth-scoped: its granted scopes travel on
+// the returned AuthContext. API keys, LimaCharlie JWT passthrough and the
+// server-wide credentials carry none and are not restricted by scope.
 func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolvedAuth, *authFailure) {
 	authHeader := r.Header.Get("Authorization")
 	lcUID := r.Header.Get("X-LC-UID")
@@ -463,7 +485,7 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 		// Verify and extract UID, LimaCharlie JWT, and Firebase token from MCP access token
 		s.logger.Info("Extracting UID from token", "request_id", requestID)
 		tokenStartTime := time.Now()
-		uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken, r.URL.Path)
+		verified, err := s.extractUIDFromToken(bearerToken, r.URL.Path)
 		tokenDuration := time.Since(tokenStartTime)
 		if err != nil {
 			s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
@@ -479,6 +501,7 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 			return nil, &authFailure{message: "Unauthorized", detail: fmt.Sprintf("Invalid token: %v", err)}
 		}
 		s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
+		uid, limaCharlieJWT, firebaseIDToken := verified.uid, verified.limaCharlieJWT, verified.firebaseIDToken
 
 		// JWT passthrough mode detection: no Firebase token means direct JWT
 		isJWTPassthrough := firebaseIDToken == ""
@@ -509,6 +532,7 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 				UID:             uid,
 				JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
 				FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
+				Scopes:          verified.scopes, // nil unless an MCP OAuth token
 			},
 			jwtPassthrough: isJWTPassthrough,
 		}, nil
@@ -539,6 +563,15 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 			OID:    lcOID,
 			APIKey: lcAPIKey,
 		}}, nil
+	}
+
+	// A request that presented credential headers, but not a complete set, was
+	// aimed at some identity and must not silently run as the server's own: a
+	// lone X-LC-API-KEY, X-LC-UID or X-LC-OID would otherwise execute with the
+	// server-wide credentials, in the server's org. Reject it like a request
+	// with no credentials at all.
+	if lcUID != "" || lcOID != "" || lcAPIKey != "" {
+		return nil, &authFailure{challenge: true, detail: incompleteCredentialsDetail(lcUID, lcOID, lcAPIKey)}
 	}
 
 	if s.serverAuthCtx != nil && s.serverAuthCtx.HasCredentials() {
@@ -601,6 +634,14 @@ func (s *Server) oidParamNeeded(r *http.Request, call *mcpCall) bool {
 // listTools returns the tool definitions this request may see, sorted by name
 // so that the listing is stable across requests (clients cache it, and a
 // stable order keeps LLM prompt caches warm).
+//
+// The listing is NOT narrowed by the OAuth scopes of the request's token: it
+// stays the full catalog for the endpoint, as it always was, and tools/call is
+// where scopes are enforced. Hiding tools would cost a token-store lookup on
+// every listing, and would stop a client from ever discovering a tool it could
+// step up its scope to use: the 403 insufficient_scope challenge on the call
+// is what tells it how. Each tool's readOnlyHint annotation is in the listing
+// for clients that want to present that.
 func (s *Server) listTools(r *http.Request, needsOIDParam bool) ([]mcp.Tool, error) {
 	// Get tools for this request (may be from profile or X-MCP-Tools header)
 	toolNames, err := s.getToolsForRequest(r)
@@ -688,9 +729,19 @@ type audienceError struct{ msg string }
 func (e *audienceError) Error() string { return e.msg }
 func (e *audienceError) Unwrap() error { return errInvalidCredentials }
 
+// verifiedToken is what a verified bearer token yields.
+type verifiedToken struct {
+	uid             string
+	limaCharlieJWT  string
+	firebaseIDToken string
+	// scopes is the grant of an MCP OAuth access token; nil for a LimaCharlie
+	// JWT, which is not OAuth-scoped.
+	scopes *auth.ScopeGrant
+}
+
 // extractUIDFromToken verifies a bearer token presented at requestPath. An MCP
 // OAuth token must be bound to a resource covering requestPath (RFC 8707).
-func (s *Server) extractUIDFromToken(token, requestPath string) (string, string, string, error) {
+func (s *Server) extractUIDFromToken(token, requestPath string) (*verifiedToken, error) {
 	// Try parsing as LimaCharlie JWT first (for API gateway / internal services)
 	if auth.IsJWTFormat(token) {
 		claims, err := parseLimaCharlieJWT(token)
@@ -702,9 +753,9 @@ func (s *Server) extractUIDFromToken(token, requestPath string) (string, string,
 				"is_user_token", claims.IsUserToken,
 				"oids", claims.OIDs)
 
-			// Return: (uid, jwt token itself, empty firebase token, nil)
-			// Empty firebase token signals JWT passthrough mode
-			return claims.UID, token, "", nil
+			// The JWT itself, with an empty firebase token: that combination
+			// signals JWT passthrough mode. Not OAuth-scoped.
+			return &verifiedToken{uid: claims.UID, limaCharlieJWT: token}, nil
 		}
 		s.logger.Debug("Not a valid LimaCharlie JWT, trying OAuth token validation", "error", err)
 	}
@@ -715,7 +766,7 @@ func (s *Server) extractUIDFromToken(token, requestPath string) (string, string,
 
 	// Check if OAuth is configured
 	if s.tokenManager == nil {
-		return "", "", "", fmt.Errorf("%w: OAuth not configured and token is not a valid LimaCharlie JWT", errInvalidCredentials)
+		return nil, fmt.Errorf("%w: OAuth not configured and token is not a valid LimaCharlie JWT", errInvalidCredentials)
 	}
 
 	// Validate the MCP access token using token manager
@@ -727,22 +778,28 @@ func (s *Server) extractUIDFromToken(token, requestPath string) (string, string,
 	validation, err := s.tokenManager.ValidateAccessTokenForAudience(ctx, token, true, s.audienceCheck(requestPath))
 	if err != nil {
 		s.logger.Error("Token validation error", "error", err)
-		return "", "", "", fmt.Errorf("token validation failed: %w", err)
+		return nil, fmt.Errorf("token validation failed: %w", err)
 	}
 
 	if !validation.Valid {
 		if validation.AudienceMismatch {
-			return "", "", "", &audienceError{msg: validation.Error}
+			return nil, &audienceError{msg: validation.Error}
 		}
 		if validation.Transient {
-			return "", "", "", fmt.Errorf("token could not be validated: %s", validation.Error)
+			return nil, fmt.Errorf("token could not be validated: %s", validation.Error)
 		}
-		return "", "", "", fmt.Errorf("%w: invalid or expired token: %s", errInvalidCredentials, validation.Error)
+		return nil, fmt.Errorf("%w: invalid or expired token: %s", errInvalidCredentials, validation.Error)
 	}
 
-	// Return the Firebase UID, LimaCharlie JWT (exchanged from Firebase token), and Firebase ID token
-	// The Firebase ID token is needed for regenerating JWTs with OID when switching orgs
-	return validation.UID, validation.LimaCharlieJWT, validation.FirebaseIDToken, nil
+	// The Firebase UID, LimaCharlie JWT (exchanged from the Firebase token) and
+	// Firebase ID token (needed to regenerate JWTs with an OID when switching
+	// orgs), plus the scopes the token was granted.
+	return &verifiedToken{
+		uid:             validation.UID,
+		limaCharlieJWT:  validation.LimaCharlieJWT,
+		firebaseIDToken: validation.FirebaseIDToken,
+		scopes:          auth.NewScopeGrant(validation.Scope),
+	}, nil
 }
 
 // audienceCheck returns the check that a token's resource covers the MCP
