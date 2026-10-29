@@ -123,6 +123,7 @@ func TestFinalizeMFASignIn_ErrorMapping(t *testing.T) {
 		{"wrong code with detail", 400, firebaseErr("INVALID_CODE : Invalid verification code."), ErrMFAInvalidCode},
 		{"empty code", 400, firebaseErr("MISSING_CODE"), ErrMFAInvalidCode},
 		{"pending credential expired", 400, firebaseErr("INVALID_MFA_PENDING_CREDENTIAL"), ErrMFASessionExpired},
+		{"pending credential rejected", 400, firebaseErr("INVALID_PENDING_TOKEN"), ErrMFASessionExpired},
 		{"session expired", 400, firebaseErr("SESSION_EXPIRED"), ErrMFASessionExpired},
 		{"rate limited", 400, firebaseErr("TOO_MANY_ATTEMPTS_TRY_LATER"), ErrMFATooManyAttempts},
 		{"wrong enrollment is not a bad code", 400, firebaseErr("INVALID_MFA_ENROLLMENT_ID"), nil},
