@@ -373,6 +373,10 @@ func (s *Server) writeToolError(w http.ResponseWriter, call *mcpCall, message st
 	s.writeRPCResult(w, call, tools.ErrorResult(message), false)
 }
 
+// parseLimaCharlieJWT verifies a LimaCharlie JWT. A variable so that tests can
+// present tokens signed with a test key.
+var parseLimaCharlieJWT = auth.ParseAndValidateLimaCharlieJWT
+
 // resolvedAuth is the credential a request presents, resolved once by
 // resolveRequestAuth so that tools/list and tools/call agree on it.
 type resolvedAuth struct {
@@ -383,9 +387,14 @@ type resolvedAuth struct {
 }
 
 // pinnedOID returns the organization the credential fixes every call to, or
-// "" when the caller may (or must) choose one per call.
+// "" when the caller may (or must) choose one per call. Only organization
+// credentials (org API key, org JWT, server-wide org credentials) qualify:
+// auth.WithOID refuses to switch them, so a listing without oid can never
+// hide an org the caller could otherwise reach. A user key sent with
+// X-LC-OID only defaults to that org and can still switch, so it is not
+// pinned.
 func (a *resolvedAuth) pinnedOID() string {
-	if a == nil || a.authCtx == nil || a.jwtPassthrough {
+	if a == nil || a.authCtx == nil || a.jwtPassthrough || a.authCtx.Mode != auth.AuthModeNormal {
 		return ""
 	}
 	return a.authCtx.OID
@@ -542,9 +551,6 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, call *m
 	s.writeRPCResult(w, call, map[string]any{"tools": toolList}, true)
 }
 
-// listTools returns the tool definitions this request may see, sorted by name
-// so that the listing is stable across requests (clients cache it, and a
-// stable order keeps LLM prompt caches warm).
 // orgPinnedForListing reports whether a modern tools/list request carries
 // credentials that fix every call to one organization. The 2026-07-28 spec
 // lets the tool list vary by the authorization presented, so for such callers
@@ -560,10 +566,8 @@ func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
 		// Only X-LC-OID can pin a request credential to one org, so there is
 		// no need to validate (for a Bearer token, look up) the credential.
 		// Without request credentials the server-wide ones apply.
-		if r.Header.Get("Authorization") != "" || r.Header.Get("X-LC-UID") != "" || r.Header.Get("X-LC-API-KEY") != "" {
-			return false
-		}
-		return s.serverAuthCtx != nil && s.serverAuthCtx.OID != ""
+		// (Server-wide org credentials are handled by listTools itself.)
+		return false
 	}
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 		// Among Bearer tokens only an org-level LimaCharlie JWT can pin an
@@ -573,7 +577,7 @@ func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
 		if !ok || !auth.IsJWTFormat(token) {
 			return false
 		}
-		if claims, err := auth.ParseAndValidateLimaCharlieJWT(token); err != nil || claims.UID != "" {
+		if claims, err := parseLimaCharlieJWT(token); err != nil || claims.UID != "" {
 			return false
 		}
 	}
@@ -584,6 +588,9 @@ func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
 	return resolved.pinnedOID() != ""
 }
 
+// listTools returns the tool definitions this request may see, sorted by name
+// so that the listing is stable across requests (clients cache it, and a
+// stable order keeps LLM prompt caches warm).
 func (s *Server) listTools(r *http.Request, orgPinned bool) ([]mcp.Tool, error) {
 	// Get tools for this request (may be from profile or X-MCP-Tools header)
 	toolNames, err := s.getToolsForRequest(r)
@@ -637,7 +644,7 @@ func (s *Server) listTools(r *http.Request, orgPinned bool) ([]mcp.Tool, error) 
 // answer is "no" only when the claims carry a concrete org list that excludes
 // the requested OID — the case where the caller is naming someone else's org.
 func (s *Server) jwtCoversOID(jwtString, oid, requestID string) bool {
-	claims, err := auth.ParseAndValidateLimaCharlieJWT(jwtString)
+	claims, err := parseLimaCharlieJWT(jwtString)
 	if err != nil {
 		// Not a parseable LC JWT (e.g. an MCP OAuth token): nothing to compare
 		// against here, and the credential was already validated upstream.
@@ -676,7 +683,7 @@ func oidCoveredByClaims(claimOIDs []string, oid string) bool {
 func (s *Server) extractUIDFromToken(token string) (string, string, string, error) {
 	// Try parsing as LimaCharlie JWT first (for API gateway / internal services)
 	if auth.IsJWTFormat(token) {
-		claims, err := auth.ParseAndValidateLimaCharlieJWT(token)
+		claims, err := parseLimaCharlieJWT(token)
 		if err == nil {
 			// Valid LimaCharlie JWT - passthrough mode
 			s.logger.Info("Authenticated via LimaCharlie JWT passthrough",

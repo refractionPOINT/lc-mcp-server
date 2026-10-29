@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -124,7 +125,9 @@ func TestModernToolsListOmitsOIDWhenCredentialPinsOrg(t *testing.T) {
 		wantPinned bool
 	}{
 		{"org API key", map[string]string{"X-LC-OID": testOID, "X-LC-API-KEY": testAPIKey}, true},
-		{"user API key pinned to an org", map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey, "X-LC-OID": testOID}, true},
+		// X-LC-OID only sets a user key's default org; the key can still
+		// switch, so the model must keep the oid parameter.
+		{"user API key with a default org", map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey, "X-LC-OID": testOID}, false},
 		{"user API key, multi-org", map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey}, false},
 		{"no credentials", map[string]string{}, false},
 		{"malformed OID header", map[string]string{"X-LC-OID": "bad oid!", "X-LC-API-KEY": testAPIKey}, false},
@@ -198,7 +201,7 @@ func TestResolveRequestAuth(t *testing.T) {
 		wantChallng bool
 	}{
 		{"org key", map[string]string{"X-LC-OID": testOID, "X-LC-API-KEY": testAPIKey}, auth.AuthModeNormal, testOID, testOID, false, false},
-		{"user key pinned", map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey, "X-LC-OID": testOID}, auth.AuthModeUIDKey, testOID, testOID, false, false},
+		{"user key with default org", map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey, "X-LC-OID": testOID}, auth.AuthModeUIDKey, testOID, "", false, false},
 		{"user key", map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey}, auth.AuthModeUIDKey, "", "", false, false},
 		{"bad OID", map[string]string{"X-LC-OID": "bad oid!", "X-LC-API-KEY": testAPIKey}, 0, "", "", true, false},
 		{"bad UID", map[string]string{"X-LC-UID": "bad uid!", "X-LC-API-KEY": testAPIKey}, 0, "", "", true, false},
@@ -404,4 +407,105 @@ func TestModernToolsListDoesNotLookUpOAuthTokens(t *testing.T) {
 	resp = postJSON(t, s, "/mcp", call, callHeaders)
 	assert.Equal(t, http.StatusUnauthorized, resp.Status)
 	assert.Greater(t, mr.CommandCount(), before)
+}
+
+// --- LimaCharlie JWT passthrough ----------------------------------------------
+
+// fakeLCJWTs stands in for LimaCharlie JWT verification (real tokens are
+// signed with the platform key, which tests cannot do).
+func fakeLCJWTs(t *testing.T, tokens map[string]*auth.LCClaims) {
+	t.Helper()
+	orig := parseLimaCharlieJWT
+	parseLimaCharlieJWT = func(token string) (*auth.LCClaims, error) {
+		if c, ok := tokens[token]; ok {
+			return c, nil
+		}
+		return nil, errors.New("signature is invalid")
+	}
+	t.Cleanup(func() { parseLimaCharlieJWT = orig })
+}
+
+func TestLimaCharlieJWTListingAndCallAgree(t *testing.T) {
+	const otherOID = "99999999-8888-7777-6666-555555555555"
+	const (
+		orgJWT      = "hdr.org-token.sig"
+		otherOrgJWT = "hdr.other-org-token.sig"
+		userJWT     = "hdr.user-token.sig"
+	)
+	cases := []struct {
+		name string
+		hdrs map[string]string
+		args map[string]any
+		// wantPinned: the modern listing omits oid.
+		wantPinned bool
+		// wantOID: the org the call runs against ("" = tool error); 0 code
+		// means the call succeeded at the protocol level.
+		wantOID     string
+		wantToolErr string
+		wantRPCCode int
+	}{
+		{name: "org JWT + covered X-LC-OID", hdrs: map[string]string{"Authorization": "Bearer " + orgJWT, "X-LC-OID": testOID},
+			args: map[string]any{"filter": "x"}, wantPinned: true, wantOID: testOID},
+		{name: "org JWT + covered X-LC-OID cannot switch", hdrs: map[string]string{"Authorization": "Bearer " + orgJWT, "X-LC-OID": testOID},
+			args: map[string]any{"filter": "x", "oid": otherOID}, wantPinned: true, wantToolErr: "cannot switch OID"},
+		{name: "org JWT + uncovered X-LC-OID", hdrs: map[string]string{"Authorization": "Bearer " + otherOrgJWT, "X-LC-OID": testOID},
+			args: map[string]any{"filter": "x"}, wantPinned: false, wantRPCCode: -32000},
+		{name: "org JWT without X-LC-OID must name the org", hdrs: map[string]string{"Authorization": "Bearer " + orgJWT},
+			args: map[string]any{"filter": "x"}, wantPinned: false, wantToolErr: "'oid' parameter is required"},
+		{name: "org JWT without X-LC-OID naming the org", hdrs: map[string]string{"Authorization": "Bearer " + orgJWT},
+			args: map[string]any{"filter": "x", "oid": testOID}, wantPinned: false, wantOID: testOID},
+		{name: "user JWT + X-LC-OID is not pinned", hdrs: map[string]string{"Authorization": "Bearer " + userJWT, "X-LC-OID": testOID},
+			args: map[string]any{"filter": "x", "oid": otherOID}, wantPinned: false, wantOID: otherOID},
+		{name: "user JWT + X-LC-OID without oid", hdrs: map[string]string{"Authorization": "Bearer " + userJWT, "X-LC-OID": testOID},
+			args: map[string]any{"filter": "x"}, wantPinned: false, wantToolErr: "'oid' parameter is required"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeLCJWTs(t, map[string]*auth.LCClaims{
+				orgJWT:      {OIDs: []string{testOID}},
+				otherOrgJWT: {OIDs: []string{otherOID}},
+				userJWT:     {UID: testUID, IsUserToken: true},
+			})
+			srv := newProtocolTestServer(t)
+			registerOrgScopedTool(t)
+
+			list, listHeaders := modernRequest(1, "tools/list", nil)
+			delete(listHeaders, "X-LC-OID")
+			delete(listHeaders, "X-LC-API-KEY")
+			for k, v := range tc.hdrs {
+				listHeaders[k] = v
+			}
+			listHeaders["X-MCP-Tools"] = protoOrgTool
+			resp := postJSON(t, srv, "/mcp", list, listHeaders)
+			require.Equal(t, http.StatusOK, resp.Status, "%s", resp.Raw)
+			props := listedTool(t, resp, protoOrgTool)["inputSchema"].(map[string]any)["properties"].(map[string]any)
+			if tc.wantPinned {
+				assert.NotContains(t, props, "oid")
+			} else {
+				assert.Contains(t, props, "oid")
+			}
+
+			call, callHeaders := modernRequest(2, "tools/call", map[string]any{"name": protoOrgTool, "arguments": tc.args})
+			delete(callHeaders, "X-LC-OID")
+			delete(callHeaders, "X-LC-API-KEY")
+			for k, v := range tc.hdrs {
+				callHeaders[k] = v
+			}
+			callHeaders["X-MCP-Tools"] = protoOrgTool
+			resp = postJSON(t, srv, "/mcp", call, callHeaders)
+			require.Equal(t, http.StatusOK, resp.Status, "%s", resp.Raw)
+			if tc.wantRPCCode != 0 {
+				assert.Equal(t, tc.wantRPCCode, resp.errorCode(t))
+				return
+			}
+			text, isErr := toolText(t, resp)
+			if tc.wantToolErr != "" {
+				assert.True(t, isErr, text)
+				assert.Contains(t, text, tc.wantToolErr)
+				return
+			}
+			require.False(t, isErr, text)
+			assert.JSONEq(t, `{"oid":"`+tc.wantOID+`"}`, text)
+		})
+	}
 }
