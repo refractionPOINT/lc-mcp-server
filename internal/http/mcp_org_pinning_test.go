@@ -376,3 +376,32 @@ func TestOversizedBodyIs413(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	assert.Equal(t, float64(-32600), body["error"].(map[string]any)["code"])
 }
+
+func TestModernToolsListDoesNotLookUpOAuthTokens(t *testing.T) {
+	// An MCP OAuth token can never pin an org, so listing with one (even
+	// alongside X-LC-OID) must not reach the token store.
+	s, mr := createOAuthTestServer(t)
+	s.profile = ""
+	registerProtocolTestTools(t)
+	registerOrgScopedTool(t)
+	body, headers := modernRequest(1, "tools/list", nil)
+	delete(headers, "X-LC-API-KEY")
+	headers["Authorization"] = "Bearer opaque-mcp-oauth-token"
+	headers["X-MCP-Tools"] = protoOrgTool
+
+	before := mr.CommandCount()
+	resp := postJSON(t, s, "/mcp", body, headers)
+	require.Equal(t, http.StatusOK, resp.Status, "%s", resp.Raw)
+	assert.Equal(t, before, mr.CommandCount(), "tools/list looked up the token")
+	schema := listedTool(t, resp, protoOrgTool)["inputSchema"].(map[string]any)
+	assert.Contains(t, schema["properties"], "oid")
+
+	// The same token on tools/call is looked up (and rejected) as before.
+	call, callHeaders := modernRequest(2, "tools/call", map[string]any{"name": protoOrgTool, "arguments": map[string]any{"filter": "x"}})
+	delete(callHeaders, "X-LC-API-KEY")
+	callHeaders["Authorization"] = "Bearer opaque-mcp-oauth-token"
+	callHeaders["X-MCP-Tools"] = protoOrgTool
+	resp = postJSON(t, s, "/mcp", call, callHeaders)
+	assert.Equal(t, http.StatusUnauthorized, resp.Status)
+	assert.Greater(t, mr.CommandCount(), before)
+}

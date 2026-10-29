@@ -565,6 +565,18 @@ func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
 		}
 		return s.serverAuthCtx != nil && s.serverAuthCtx.OID != ""
 	}
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		// Among Bearer tokens only an org-level LimaCharlie JWT can pin an
+		// org; an MCP OAuth token always resolves to a multi-org user. Check
+		// that locally first, so a listing never costs a token-store lookup.
+		token, ok := strings.CutPrefix(authHeader, "Bearer ")
+		if !ok || !auth.IsJWTFormat(token) {
+			return false
+		}
+		if claims, err := auth.ParseAndValidateLimaCharlieJWT(token); err != nil || claims.UID != "" {
+			return false
+		}
+	}
 	resolved, failure := s.resolveRequestAuth(r, fmt.Sprintf("list_%d", time.Now().UnixNano()))
 	if failure != nil {
 		return false
