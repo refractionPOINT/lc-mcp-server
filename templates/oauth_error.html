@@ -228,7 +228,7 @@
             <div class="actions">
                 <a href="{{if .RetryURL}}{{.RetryURL}}{{else}}/authorize{{end}}" class="btn btn-primary">
                     <span>🔄</span>
-                    <span>Try Again</span>
+                    <span>{{if .RetryLabel}}{{.RetryLabel}}{{else}}Try Again{{end}}</span>
                 </a>
 
                 {{if .SupportURL}}

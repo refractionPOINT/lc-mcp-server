@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -645,13 +646,19 @@ func (m *Manager) GetMFAAttemptCount(ctx context.Context, sessionID string) (int
 	return count, nil
 }
 
+// ErrMFASessionNotFound means the MFA session expired or was already consumed
+var ErrMFASessionNotFound = errors.New("MFA session not found")
+
 // IncrementMFAAttempts atomically increments the MFA attempt counter
 // SECURITY: Uses Redis INCR for atomic increment to prevent race conditions
 func (m *Manager) IncrementMFAAttempts(ctx context.Context, sessionID string) (int, error) {
 	// Verify session exists first
 	session, err := m.GetMFASession(ctx, sessionID)
-	if err != nil || session == nil {
-		return 0, fmt.Errorf("MFA session not found: %w", err)
+	if err != nil {
+		return 0, err
+	}
+	if session == nil {
+		return 0, ErrMFASessionNotFound
 	}
 
 	// Use separate counter key for atomic increment

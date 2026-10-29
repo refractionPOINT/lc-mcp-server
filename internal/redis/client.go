@@ -22,6 +22,9 @@ type Client struct {
 // Config holds Redis configuration
 type Config struct {
 	URL string
+	// MaxRetries overrides the command retry count when non-zero.
+	// -1 disables retries (go-redis semantics), e.g. for fault-injection tests.
+	MaxRetries int
 }
 
 // New creates a new Redis client
@@ -41,6 +44,9 @@ func New(cfg *Config, logger *slog.Logger) (*Client, error) {
 
 	// Command retry settings
 	opt.MaxRetries = 5
+	if cfg.MaxRetries != 0 {
+		opt.MaxRetries = cfg.MaxRetries
+	}
 	opt.MinRetryBackoff = 100 * time.Millisecond
 	opt.MaxRetryBackoff = 3 * time.Second
 
