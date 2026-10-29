@@ -632,25 +632,37 @@ func TestCacheTTLParsing(t *testing.T) {
 	assert.Equal(t, 10*time.Minute, cacheTTL("max-age=600"))
 }
 
-// ===== last known good (load-shedding fallback) =====
+// ===== load shedding fails closed =====
 
-func (e *testEnv) hasGood(id string) bool { return e.mr.Exists(GoodPrefix + cacheKey(id)) }
+func (e *testEnv) hasKnown(id string) bool { return e.mr.Exists(KnownPrefix + cacheKey(id)) }
 
 // resolveThenExpire resolves id (a 5 minute document) and lets the cached copy
-// expire, leaving only the last-known-good copy.
+// expire.
 func resolveThenExpire(t *testing.T, env *testEnv, id string) {
 	t.Helper()
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err)
-	require.True(t, env.hasGood(id))
+	require.True(t, env.hasKnown(id))
 	env.mr.FastForward(minCacheTTL + time.Second)
 	require.False(t, env.hasDoc(id))
-	require.True(t, env.hasGood(id), "the last known good copy outlives the cache entry")
 }
 
-func TestLastKnownGood_BudgetBurntByJunkPathsDoesNotLockOutKnownClient(t *testing.T) {
-	// Review repro: resolve the real document, expire it, make perHostFetchesPerMin
-	// junk lookups on the same host, resolve the real one again.
+// requireNoDocumentCopies fails if anything in Redis under the CIMD prefixes could hold a
+// document other than the Cache-Control bounded cache.
+func requireNoDocumentCopies(t *testing.T, env *testEnv) {
+	t.Helper()
+	for _, k := range env.mr.Keys() {
+		if !strings.HasPrefix(k, "oauth:cimd:") {
+			continue
+		}
+		v, _ := env.mr.Get(k)
+		assert.NotContains(t, v, "client_name", "key %s holds a document copy", k)
+	}
+}
+
+func TestShed_BudgetBurntByJunkPathsDoesNotLockOutKnownClient(t *testing.T) {
+	// Resolve the real document, expire it, make perHostFetchesPerMin junk
+	// lookups on the same host, resolve the real one again.
 	env := newTestEnv(t, func(w http.ResponseWriter, r *http.Request, self string) {
 		if strings.HasPrefix(r.URL.Path, "/junk") {
 			http.NotFound(w, r)
@@ -679,7 +691,7 @@ func TestLastKnownGood_BudgetBurntByJunkPathsDoesNotLockOutKnownClient(t *testin
 	assert.EqualValues(t, before+1, env.hits.Load())
 }
 
-func TestLastKnownGood_ServedWhenFetchIsShed(t *testing.T) {
+func TestShed_FailsClosedOnceTheCacheHasExpired(t *testing.T) {
 	var changed atomic.Bool
 	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
 		w.Header().Set("Cache-Control", "max-age=300")
@@ -696,11 +708,10 @@ func TestLastKnownGood_ServedWhenFetchIsShed(t *testing.T) {
 
 	t.Run("global rate limit", func(t *testing.T) {
 		env.fetcher.limiter = rate.NewLimiter(0, 0)
-		doc, err := env.fetcher.Resolve(context.Background(), id)
-		require.NoError(t, err)
-		assert.Equal(t, "Example MCP Client", doc.ClientName, "the old validated copy, no fetch")
-		assert.Equal(t, hits, env.hits.Load())
-		assert.False(t, env.hasDoc(id), "serving the fallback does not re-cache it")
+		_, err := env.fetcher.Resolve(context.Background(), id)
+		assert.Equal(t, KindBusy, kindOf(t, err))
+		assert.Equal(t, hits, env.hits.Load(), "no fetch")
+		assert.False(t, env.hasDoc(id))
 	})
 
 	t.Run("per-URL budget", func(t *testing.T) {
@@ -709,31 +720,171 @@ func TestLastKnownGood_ServedWhenFetchIsShed(t *testing.T) {
 		for i := 0; i < perURLFetchesPerMin+3; i++ {
 			before := env.hits.Load()
 			doc, err := env.fetcher.Resolve(context.Background(), id)
-			require.NoError(t, err)
-			if env.hits.Load() == before {
+			if env.hits.Load() == before && !env.hasDoc(id) {
 				shed++
-				assert.Equal(t, "Changed", doc.ClientName, "the cache was repopulated by the first refresh")
+				assert.Equal(t, KindBusy, kindOf(t, err))
 			} else {
 				fetched++
+				require.NoError(t, err)
+				assert.Equal(t, "Changed", doc.ClientName)
 			}
 			env.mr.Del(DocPrefix + cacheKey(id)) // keep forcing refreshes (FastForward would also reset the counter)
 		}
 		assert.Equal(t, perURLFetchesPerMin, fetched)
 		assert.Equal(t, 3, shed)
 	})
+	requireNoDocumentCopies(t, env)
 }
 
-func TestLastKnownGood_NotServedForUnknownURLs(t *testing.T) {
+func TestShed_NotServedForUnknownURLs(t *testing.T) {
 	env := newTestEnv(t, okDoc)
 	env.fetcher.limiter = rate.NewLimiter(0, 0)
 	_, err := env.fetcher.Resolve(context.Background(), env.url("/never-seen.json"))
 	assert.Equal(t, KindBusy, kindOf(t, err))
 }
 
-func TestLastKnownGood_NeverServedWhenTheFetchHappenedAndFailed(t *testing.T) {
+func TestShed_DeletedDocumentIsNotResurrected(t *testing.T) {
+	// Review repro: the client withdraws its document (410), lookups see that,
+	// then a throttled lookup must not bring the old document back.
+	var gone atomic.Bool
+	env := newTestEnv(t, func(w http.ResponseWriter, r *http.Request, self string) {
+		if gone.Load() {
+			w.WriteHeader(http.StatusGone)
+			return
+		}
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, nil)
+	})
+	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	id := env.url("/client.json")
+	resolveThenExpire(t, env, id)
+	gone.Store(true)
+
+	for i := 0; i < 6; i++ {
+		_, err := env.fetcher.Resolve(context.Background(), id)
+		assert.Equal(t, KindFetch, kindOf(t, err))
+	}
+	assert.False(t, env.hasDoc(id))
+	assert.False(t, env.hasKnown(id), "a withdrawn document is no longer known")
+
+	env.fetcher.limiter = rate.NewLimiter(0, 0)
+	_, err := env.fetcher.Resolve(context.Background(), id)
+	assert.Equal(t, KindBusy, kindOf(t, err), "throttled lookup fails closed")
+	requireNoDocumentCopies(t, env)
+}
+
+func TestShed_RemovedRedirectURIIsNotReauthorized(t *testing.T) {
+	// Review repro: six valid no-store replacements drop an old redirect URI,
+	// then a throttled lookup must not make the old one authorized again.
+	const oldURI = "https://old.example.com/callback"
+	var replaced atomic.Bool
+	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
+		if replaced.Load() {
+			w.Header().Set("Cache-Control", "no-store")
+			writeDoc(w, self, nil)
+			return
+		}
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, func(m map[string]any) {
+			m["redirect_uris"] = []string{"https://app.example.com/callback", oldURI}
+		})
+	})
+	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	id := env.url("/client.json")
+	resolveThenExpire(t, env, id)
+	replaced.Store(true)
+
+	for i := 0; i < 6; i++ {
+		doc, err := env.fetcher.Resolve(context.Background(), id)
+		require.NoError(t, err)
+		assert.NotContains(t, doc.RedirectURIs, oldURI)
+	}
+
+	env.fetcher.limiter = rate.NewLimiter(0, 0)
+	doc, err := env.fetcher.Resolve(context.Background(), id)
+	if err == nil {
+		assert.NotContains(t, doc.RedirectURIs, oldURI, "the old redirect must never be authorized again")
+	}
+	assert.Equal(t, KindBusy, kindOf(t, err))
+	requireNoDocumentCopies(t, env)
+}
+
+// hidingStore hides the first n reads of cached documents from the fetcher
+// while leaving them in Redis, modelling another replica writing the entry
+// between this replica's cache check and its fetch.
+type hidingStore struct {
+	Store
+	n atomic.Int64
+}
+
+func (h *hidingStore) GetEphemeral(ctx context.Context, key string) (string, error) {
+	if strings.HasPrefix(key, DocPrefix) && h.n.Add(-1) >= 0 {
+		return "", nil
+	}
+	return h.Store.GetEphemeral(ctx, key)
+}
+
+func TestCache_EntryIsInvalidatedByDefinitiveAnswers(t *testing.T) {
+	cases := map[string]struct {
+		serve       func(w http.ResponseWriter, r *http.Request, self string)
+		wantInvalid bool
+	}{
+		"http 404": {func(w http.ResponseWriter, r *http.Request, _ string) { http.NotFound(w, r) }, true},
+		"http 410": {func(w http.ResponseWriter, _ *http.Request, _ string) { w.WriteHeader(http.StatusGone) }, true},
+		"invalid document": {func(w http.ResponseWriter, _ *http.Request, self string) {
+			writeDoc(w, self, func(m map[string]any) { delete(m, "client_name") })
+		}, true},
+		"now a confidential client": {func(w http.ResponseWriter, _ *http.Request, self string) {
+			writeDoc(w, self, func(m map[string]any) { m["token_endpoint_auth_method"] = "client_secret_basic" })
+		}, true},
+		"no-store replacement": {func(w http.ResponseWriter, _ *http.Request, self string) {
+			w.Header().Set("Cache-Control", "no-store")
+			writeDoc(w, self, func(m map[string]any) { m["client_name"] = "Replaced" })
+		}, true},
+		"no-cache replacement": {func(w http.ResponseWriter, _ *http.Request, self string) {
+			w.Header().Set("Cache-Control", "no-cache")
+			writeDoc(w, self, nil)
+		}, true},
+		// A transient failure says nothing about the document.
+		"http 500": {func(w http.ResponseWriter, _ *http.Request, _ string) { w.WriteHeader(500) }, false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var healthy atomic.Bool
+			healthy.Store(true)
+			env := newTestEnv(t, func(w http.ResponseWriter, r *http.Request, self string) {
+				if healthy.Load() {
+					w.Header().Set("Cache-Control", "max-age=300")
+					writeDoc(w, self, nil)
+					return
+				}
+				tc.serve(w, r, self)
+			})
+			env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+			id := env.url("/client.json")
+			_, err := env.fetcher.Resolve(context.Background(), id)
+			require.NoError(t, err)
+			require.True(t, env.hasDoc(id))
+			healthy.Store(false)
+
+			// Force a fetch although the entry is live (Resolve and
+			// fetchAndCache each read the cache once).
+			hs := &hidingStore{Store: env.fetcher.store}
+			hs.n.Store(2)
+			env.fetcher.store = hs
+			_, _ = env.fetcher.Resolve(context.Background(), id)
+			require.EqualValues(t, 2, env.hits.Load(), "the refresh must have reached the network")
+
+			assert.Equal(t, !tc.wantInvalid, env.hasDoc(id))
+			assert.Equal(t, !tc.wantInvalid, env.hasKnown(id))
+		})
+	}
+}
+
+func TestShed_NeverServedWhenTheFetchHappenedAndFailed(t *testing.T) {
 	// The draft: the AS MUST NOT cache error responses or invalid documents.
 	// A fetch that fails, or returns something invalid, must surface as that
-	// error even though a previously validated copy exists.
+	// error even though the document validated before.
 	cases := map[string]struct {
 		serve    func(w http.ResponseWriter, r *http.Request, self string)
 		wantKind ErrorKind
@@ -771,18 +922,16 @@ func TestLastKnownGood_NeverServedWhenTheFetchHappenedAndFailed(t *testing.T) {
 			assert.Equal(t, tc.wantKind, kindOf(t, err))
 			assert.False(t, env.hasDoc(id), "errors are not cached")
 
-			if tc.wantKind != KindFetch {
-				assert.False(t, env.hasGood(id), "a document that is now invalid loses its fallback copy")
-				// So even a shed fetch cannot bring the old copy back.
-				env.fetcher.limiter = rate.NewLimiter(0, 0)
-				_, err = env.fetcher.Resolve(context.Background(), id)
-				assert.Equal(t, KindBusy, kindOf(t, err))
-			}
+			// Even a shed fetch cannot bring the old document back.
+			env.fetcher.limiter = rate.NewLimiter(0, 0)
+			_, err = env.fetcher.Resolve(context.Background(), id)
+			assert.Equal(t, KindBusy, kindOf(t, err))
+			requireNoDocumentCopies(t, env)
 		})
 	}
 }
 
-func TestLastKnownGood_IsRefreshedByEachSuccessfulFetch(t *testing.T) {
+func TestShed_KnownMarkerIsRefreshedByEachSuccessfulFetch(t *testing.T) {
 	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
 		w.Header().Set("Cache-Control", "max-age=300")
 		writeDoc(w, self, nil)
@@ -790,17 +939,17 @@ func TestLastKnownGood_IsRefreshedByEachSuccessfulFetch(t *testing.T) {
 	id := env.url("/client.json")
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err)
-	assert.Equal(t, lastKnownGoodTTL, env.mr.TTL(GoodPrefix+cacheKey(id)))
-	env.mr.FastForward(lastKnownGoodTTL - time.Hour)
+	assert.Equal(t, knownTTL, env.mr.TTL(KnownPrefix+cacheKey(id)))
+	env.mr.FastForward(knownTTL - time.Hour)
 	_, err = env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err)
-	assert.Equal(t, lastKnownGoodTTL, env.mr.TTL(GoodPrefix+cacheKey(id)))
+	assert.Equal(t, knownTTL, env.mr.TTL(KnownPrefix+cacheKey(id)))
 
-	env.mr.FastForward(lastKnownGoodTTL + time.Second)
-	assert.False(t, env.hasGood(id), "the fallback expires")
+	env.mr.FastForward(knownTTL + time.Second)
+	assert.False(t, env.hasKnown(id), "the marker expires")
 }
 
-func TestLastKnownGood_NotWrittenWhenNotCacheable(t *testing.T) {
+func TestShed_NotMarkedKnownWhenNotCacheable(t *testing.T) {
 	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeDoc(w, self, nil)
@@ -808,7 +957,8 @@ func TestLastKnownGood_NotWrittenWhenNotCacheable(t *testing.T) {
 	id := env.url("/client.json")
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err)
-	assert.False(t, env.hasGood(id), "no-store documents are not kept anywhere")
+	assert.False(t, env.hasDoc(id))
+	assert.False(t, env.hasKnown(id))
 }
 
 // ===== bounds on what the cache can hold =====
@@ -831,7 +981,7 @@ func TestCacheBounds_OversizedDocumentServedButNotCached(t *testing.T) {
 	}
 	assert.EqualValues(t, 2, env.hits.Load())
 	assert.False(t, env.hasDoc(id))
-	assert.False(t, env.hasGood(id))
+	assert.False(t, env.hasKnown(id))
 }
 
 func TestCacheBounds_PerHostDailyCapOnNewDocuments(t *testing.T) {
@@ -849,7 +999,7 @@ func TestCacheBounds_PerHostDailyCapOnNewDocuments(t *testing.T) {
 	}
 	cached := 0
 	for _, id := range ids {
-		if env.hasGood(id) {
+		if env.hasKnown(id) {
 			cached++
 		}
 	}
