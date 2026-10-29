@@ -1182,3 +1182,63 @@ func TestShed_DomainCounterRunsBeforeTheProcessLimiter(t *testing.T) {
 	}
 	assert.InDelta(t, 1.0, env2.fetcher.limiter.Tokens(), 0.01)
 }
+
+func TestKnownPool_OneDomainHoldsAtMostItsShare(t *testing.T) {
+	// Review: a domain that controls several known URLs could make their
+	// refreshes hang and hold every slot of the known pool.
+	release := make(chan struct{})
+	var hang atomic.Bool
+	env := newTestEnv(t, func(w http.ResponseWriter, r *http.Request, self string) {
+		if hang.Load() && strings.HasPrefix(r.URL.Path, "/hang") {
+			<-release
+		}
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, nil)
+	})
+	t.Cleanup(func() { close(release) })
+	var ids []string
+	for i := 0; i < maxKnownFetchesPerDomain+1; i++ {
+		id := env.url(fmt.Sprintf("/hang-%d.json", i))
+		ids = append(ids, id)
+		resolveThenExpire(t, env, id)
+	}
+	hang.Store(true)
+
+	var wg sync.WaitGroup
+	for _, id := range ids[:maxKnownFetchesPerDomain] {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, _ = env.fetcher.Resolve(ctx, id)
+		}(id)
+	}
+	require.Eventually(t, func() bool {
+		env.fetcher.knownMu.Lock()
+		defer env.fetcher.knownMu.Unlock()
+		return env.fetcher.knownByDomain[registrableDomain(hostOf(ids[0]))] == maxKnownFetchesPerDomain
+	}, 2*time.Second, 10*time.Millisecond)
+
+	_, err := env.fetcher.Resolve(context.Background(), ids[maxKnownFetchesPerDomain])
+	assert.Equal(t, KindBusy, kindOf(t, err), "a third hanging refresh from the same domain is shed")
+	assert.Less(t, len(env.fetcher.knownSem), cap(env.fetcher.knownSem), "the rest of the known pool stays free for other domains")
+	wg.Wait()
+}
+
+func TestKnownPool_DomainAccounting(t *testing.T) {
+	env := newTestEnv(t, okDoc)
+	f := env.fetcher
+	for i := 0; i < maxKnownFetchesPerDomain; i++ {
+		require.True(t, f.acquireKnownDomain("evil.example"))
+	}
+	assert.False(t, f.acquireKnownDomain("evil.example"))
+	assert.True(t, f.acquireKnownDomain("client.example"), "other domains are unaffected")
+	f.releaseKnownDomain("evil.example")
+	assert.True(t, f.acquireKnownDomain("evil.example"), "a slot frees up on release")
+	for i := 0; i < maxKnownFetchesPerDomain; i++ {
+		f.releaseKnownDomain("evil.example")
+	}
+	f.releaseKnownDomain("client.example")
+	assert.Empty(t, f.knownByDomain, "no entries leak")
+}

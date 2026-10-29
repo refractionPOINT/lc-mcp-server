@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/publicsuffix"
@@ -76,6 +77,7 @@ const (
 	maxConcurrentKnownFetches = 8
 	knownRatePerSecond        = 10
 	knownRateBurst            = 20
+	maxKnownFetchesPerDomain  = 2
 	globalRatePerSecond       = 20
 	globalRateBurst           = 40
 	perHostFetchesPerMin      = 30
@@ -136,6 +138,11 @@ type Fetcher struct {
 	// unauthenticated) can't starve clients already in use.
 	knownSem     chan struct{}
 	knownLimiter *rate.Limiter
+	// knownByDomain counts in-flight known refreshes per registrable domain,
+	// so one domain (whose documents could be made to hang) can hold at most
+	// maxKnownFetchesPerDomain of the knownSem slots.
+	knownMu       sync.Mutex
+	knownByDomain map[string]int
 }
 
 // NewFetcher builds the production fetcher: SSRF-guarded dialer, no proxy, no
@@ -157,14 +164,15 @@ func NewFetcherForTesting(store Store, logger *slog.Logger, transport http.Round
 
 func newFetcher(store Store, logger *slog.Logger, client *http.Client, pol urlPolicy) *Fetcher {
 	return &Fetcher{
-		store:        store,
-		logger:       logger,
-		client:       client,
-		policy:       pol,
-		sem:          make(chan struct{}, maxConcurrentFetches),
-		limiter:      rate.NewLimiter(globalRatePerSecond, globalRateBurst),
-		knownSem:     make(chan struct{}, maxConcurrentKnownFetches),
-		knownLimiter: rate.NewLimiter(knownRatePerSecond, knownRateBurst),
+		store:         store,
+		logger:        logger,
+		client:        client,
+		policy:        pol,
+		sem:           make(chan struct{}, maxConcurrentFetches),
+		limiter:       rate.NewLimiter(globalRatePerSecond, globalRateBurst),
+		knownSem:      make(chan struct{}, maxConcurrentKnownFetches),
+		knownLimiter:  rate.NewLimiter(knownRatePerSecond, knownRateBurst),
+		knownByDomain: map[string]int{},
 	}
 }
 
@@ -270,6 +278,14 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 	if !limiter.Allow() {
 		f.logger.Warn("CIMD fetch shed: process rate limit", "client_host", host, "known", known)
 		return shed("too many client metadata lookups in progress; try again shortly")
+	}
+	if known {
+		domain := registrableDomain(host)
+		if !f.acquireKnownDomain(domain) {
+			f.logger.Warn("CIMD fetch shed: per-domain known refresh concurrency", "client_host", host)
+			return shed("too many client metadata lookups in progress; try again shortly")
+		}
+		defer f.releaseKnownDomain(domain)
 	}
 	select {
 	case sem <- struct{}{}:
@@ -449,6 +465,26 @@ func (f *Fetcher) storeDoc(ctx context.Context, host, key string, doc *Document,
 	if err := f.store.SetEphemeral(ctx, KnownPrefix+key, "1", knownTTL); err != nil {
 		f.logger.Warn("CIMD known-marker write failed", "error", err)
 	}
+}
+
+func (f *Fetcher) acquireKnownDomain(domain string) bool {
+	f.knownMu.Lock()
+	defer f.knownMu.Unlock()
+	if f.knownByDomain[domain] >= maxKnownFetchesPerDomain {
+		return false
+	}
+	f.knownByDomain[domain]++
+	return true
+}
+
+func (f *Fetcher) releaseKnownDomain(domain string) {
+	f.knownMu.Lock()
+	defer f.knownMu.Unlock()
+	if f.knownByDomain[domain] <= 1 {
+		delete(f.knownByDomain, domain)
+		return
+	}
+	f.knownByDomain[domain]--
 }
 
 // registrableDomain is the budget identity of a host: its registrable domain
