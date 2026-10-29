@@ -419,8 +419,9 @@ func TestTokenExtension_CountIncrementsOnExtension(t *testing.T) {
 
 	// Set token to be expiring soon (within refresh buffer)
 	tokenData.ExpiresAt = time.Now().Add(30 * time.Minute).Unix() // Less than 1 hour buffer
-	err = stateManager.StoreAccessToken(ctx, tokenData)
+	updated, err := stateManager.UpdateAccessToken(ctx, tokenData)
 	require.NoError(t, err)
+	require.True(t, updated)
 
 	// Validate token - should proactively extend it
 	result, err := manager.ValidateAccessToken(ctx, tokens.AccessToken, true)
