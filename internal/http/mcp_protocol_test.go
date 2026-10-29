@@ -779,7 +779,11 @@ func TestToolsListDeduplicatesHeaderTools(t *testing.T) {
 func TestModernAndLegacyListTheSameTools(t *testing.T) {
 	srv := newProtocolTestServer(t)
 	legacy := postJSON(t, srv, "/mcp/all", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, nil)
+	// Without credentials there is nothing to pin an org, so both eras see
+	// the same definitions.
 	body, headers := modernRequest(1, "tools/list", nil)
+	delete(headers, "X-LC-OID")
+	delete(headers, "X-LC-API-KEY")
 	modern := postJSON(t, srv, "/mcp/all", body, headers)
 	require.Equal(t, http.StatusOK, legacy.Status)
 	require.Equal(t, http.StatusOK, modern.Status)
@@ -806,7 +810,8 @@ func TestJSONRPCFraming(t *testing.T) {
 		{"bool id", `{"jsonrpc":"2.0","id":true,"method":"ping"}`, http.StatusBadRequest, -32600, nil},
 		{"object id", `{"jsonrpc":"2.0","id":{"a":1},"method":"ping"}`, http.StatusBadRequest, -32600, nil},
 		{"null id on a request", `{"jsonrpc":"2.0","id":null,"method":"tools/list"}`, http.StatusBadRequest, -32600, nil},
-		{"method not a string", `{"jsonrpc":"2.0","id":2,"method":7}`, http.StatusBadRequest, -32600, nil},
+		{"method not a string", `{"jsonrpc":"2.0","id":2,"method":7}`, http.StatusBadRequest, -32600, float64(2)},
+		{"mistyped field and bad id", `{"jsonrpc":"2.0","id":2.5,"method":7}`, http.StatusBadRequest, -32600, nil},
 		{"empty method", `{"jsonrpc":"2.0","id":2,"method":""}`, http.StatusBadRequest, -32600, float64(2)},
 		{"client sent a response", `{"jsonrpc":"2.0","id":2,"result":{}}`, http.StatusBadRequest, -32600, float64(2)},
 		{"params is an array", `{"jsonrpc":"2.0","id":2,"method":"tools/list","params":[1]}`, http.StatusBadRequest, -32602, float64(2)},
@@ -930,41 +935,72 @@ func TestOriginValidation(t *testing.T) {
 
 // --- result decoration ------------------------------------------------------
 
+func decorated(t *testing.T, result any, cacheable bool) map[string]any {
+	t.Helper()
+	out, err := decorateModernResult(result, cacheable)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(out)
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &got))
+	return got
+}
+
 func TestDecorateModernResult(t *testing.T) {
-	t.Run("adds resultType and serverInfo, keeps fields", func(t *testing.T) {
-		out, err := decorateModernResult(map[string]any{"content": []any{}, "isError": true}, false)
-		require.NoError(t, err)
-		var got map[string]any
-		require.NoError(t, json.Unmarshal(out, &got))
+	t.Run("map: adds resultType and serverInfo, keeps fields", func(t *testing.T) {
+		got := decorated(t, map[string]any{"content": []any{}, "isError": true}, false)
 		assert.Equal(t, "complete", got["resultType"])
 		assert.Equal(t, true, got["isError"])
 		assert.Contains(t, got["_meta"], mcp.MetaKeyServerInfo)
 		assert.NotContains(t, got, "ttlMs")
 	})
-	t.Run("cacheable adds hints", func(t *testing.T) {
-		out, err := decorateModernResult(map[string]any{"tools": []any{}}, true)
-		require.NoError(t, err)
-		assert.Contains(t, string(out), `"ttlMs":300000`)
-		assert.Contains(t, string(out), `"cacheScope":"private"`)
+	t.Run("map: cacheable adds hints", func(t *testing.T) {
+		got := decorated(t, map[string]any{"tools": []any{}}, true)
+		assert.Equal(t, float64(300000), got["ttlMs"])
+		assert.Equal(t, "private", got["cacheScope"])
 	})
-	t.Run("merges an existing _meta", func(t *testing.T) {
-		out, err := decorateModernResult(map[string]any{"_meta": map[string]any{"a/b": 1}}, false)
-		require.NoError(t, err)
-		var got map[string]any
-		require.NoError(t, json.Unmarshal(out, &got))
+	t.Run("map: merges an existing _meta without mutating the input", func(t *testing.T) {
+		in := map[string]any{"_meta": map[string]any{"a/b": 1}}
+		got := decorated(t, in, false)
 		meta := got["_meta"].(map[string]any)
 		assert.Equal(t, float64(1), meta["a/b"])
 		assert.Contains(t, meta, mcp.MetaKeyServerInfo)
+		assert.Equal(t, map[string]any{"_meta": map[string]any{"a/b": 1}}, in)
 	})
-	t.Run("null _meta is replaced", func(t *testing.T) {
-		out, err := decorateModernResult(json.RawMessage(`{"_meta":null}`), false)
-		require.NoError(t, err)
-		assert.Contains(t, string(out), mcp.MetaKeyServerInfo)
+	t.Run("map: non-object _meta is rejected", func(t *testing.T) {
+		_, err := decorateModernResult(map[string]any{"_meta": "x"}, false)
+		assert.Error(t, err)
+	})
+	t.Run("tool result: decorated on a copy", func(t *testing.T) {
+		in := tools.SuccessResult(map[string]any{"ok": true})
+		in.Meta = mcp.NewMetaFromMap(map[string]any{"com.example/trace": "abc"})
+		got := decorated(t, in, false)
+		assert.Equal(t, "complete", got["resultType"])
+		meta := got["_meta"].(map[string]any)
+		assert.Equal(t, "abc", meta["com.example/trace"])
+		assert.Contains(t, meta, mcp.MetaKeyServerInfo)
+		// The tool's own value is untouched.
+		assert.Empty(t, string(in.ResultType))
+		assert.NotContains(t, in.Meta.AdditionalFields, mcp.MetaKeyServerInfo)
+	})
+	t.Run("tool result without _meta", func(t *testing.T) {
+		got := decorated(t, tools.ErrorResult("no"), false)
+		assert.Equal(t, true, got["isError"])
+		assert.Contains(t, got["_meta"], mcp.MetaKeyServerInfo)
+	})
+	t.Run("other types use the encoded fallback", func(t *testing.T) {
+		got := decorated(t, json.RawMessage(`{"_meta":null,"x":1}`), true)
+		assert.Equal(t, "complete", got["resultType"])
+		assert.Equal(t, float64(1), got["x"])
+		assert.Contains(t, got["_meta"], mcp.MetaKeyServerInfo)
+		assert.Equal(t, float64(300000), got["ttlMs"])
 	})
 	t.Run("non-object results are rejected", func(t *testing.T) {
 		_, err := decorateModernResult([]any{1}, false)
 		assert.Error(t, err)
 		_, err = decorateModernResult(json.RawMessage(`{"_meta":"x"}`), false)
+		assert.Error(t, err)
+		_, err = decorateModernResult((*mcp.CallToolResult)(nil), false)
 		assert.Error(t, err)
 	})
 }

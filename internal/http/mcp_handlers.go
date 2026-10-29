@@ -214,136 +214,16 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	}
 	s.logger.Info("Tool call started", "request_id", requestID, "tool", toolName, "client", clientName, "protocol", call.protocolVersion)
 
-	// Determine authentication method:
-	// 1. If Bearer token provided → use OAuth/JWT passthrough
-	// 2. If X-LC-UID + X-LC-API-KEY headers provided → use header credentials
-	// 3. If server has env var credentials → use server credentials
-	// 4. None of above → Unauthorized
-	var authCtx *auth.AuthContext
-	var isJWTPassthrough bool
-
-	authHeader := r.Header.Get("Authorization")
-	lcUID := r.Header.Get("X-LC-UID")
-	lcOID := r.Header.Get("X-LC-OID")
-	lcAPIKey := r.Header.Get("X-LC-API-KEY")
 	lcAllowMetaTools := r.Header.Get("X-LC-ALLOW-META-TOOLS")
 	lcDenyMetaTools := r.Header.Get("X-LC-DENY-META-TOOLS")
 
-	// Validate the credential headers at the boundary rather than relying on
-	// downstream UUID checks: these values flow into cache keys and request
-	// paths, so a malformed one must never get that far.
-	if lcOID != "" {
-		if err := auth.ValidateOID(lcOID); err != nil {
-			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid X-LC-OID header: %v", err))
-			return
-		}
-	}
-	if lcUID != "" {
-		if err := auth.ValidateUIDFormat(lcUID); err != nil {
-			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid X-LC-UID header: %v", err))
-			return
-		}
-	}
-	if lcAPIKey != "" {
-		if err := auth.ValidateAPIKey(lcAPIKey); err != nil {
-			s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid X-LC-API-KEY header: %v", err))
-			return
-		}
-	}
-
-	if authHeader != "" {
-		// Bearer token provided - use OAuth/JWT passthrough
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			s.writeAuthChallenge(w, id, "invalid_token", "Invalid Authorization header format")
-			return
-		}
-
-		bearerToken := parts[1]
-
-		// Verify and extract UID, LimaCharlie JWT, and Firebase token from MCP access token
-		s.logger.Info("Extracting UID from token", "request_id", requestID)
-		tokenStartTime := time.Now()
-		uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
-		tokenDuration := time.Since(tokenStartTime)
-		if err != nil {
-			s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
-			if errors.Is(err, errInvalidCredentials) {
-				s.writeAuthChallenge(w, id, "invalid_token", "The access token is invalid or expired")
-			} else {
-				s.writeJSONRPCError(w, id, -32000, "Unauthorized", fmt.Sprintf("Invalid token: %v", err))
-			}
-			return
-		}
-		s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
-
-		// JWT passthrough mode detection: no Firebase token means direct JWT
-		isJWTPassthrough = firebaseIDToken == ""
-
-		// Create auth context from Bearer token
-		if uid == "" && isJWTPassthrough && lcOID != "" {
-			// Org API key JWT passthrough: no UID in token, use OID from header.
-			// The OID comes from a header while the credential is the JWT, so
-			// confirm the JWT's own claims cover that org before pinning to it —
-			// otherwise a caller could present a valid token for org A and name
-			// org B. (The gateway authorizes independently; this is the
-			// server-side half of that boundary.)
-			if !s.jwtCoversOID(limaCharlieJWT, lcOID, requestID) {
-				s.writeJSONRPCError(w, id, -32000, "Unauthorized", "X-LC-OID is not covered by the presented token's organization claims")
-				return
-			}
-			// Clear isJWTPassthrough since the OID is already pinned — passthrough
-			// semantics (requiring OID in every tool call) don't apply here.
-			isJWTPassthrough = false
-			authCtx = &auth.AuthContext{
-				Mode:     auth.AuthModeNormal,
-				OID:      lcOID,
-				JWTToken: limaCharlieJWT,
-			}
-			s.logger.Debug("Authenticated via org JWT passthrough", "request_id", requestID, "oid", lcOID)
-		} else {
-			authCtx = &auth.AuthContext{
-				Mode:            auth.AuthModeUIDOAuth,
-				UID:             uid,
-				JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
-				FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
-			}
-			s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
-		}
-	} else if lcUID != "" && lcAPIKey != "" {
-		// Header-based user credentials (X-LC-UID + X-LC-API-KEY)
-		// If X-LC-OID is also provided, pin to that org
-		authCtx = &auth.AuthContext{
-			Mode:   auth.AuthModeUIDKey,
-			UID:    lcUID,
-			APIKey: lcAPIKey,
-			OID:    lcOID, // Empty if not provided, which is fine
-		}
-		isJWTPassthrough = false
-		if lcOID != "" {
-			s.logger.Debug("Authenticated via user header credentials with OID", "request_id", requestID, "uid", lcUID, "oid", lcOID)
-		} else {
-			s.logger.Debug("Authenticated via user header credentials", "request_id", requestID, "uid", lcUID)
-		}
-	} else if lcOID != "" && lcAPIKey != "" {
-		// Header-based org credentials (X-LC-OID + X-LC-API-KEY)
-		authCtx = &auth.AuthContext{
-			Mode:   auth.AuthModeNormal,
-			OID:    lcOID,
-			APIKey: lcAPIKey,
-		}
-		isJWTPassthrough = false
-		s.logger.Debug("Authenticated via org header credentials", "request_id", requestID, "oid", lcOID)
-	} else if s.serverAuthCtx != nil && s.serverAuthCtx.HasCredentials() {
-		// No Bearer token - use server-wide credentials (only if they have actual credentials)
-		authCtx = s.serverAuthCtx
-		isJWTPassthrough = false // Server credentials are not JWT passthrough
-		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", authCtx.UID, "mode", authCtx.Mode.String())
-	} else {
-		// No authentication provided
-		s.writeAuthChallenge(w, id, "", "Missing authentication: provide Authorization header, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers")
+	resolved, authErr := s.resolveRequestAuth(r, requestID)
+	if authErr != nil {
+		authErr.write(s, w, id)
 		return
 	}
+	authCtx := resolved.authCtx
+	isJWTPassthrough := resolved.jwtPassthrough
 
 	// Create request context with auth
 	ctx := r.Context()
@@ -480,8 +360,167 @@ func (s *Server) writeToolError(w http.ResponseWriter, call *mcpCall, message st
 	s.writeRPCResult(w, call, tools.ErrorResult(message), false)
 }
 
+// resolvedAuth is the credential a request presents, resolved once by
+// resolveRequestAuth so that tools/list and tools/call agree on it.
+type resolvedAuth struct {
+	authCtx *auth.AuthContext
+	// jwtPassthrough is set for a LimaCharlie JWT that is not pinned to one
+	// organization: every org-scoped tool call must then name its oid.
+	jwtPassthrough bool
+}
+
+// pinnedOID returns the organization the credential fixes every call to, or
+// "" when the caller may (or must) choose one per call.
+func (a *resolvedAuth) pinnedOID() string {
+	if a == nil || a.authCtx == nil || a.jwtPassthrough {
+		return ""
+	}
+	return a.authCtx.OID
+}
+
+// authFailure describes why a request's credentials were rejected.
+type authFailure struct {
+	// challenge answers with HTTP 401 and a WWW-Authenticate header, so an
+	// OAuth client signs in again; otherwise a JSON-RPC error is returned.
+	challenge  bool
+	oauthError string
+	message    string
+	detail     string
+}
+
+func (f *authFailure) write(s *Server, w http.ResponseWriter, id json.RawMessage) {
+	if f.challenge {
+		s.writeAuthChallenge(w, id, f.oauthError, f.detail)
+		return
+	}
+	s.writeJSONRPCError(w, id, rpcServerError, f.message, f.detail)
+}
+
+// resolveRequestAuth determines the credentials a request carries:
+//  1. Bearer token → OAuth access token or LimaCharlie JWT passthrough
+//  2. X-LC-UID + X-LC-API-KEY → user API key (pinned when X-LC-OID is set)
+//  3. X-LC-OID + X-LC-API-KEY → organization API key
+//  4. server-wide credentials from the environment
+//  5. none of the above → unauthorized
+func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolvedAuth, *authFailure) {
+	authHeader := r.Header.Get("Authorization")
+	lcUID := r.Header.Get("X-LC-UID")
+	lcOID := r.Header.Get("X-LC-OID")
+	lcAPIKey := r.Header.Get("X-LC-API-KEY")
+
+	// Validate the credential headers at the boundary rather than relying on
+	// downstream UUID checks: these values flow into cache keys and request
+	// paths, so a malformed one must never get that far.
+	if lcOID != "" {
+		if err := auth.ValidateOID(lcOID); err != nil {
+			return nil, &authFailure{message: "Unauthorized", detail: fmt.Sprintf("Invalid X-LC-OID header: %v", err)}
+		}
+	}
+	if lcUID != "" {
+		if err := auth.ValidateUIDFormat(lcUID); err != nil {
+			return nil, &authFailure{message: "Unauthorized", detail: fmt.Sprintf("Invalid X-LC-UID header: %v", err)}
+		}
+	}
+	if lcAPIKey != "" {
+		if err := auth.ValidateAPIKey(lcAPIKey); err != nil {
+			return nil, &authFailure{message: "Unauthorized", detail: fmt.Sprintf("Invalid X-LC-API-KEY header: %v", err)}
+		}
+	}
+
+	if authHeader != "" {
+		// Bearer token provided - use OAuth/JWT passthrough
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || parts[0] != "Bearer" {
+			return nil, &authFailure{challenge: true, oauthError: "invalid_token", detail: "Invalid Authorization header format"}
+		}
+
+		bearerToken := parts[1]
+
+		// Verify and extract UID, LimaCharlie JWT, and Firebase token from MCP access token
+		s.logger.Info("Extracting UID from token", "request_id", requestID)
+		tokenStartTime := time.Now()
+		uid, limaCharlieJWT, firebaseIDToken, err := s.extractUIDFromToken(bearerToken)
+		tokenDuration := time.Since(tokenStartTime)
+		if err != nil {
+			s.logger.Info("Token extraction failed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds(), "error", err.Error())
+			if errors.Is(err, errInvalidCredentials) {
+				return nil, &authFailure{challenge: true, oauthError: "invalid_token", detail: "The access token is invalid or expired"}
+			}
+			return nil, &authFailure{message: "Unauthorized", detail: fmt.Sprintf("Invalid token: %v", err)}
+		}
+		s.logger.Info("Token extraction completed", "request_id", requestID, "duration_ms", tokenDuration.Milliseconds())
+
+		// JWT passthrough mode detection: no Firebase token means direct JWT
+		isJWTPassthrough := firebaseIDToken == ""
+
+		if uid == "" && isJWTPassthrough && lcOID != "" {
+			// Org API key JWT passthrough: no UID in token, use OID from header.
+			// The OID comes from a header while the credential is the JWT, so
+			// confirm the JWT's own claims cover that org before pinning to it —
+			// otherwise a caller could present a valid token for org A and name
+			// org B. (The gateway authorizes independently; this is the
+			// server-side half of that boundary.)
+			if !s.jwtCoversOID(limaCharlieJWT, lcOID, requestID) {
+				return nil, &authFailure{message: "Unauthorized", detail: "X-LC-OID is not covered by the presented token's organization claims"}
+			}
+			// The OID is pinned, so passthrough semantics (requiring OID in
+			// every tool call) don't apply.
+			s.logger.Debug("Authenticated via org JWT passthrough", "request_id", requestID, "oid", lcOID)
+			return &resolvedAuth{authCtx: &auth.AuthContext{
+				Mode:     auth.AuthModeNormal,
+				OID:      lcOID,
+				JWTToken: limaCharlieJWT,
+			}}, nil
+		}
+		s.logger.Debug("Authenticated via Bearer token", "request_id", requestID, "uid", uid, "jwt_passthrough", isJWTPassthrough)
+		return &resolvedAuth{
+			authCtx: &auth.AuthContext{
+				Mode:            auth.AuthModeUIDOAuth,
+				UID:             uid,
+				JWTToken:        limaCharlieJWT,  // LimaCharlie JWT for API authentication
+				FirebaseIDToken: firebaseIDToken, // Firebase token for JWT regeneration per org
+			},
+			jwtPassthrough: isJWTPassthrough,
+		}, nil
+	}
+
+	if lcUID != "" && lcAPIKey != "" {
+		// Header-based user credentials (X-LC-UID + X-LC-API-KEY)
+		// If X-LC-OID is also provided, pin to that org
+		if lcOID != "" {
+			s.logger.Debug("Authenticated via user header credentials with OID", "request_id", requestID, "uid", lcUID, "oid", lcOID)
+		} else {
+			s.logger.Debug("Authenticated via user header credentials", "request_id", requestID, "uid", lcUID)
+		}
+		return &resolvedAuth{authCtx: &auth.AuthContext{
+			Mode:   auth.AuthModeUIDKey,
+			UID:    lcUID,
+			APIKey: lcAPIKey,
+			OID:    lcOID, // Empty if not provided, which is fine
+		}}, nil
+	}
+
+	if lcOID != "" && lcAPIKey != "" {
+		// Header-based org credentials (X-LC-OID + X-LC-API-KEY)
+		s.logger.Debug("Authenticated via org header credentials", "request_id", requestID, "oid", lcOID)
+		return &resolvedAuth{authCtx: &auth.AuthContext{
+			Mode:   auth.AuthModeNormal,
+			OID:    lcOID,
+			APIKey: lcAPIKey,
+		}}, nil
+	}
+
+	if s.serverAuthCtx != nil && s.serverAuthCtx.HasCredentials() {
+		// No request credentials - use server-wide credentials
+		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", s.serverAuthCtx.UID, "mode", s.serverAuthCtx.Mode.String())
+		return &resolvedAuth{authCtx: s.serverAuthCtx}, nil
+	}
+
+	return nil, &authFailure{challenge: true, detail: "Missing authentication: provide Authorization header, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers"}
+}
+
 func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, call *mcpCall) {
-	toolList, err := s.listTools(r)
+	toolList, err := s.listTools(r, s.orgPinnedForListing(r, call))
 	if err != nil {
 		// Error from header parsing/validation
 		s.writeJSONRPCError(w, call.id, rpcInvalidParams, "Invalid params", err.Error())
@@ -493,7 +532,25 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, call *m
 // listTools returns the tool definitions this request may see, sorted by name
 // so that the listing is stable across requests (clients cache it, and a
 // stable order keeps LLM prompt caches warm).
-func (s *Server) listTools(r *http.Request) ([]mcp.Tool, error) {
+// orgPinnedForListing reports whether a modern tools/list request carries
+// credentials that fix every call to one organization. The 2026-07-28 spec
+// lets the tool list vary by the authorization presented, so for such callers
+// the per-call oid parameter is left out: the credential already names the
+// org, and asking the model to repeat it only invites mistakes. Legacy
+// clients keep the listing they have always had. Credentials that fail to
+// resolve leave the oid parameter in; tools/list never rejects a caller.
+func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
+	if call.era != eraModern || !s.requestHasCredentials(r) {
+		return false
+	}
+	resolved, failure := s.resolveRequestAuth(r, fmt.Sprintf("list_%d", time.Now().UnixNano()))
+	if failure != nil {
+		return false
+	}
+	return resolved.pinnedOID() != ""
+}
+
+func (s *Server) listTools(r *http.Request, orgPinned bool) ([]mcp.Tool, error) {
 	// Get tools for this request (may be from profile or X-MCP-Tools header)
 	toolNames, err := s.getToolsForRequest(r)
 	if err != nil {
@@ -504,7 +561,7 @@ func (s *Server) listTools(r *http.Request) ([]mcp.Tool, error) {
 	// OID parameter is needed for multi-org modes (UID modes) but not for single-org mode (Normal)
 	// If server has credentials in Normal mode, OID is fixed and not needed
 	// If server has credentials in UID mode or no server credentials (OAuth), OID is needed
-	needsOIDParam := true
+	needsOIDParam := !orgPinned
 	if s.serverAuthCtx != nil && s.serverAuthCtx.Mode == auth.AuthModeNormal {
 		// Server has fixed OID credentials, no need for OID parameter
 		needsOIDParam = false

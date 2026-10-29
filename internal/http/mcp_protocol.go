@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -175,7 +176,16 @@ func parseMCPMessage(body []byte) (*parsedMessage, *rpcError) {
 	if err := json.Unmarshal(trimmed, &msg); err != nil {
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) {
-			return nil, newRPCError(http.StatusBadRequest, rpcInvalidRequest, "Invalid Request", fmt.Sprintf("invalid %s field", typeErr.Field))
+			// The body is valid JSON with a mistyped field: still answer
+			// with the request id when it can be read.
+			partial := &parsedMessage{}
+			var idOnly struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if json.Unmarshal(trimmed, &idOnly) == nil && len(idOnly.ID) > 0 && !bytes.Equal(idOnly.ID, []byte("null")) && isValidRequestID(idOnly.ID) {
+				partial.id = idOnly.ID
+			}
+			return partial, newRPCError(http.StatusBadRequest, rpcInvalidRequest, "Invalid Request", fmt.Sprintf("invalid %s field", typeErr.Field))
 		}
 		return nil, newRPCError(http.StatusBadRequest, rpcParseError, "Parse error", err.Error())
 	}
@@ -379,9 +389,61 @@ func serverCapabilities() map[string]any {
 
 // decorateModernResult adds the fields every 2026-07-28 result carries:
 // resultType, the server identity in _meta and, for cacheable results, the
-// caching hints. It works on the top-level keys only, so large tool results
-// are not re-parsed.
-func decorateModernResult(result any, cacheable bool) (json.RawMessage, error) {
+// caching hints. The result types this server produces are decorated in
+// place on a shallow copy, so a large tool result is encoded only once, by
+// the response writer.
+func decorateModernResult(result any, cacheable bool) (any, error) {
+	switch v := result.(type) {
+	case *mcp.CallToolResult:
+		if v == nil {
+			return nil, errors.New("nil tool result")
+		}
+		out := *v
+		out.ResultType = mcp.ResultTypeComplete
+		meta := &mcp.Meta{}
+		if v.Meta != nil {
+			meta.ProgressToken = v.Meta.ProgressToken
+			meta.AdditionalFields = maps.Clone(v.Meta.AdditionalFields)
+		}
+		if meta.AdditionalFields == nil {
+			meta.AdditionalFields = map[string]any{}
+		}
+		meta.AdditionalFields[mcp.MetaKeyServerInfo] = serverInfo()
+		out.Meta = meta
+		if cacheable {
+			// Tool results are never cacheable; a caller asking for hints
+			// on one is a bug, so go through the generic path that adds them.
+			break
+		}
+		return &out, nil
+	case map[string]any:
+		out := maps.Clone(v)
+		meta := map[string]any{}
+		switch existing := out["_meta"].(type) {
+		case nil:
+		case map[string]any:
+			maps.Copy(meta, existing)
+		default:
+			return nil, fmt.Errorf("result _meta is %T, not an object", existing)
+		}
+		meta[mcp.MetaKeyServerInfo] = serverInfo()
+		out["_meta"] = meta
+		out["resultType"] = string(mcp.ResultTypeComplete)
+		if cacheable {
+			out["ttlMs"] = toolsListTTLMs
+			// The tool list depends on the endpoint path, the X-MCP-Tools
+			// header and the credential, so it must never be shared across
+			// authorization contexts.
+			out["cacheScope"] = string(mcp.CacheScopePrivate)
+		}
+		return out, nil
+	}
+	return decorateEncodedResult(result, cacheable)
+}
+
+// decorateEncodedResult is the fallback for result types the switch above
+// does not know: it decorates the encoded object's top-level keys.
+func decorateEncodedResult(result any, cacheable bool) (json.RawMessage, error) {
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return nil, err
@@ -393,7 +455,6 @@ func decorateModernResult(result any, cacheable bool) (json.RawMessage, error) {
 	if fields == nil {
 		fields = map[string]json.RawMessage{}
 	}
-
 	fields["resultType"] = json.RawMessage(`"complete"`)
 
 	meta := map[string]json.RawMessage{}
@@ -412,8 +473,6 @@ func decorateModernResult(result any, cacheable bool) (json.RawMessage, error) {
 
 	if cacheable {
 		fields["ttlMs"] = json.RawMessage(fmt.Sprintf("%d", toolsListTTLMs))
-		// The tool list depends on the endpoint path and the X-MCP-Tools
-		// header, so a shared cache keyed on anything less must not reuse it.
 		fields["cacheScope"] = json.RawMessage(`"private"`)
 	}
 	return json.Marshal(fields)
