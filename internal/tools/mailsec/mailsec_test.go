@@ -220,6 +220,17 @@ func TestOnboardingAndSavedConnectionContracts(t *testing.T) {
 	call(t, ctx, "mailsec_test_connection", map[string]interface{}{"record": "saved/record", "include_watch": false, "credentials": "not sent"}, false)
 }
 
+func TestImapOnboardingForwardsOnlyTheProvider(t *testing.T) {
+	ctx := fixtureContext(t, func(r *http.Request) (*http.Response, error) {
+		want := url.Values{"provider": {"imap"}}
+		if !reflect.DeepEqual(r.URL.Query(), want) {
+			t.Fatal("imap onboarding query changed", r.URL.Query())
+		}
+		return response(200, `{"ok":true}`), nil
+	})
+	call(t, ctx, "mailsec_get_onboarding", map[string]interface{}{"provider": "imap"}, false)
+}
+
 func TestExplicitConfirmationAndNormalizedBulkSelection(t *testing.T) {
 	steps := 0
 	ctx := fixtureContext(t, func(r *http.Request) (*http.Response, error) {

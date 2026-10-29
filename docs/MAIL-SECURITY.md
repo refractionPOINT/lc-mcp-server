@@ -1,9 +1,10 @@
 # MailSec with an AI assistant
 
-MailSec protects Microsoft 365 and Google Workspace mailboxes. Start with one
-mailbox in alert-only mode, verify coverage, then let an assistant review messages
-and explain its evidence. MailSec is in private beta; access, trial enforcement
-and backend capabilities depend on the current deployment.
+MailSec protects Microsoft 365 and Google Workspace mailboxes, and personal Gmail
+or other IMAP mailboxes. Start with one mailbox in alert-only mode, verify
+coverage, then let an assistant review messages and explain its evidence. MailSec
+is in private beta; access, free-tier enforcement and backend capabilities depend
+on the current deployment.
 
 Select the `email_security_readonly` profile for your first review and confirm
 the client tool list. See [security-product onboarding](SECURITY-PRODUCTS.md) for local and
@@ -31,14 +32,16 @@ Profiles select callable tools; the API still checks permissions.
 1. Subscribe the organization to `ext-email-security` with the console, CLI, or
    administration profile's `subscribe_to_extension`. All MailSec API routes,
    including onboarding instructions, require this subscription and beta access.
-2. Use `mailsec_get_onboarding` with `provider: "m365"` or `"gworkspace"` to
-   retrieve current scopes and setup steps. For Workspace, pass `project_id`,
-   `sa_email`, `topic` and `subscription` to fill customer-specific commands.
-   This tool creates no provider resources.
+2. Use `mailsec_get_onboarding` with `provider: "m365"`, `"gworkspace"` or
+   `"imap"` to retrieve current scopes and setup steps. For Workspace, pass
+   `project_id`, `sa_email`, `topic` and `subscription` to fill customer-specific
+   commands. This tool creates no provider resources.
 3. Follow the [provider setup guide](https://docs.limacharlie.io/email-security/providers/).
    Workspace needs domain-wide delegation, `admin_email` in the credential JSON,
    and a Pub/Sub topic and pull subscription in the service-account project.
    Configure push explicitly; there is no polling fallback.
+   IMAP (personal Gmail with an app password, or any IMAP host) needs no cloud
+   project: see [IMAP mailboxes](#imap-mailboxes) below.
 4. Save an enabled `secret` record, then
    an enabled `mailsec_provider` record scoped to one `include_addresses` mailbox.
    Use the console or the administration profile's Hive/extension tools described
@@ -56,6 +59,28 @@ Profiles select callable tools; the API still checks permissions.
 Provider Hive access uses `mailsec_provider.get/set`; policy and `dr-mail` use
 `mailsec.get/set`. Secrets use `secret.set`, with metadata-read access where MCP
 preserves existing metadata. Setup is not part of the read-only product profile.
+
+## IMAP mailboxes
+
+`provider: "imap"` covers personal Gmail accounts (via a Gmail app password) and
+generic IMAP hosts. An organization has ONE enabled `imap` `mailsec_provider`
+record, like every other provider, and that record lists all of its mailboxes in
+`imap.mailboxes`. Each mailbox has its own `address`, `host`, `port` (993 TLS or
+143 STARTTLS; there is no plaintext option) and its own `credentials` reference
+to a `secret` record whose value is `{"password": "..."}`. The record's top-level
+`credentials` stays empty, and `scope.include_*` is refused because the mailbox
+list is the scope. Adding or removing a mailbox means editing that list.
+
+`mailsec_test_connection` on the saved record returns one block of checks per
+mailbox. A refused login names the mailbox; other mailboxes in the record keep
+working. Limits to tell the user about:
+
+- IMAP cannot send mail, so reporter auto-replies are unavailable.
+- Mail that a user's own filter moves straight out of the Inbox (for example a
+  Gmail filter with "Skip the Inbox") is not covered.
+- Each IMAP mailbox counts as one protected mailbox toward the organization's
+  free-tier allowance.
+- Personal domains such as `gmail.com` are never treated as internal.
 
 ## First read-only investigation
 
