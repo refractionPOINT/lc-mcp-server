@@ -72,9 +72,13 @@ const (
 	newDocsPerHour         = 1000
 
 	maxConcurrentFetches = 16
-	globalRatePerSecond  = 20
-	globalRateBurst      = 40
-	perHostFetchesPerMin = 30
+	// Pool reserved for refreshes of known URLs (see Fetcher.knownLimiter).
+	maxConcurrentKnownFetches = 8
+	knownRatePerSecond        = 10
+	knownRateBurst            = 20
+	globalRatePerSecond       = 20
+	globalRateBurst           = 40
+	perHostFetchesPerMin      = 30
 	// perURLFetchesPerMin bounds refreshes of a document we already resolved
 	// before. They do not spend the per-host budget (so junk paths on a shared
 	// host can't starve them) but are still bounded per URL.
@@ -127,6 +131,11 @@ type Fetcher struct {
 	group   singleflight.Group
 	sem     chan struct{}
 	limiter *rate.Limiter
+	// Refreshes of known URLs have their own rate and concurrency pool, so
+	// lookups of unknown client_ids (anyone can send them: /authorize is
+	// unauthenticated) can't starve clients already in use.
+	knownSem     chan struct{}
+	knownLimiter *rate.Limiter
 }
 
 // NewFetcher builds the production fetcher: SSRF-guarded dialer, no proxy, no
@@ -148,12 +157,14 @@ func NewFetcherForTesting(store Store, logger *slog.Logger, transport http.Round
 
 func newFetcher(store Store, logger *slog.Logger, client *http.Client, pol urlPolicy) *Fetcher {
 	return &Fetcher{
-		store:   store,
-		logger:  logger,
-		client:  client,
-		policy:  pol,
-		sem:     make(chan struct{}, maxConcurrentFetches),
-		limiter: rate.NewLimiter(globalRatePerSecond, globalRateBurst),
+		store:        store,
+		logger:       logger,
+		client:       client,
+		policy:       pol,
+		sem:          make(chan struct{}, maxConcurrentFetches),
+		limiter:      rate.NewLimiter(globalRatePerSecond, globalRateBurst),
+		knownSem:     make(chan struct{}, maxConcurrentKnownFetches),
+		knownLimiter: rate.NewLimiter(knownRatePerSecond, knownRateBurst),
 	}
 }
 
@@ -240,13 +251,14 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 	shed := func(msg string) (*Document, error) {
 		return nil, &Error{Kind: KindBusy, Message: msg}
 	}
-	if !f.limiter.Allow() {
-		f.logger.Warn("CIMD fetch shed: global rate limit", "client_host", host)
-		return shed("too many client metadata lookups in progress; try again shortly")
-	}
+	// The per-domain (or per-URL) counter comes first, so lookups it sheds
+	// never spend the process-wide rate tokens; known URLs then draw on their
+	// own rate and concurrency pool.
 	budgetKey, budget, msg := HostPrefix+hashHex(registrableDomain(host)), int64(perHostFetchesPerMin), "too many lookups for this client's host; try again shortly"
+	limiter, sem := f.limiter, f.sem
 	if known {
 		budgetKey, budget, msg = URLPrefix+key, perURLFetchesPerMin, "too many lookups for this client; try again shortly"
+		limiter, sem = f.knownLimiter, f.knownSem
 	}
 	n, err := f.store.IncrEphemeral(ctx, budgetKey, time.Minute)
 	if err != nil {
@@ -255,9 +267,13 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		f.logger.Warn("CIMD fetch shed: per-host/URL limit", "client_host", host, "known", known)
 		return shed(msg)
 	}
+	if !limiter.Allow() {
+		f.logger.Warn("CIMD fetch shed: process rate limit", "client_host", host, "known", known)
+		return shed("too many client metadata lookups in progress; try again shortly")
+	}
 	select {
-	case f.sem <- struct{}{}:
-		defer func() { <-f.sem }()
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
 	case <-ctx.Done():
 		return shed("too many client metadata lookups in progress; try again shortly")
 	}
