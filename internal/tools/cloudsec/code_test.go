@@ -13,6 +13,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -191,7 +192,6 @@ func TestLocalScanSpecValidation(t *testing.T) {
 // tenants' credentials, where "scan this path" is one tenant asking the process to
 // read a directory it chose.
 func TestCodeScanLocalIsStdioOnly(t *testing.T) {
-	t.Setenv("MCP_MODE", "http")
 	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{"path": t.TempDir()})
 	require.NoError(t, err)
 	require.True(t, result.IsError)
@@ -200,8 +200,7 @@ func TestCodeScanLocalIsStdioOnly(t *testing.T) {
 	// The control: the same call in stdio mode must get PAST the mode gate. It is
 	// asserted through a different failure, because a guard that also rejects the
 	// allowed case proves nothing about the guard.
-	t.Setenv("MCP_MODE", "stdio")
-	result, err = handleCodeScanLocal(context.Background(), map[string]interface{}{
+	result, err = handleCodeScanLocal(localFSContext(), map[string]interface{}{
 		"path": t.TempDir(), "scanners": "secrets",
 	})
 	require.NoError(t, err)
@@ -209,8 +208,28 @@ func TestCodeScanLocalIsStdioOnly(t *testing.T) {
 	assert.NotContains(t, codeResultText(result), "stdio mode")
 }
 
+// output_path is a caller-chosen write to the server's filesystem. Over HTTP the whole
+// tool is refused before anything is opened, probed or scanned: no file is created.
+func TestCodeScanLocalOverHTTPNeverTouchesTheFilesystem(t *testing.T) {
+	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
+		t.Fatal("no scan may start over HTTP")
+		return nil, nil
+	})
+	defer restore()
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "planted-by-tenant.json")
+	for _, ctx := range []context.Context{context.Background(), auth.WithAuthContext(context.Background(), &auth.AuthContext{Mode: auth.AuthModeNormal, OID: "o", APIKey: "k"})} {
+		result, err := handleCodeScanLocal(ctx, map[string]interface{}{"path": dir, "output_path": out, "repo": "acme/api"})
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		assert.Contains(t, codeResultText(result), "stdio mode")
+		_, statErr := os.Stat(out)
+		assert.True(t, os.IsNotExist(statErr), "output_path must not be created on the server")
+	}
+}
+
 func TestCodeScanLocalRefusesToGuessTheRepository(t *testing.T) {
-	t.Setenv("MCP_MODE", "stdio")
 	// Nothing may run: the refusal has to land before minutes are spent scanning.
 	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
 		t.Fatal("the scan must not start when the ingest target is unknown")
@@ -218,7 +237,7 @@ func TestCodeScanLocalRefusesToGuessTheRepository(t *testing.T) {
 	})
 	defer restore()
 
-	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+	result, err := handleCodeScanLocal(localFSContext(), map[string]interface{}{
 		"path": t.TempDir(), "ingest": true,
 	})
 	require.NoError(t, err)
@@ -229,7 +248,6 @@ func TestCodeScanLocalRefusesToGuessTheRepository(t *testing.T) {
 // A scan that found things and pushed nothing reads like "nothing was found" unless
 // the answer says otherwise.
 func TestCodeScanLocalWithoutIngestSaysSoAndPushesNothing(t *testing.T) {
-	t.Setenv("MCP_MODE", "stdio")
 	dir := t.TempDir()
 	restore := stubCodeScanRunner(t, func(_ context.Context, spec localScanSpec) ([]byte, error) {
 		assert.Equal(t, dir, spec.Path)
@@ -239,7 +257,7 @@ func TestCodeScanLocalWithoutIngestSaysSoAndPushesNothing(t *testing.T) {
 
 	// No organization is in the context: if this path tried to push, it would fail
 	// here rather than return a success.
-	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+	result, err := handleCodeScanLocal(localFSContext(), map[string]interface{}{
 		"path": dir, "repo": "acme/api",
 	})
 	require.NoError(t, err)
@@ -253,13 +271,12 @@ func TestCodeScanLocalWithoutIngestSaysSoAndPushesNothing(t *testing.T) {
 }
 
 func TestCodeScanLocalSurfacesTheScannerFailure(t *testing.T) {
-	t.Setenv("MCP_MODE", "stdio")
 	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
 		return nil, errors.New("error_code=mirror_stale")
 	})
 	defer restore()
 
-	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{"path": t.TempDir()})
+	result, err := handleCodeScanLocal(localFSContext(), map[string]interface{}{"path": t.TempDir()})
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 	assert.Contains(t, codeResultText(result), "error_code=mirror_stale")
@@ -294,14 +311,13 @@ func TestCodeIngestBody(t *testing.T) {
 }
 
 func TestCodeScanLocalRefusesAnOverCapReport(t *testing.T) {
-	t.Setenv("MCP_MODE", "stdio")
 	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
 		return make([]byte, maxCodeIngestBytes+1), nil
 	})
 	defer restore()
 
 	// Refused here, with the size, instead of arriving as a gateway 400 about a body.
-	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+	result, err := handleCodeScanLocal(localFSContext(), map[string]interface{}{
 		"path": t.TempDir(), "repo": "acme/api", "ingest": true,
 	})
 	require.NoError(t, err)
@@ -559,7 +575,6 @@ func TestMountablePartKeepsWindowsPathsUsable(t *testing.T) {
 // A scan costs minutes and its report lives only in a temporary directory, so a failed
 // push is unrecoverable unless a copy was kept. The failure has to say which case it is.
 func TestCodeScanLocalIngestFailureSaysWhetherThereIsACopy(t *testing.T) {
-	t.Setenv("MCP_MODE", "stdio")
 	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
 		return []byte("REPORT"), nil
 	})
@@ -569,7 +584,7 @@ func TestCodeScanLocalIngestFailureSaysWhetherThereIsACopy(t *testing.T) {
 	out := filepath.Join(dir, "report.json.gz")
 
 	// No organization in the context, so the push cannot happen.
-	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+	result, err := handleCodeScanLocal(localFSContext(), map[string]interface{}{
 		"path": dir, "repo": "acme/api", "ingest": true, "output_path": out,
 	})
 	require.NoError(t, err)
@@ -578,7 +593,7 @@ func TestCodeScanLocalIngestFailureSaysWhetherThereIsACopy(t *testing.T) {
 
 	// The control: with no output_path the same failure must say the opposite, or the
 	// message is decoration rather than information.
-	result, err = handleCodeScanLocal(context.Background(), map[string]interface{}{
+	result, err = handleCodeScanLocal(localFSContext(), map[string]interface{}{
 		"path": dir, "repo": "acme/api", "ingest": true,
 	})
 	require.NoError(t, err)
@@ -587,7 +602,6 @@ func TestCodeScanLocalIngestFailureSaysWhetherThereIsACopy(t *testing.T) {
 }
 
 func TestCodeScanLocalWritesTheRequestedCopy(t *testing.T) {
-	t.Setenv("MCP_MODE", "stdio")
 	restore := stubCodeScanRunner(t, func(context.Context, localScanSpec) ([]byte, error) {
 		return []byte("REPORT"), nil
 	})
@@ -595,7 +609,7 @@ func TestCodeScanLocalWritesTheRequestedCopy(t *testing.T) {
 
 	dir := t.TempDir()
 	out := filepath.Join(dir, "report.json.gz")
-	result, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+	result, err := handleCodeScanLocal(localFSContext(), map[string]interface{}{
 		"path": dir, "repo": "acme/api", "output_path": out,
 	})
 	require.NoError(t, err)
@@ -610,7 +624,7 @@ func TestCodeScanLocalWritesTheRequestedCopy(t *testing.T) {
 			return nil, nil
 		})
 		defer restore()
-		res, err := handleCodeScanLocal(context.Background(), map[string]interface{}{
+		res, err := handleCodeScanLocal(localFSContext(), map[string]interface{}{
 			"path": dir, "output_path": filepath.Join(dir, "no-such-dir", "r.gz"),
 		})
 		require.NoError(t, err)
@@ -659,4 +673,10 @@ func TestCodeFindingsInheritsTheSharedSelector(t *testing.T) {
 	})
 	require.NotNil(t, bad)
 	assert.True(t, bad.IsError)
+}
+
+// localFSContext is a request context the way the stdio server builds it: the caller
+// is on their own machine, so local filesystem access is granted.
+func localFSContext() context.Context {
+	return auth.WithLocalFilesystemAccess(context.Background())
 }

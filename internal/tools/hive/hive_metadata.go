@@ -97,13 +97,13 @@ func RegisterSetHiveRecordEnabled() {
 				mcp.Required(),
 				mcp.Description("Whether the record should be enabled")),
 			mcp.WithString("partition_key",
-				mcp.Description("Hive partition (defaults to the organization OID)")),
+				mcp.Description("Hive partition. Hives are partitioned by organization, so this must be the organization's own OID, which is also the default; any other value is refused")),
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 			key, ok := args["key"].(string)
 			if !ok || key == "" {
@@ -119,9 +119,9 @@ func RegisterSetHiveRecordEnabled() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			partitionKey, _ := args["partition_key"].(string)
-			if partitionKey == "" {
-				partitionKey = org.GetOID()
+			partitionKey, errResult := resolvePartition(ctx, org, args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.UsrMtd {
@@ -164,13 +164,13 @@ func RegisterSetHiveRecordTags() {
 			mcp.WithString("action",
 				mcp.Description("How to apply the tags: 'set' (default), 'add', or 'remove'")),
 			mcp.WithString("partition_key",
-				mcp.Description("Hive partition (defaults to the organization OID)")),
+				mcp.Description("Hive partition. Hives are partitioned by organization, so this must be the organization's own OID, which is also the default; any other value is refused")),
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 			key, ok := args["key"].(string)
 			if !ok || key == "" {
@@ -193,9 +193,9 @@ func RegisterSetHiveRecordTags() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			partitionKey, _ := args["partition_key"].(string)
-			if partitionKey == "" {
-				partitionKey = org.GetOID()
+			partitionKey, errResult := resolvePartition(ctx, org, args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			var newTags []string
@@ -241,13 +241,13 @@ func RegisterSetHiveRecordComment() {
 				mcp.Required(),
 				mcp.Description("Comment to set")),
 			mcp.WithString("partition_key",
-				mcp.Description("Hive partition (defaults to the organization OID)")),
+				mcp.Description("Hive partition. Hives are partitioned by organization, so this must be the organization's own OID, which is also the default; any other value is refused")),
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 			key, ok := args["key"].(string)
 			if !ok || key == "" {
@@ -263,9 +263,9 @@ func RegisterSetHiveRecordComment() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			partitionKey, _ := args["partition_key"].(string)
-			if partitionKey == "" {
-				partitionKey = org.GetOID()
+			partitionKey, errResult := resolvePartition(ctx, org, args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			err = updateRecordMTD(org, hiveName, partitionKey, key, func(existing lc.UsrMtd) lc.UsrMtd {
@@ -305,13 +305,13 @@ func RegisterRenameHiveRecord() {
 				mcp.Required(),
 				mcp.Description("New name for the record")),
 			mcp.WithString("partition_key",
-				mcp.Description("Hive partition (defaults to the organization OID)")),
+				mcp.Description("Hive partition. Hives are partitioned by organization, so this must be the organization's own OID, which is also the default; any other value is refused")),
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 			key, ok := args["key"].(string)
 			if !ok || key == "" {
@@ -327,9 +327,9 @@ func RegisterRenameHiveRecord() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			partitionKey, _ := args["partition_key"].(string)
-			if partitionKey == "" {
-				partitionKey = org.GetOID()
+			partitionKey, errResult := resolvePartition(ctx, org, args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			client := lc.NewHiveClient(org)

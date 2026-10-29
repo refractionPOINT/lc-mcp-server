@@ -23,6 +23,7 @@ const (
 	permissionEnforceKey contextKey = "lc_permission_enforce"
 	allowedToolsKey      contextKey = "lc_allowed_tools"
 	jwtPassthroughKey    contextKey = "lc_jwt_passthrough"
+	localFilesystemKey   contextKey = "lc_local_filesystem"
 )
 
 // AuthMode represents the authentication mode
@@ -395,4 +396,26 @@ func IsPermissionEnforcementEnabled(ctx context.Context) bool {
 		return true // Default to enabled
 	}
 	return enforce
+}
+
+// WithLocalFilesystemAccess marks a request as running on the caller's own machine:
+// the single-user stdio server, where "a path on this host" is a path the caller
+// owns. Tools that read or write the server's filesystem on the strength of a
+// caller-supplied path (payload upload/download, local code scans) require it.
+//
+// It is an opt-IN marker, set only by the stdio server's context function and never
+// by the HTTP transport. The HTTP server is shared by many tenants and holds other
+// tenants' credentials and temp results, so any request path that forgets to set the
+// marker (a new transport, a test harness, a background job) gets the safe answer:
+// no server filesystem access.
+func WithLocalFilesystemAccess(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localFilesystemKey, true)
+}
+
+// HasLocalFilesystemAccess reports whether the request may read and write the
+// filesystem of the machine hosting this process on behalf of the caller. False
+// unless WithLocalFilesystemAccess was applied (see there).
+func HasLocalFilesystemAccess(ctx context.Context) bool {
+	ok, _ := ctx.Value(localFilesystemKey).(bool)
+	return ok
 }

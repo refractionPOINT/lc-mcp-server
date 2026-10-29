@@ -2,6 +2,8 @@ package hive
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -28,9 +30,9 @@ func RegisterGetHiveSchema() {
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			org, err := getOrganization(ctx)
@@ -70,13 +72,13 @@ func RegisterValidateHiveRecord() {
 				mcp.Required(),
 				mcp.Description("Record data payload to validate")),
 			mcp.WithString("partition_key",
-				mcp.Description("Hive partition (defaults to the organization OID)")),
+				mcp.Description("Hive partition. Hives are partitioned by organization, so this must be the organization's own OID, which is also the default; any other value is refused")),
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			key, ok := args["key"].(string)
@@ -94,12 +96,17 @@ func RegisterValidateHiveRecord() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			partitionKey, _ := args["partition_key"].(string)
-			if partitionKey == "" {
-				partitionKey = org.GetOID()
+			partitionKey, errResult := resolvePartition(ctx, org, args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
-			result, err := org.ValidateHiveRecord(hiveName, partitionKey, key, lc.Dict(data))
+			// Not org.ValidateHiveRecord: the SDK puts the key into the path unescaped,
+			// so a key containing '/' or '..' could walk the request to another route.
+			result := lc.Dict{}
+			err = org.GenericPOSTRequest(
+				fmt.Sprintf("hive/%s/%s/%s/validate", hiveName, partitionKey, url.PathEscape(key)),
+				lc.Dict{"data": lc.Dict(data)}, &result)
 			if err != nil {
 				return tools.ErrorResultf("failed to validate hive record '%s' in hive '%s': %v", key, hiveName, err), nil
 			}

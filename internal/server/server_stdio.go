@@ -122,6 +122,11 @@ func (s *STDIOServer) Serve(ctx context.Context) error {
 		// Add auth context for all requests
 		reqCtx = auth.WithAuthContext(reqCtx, s.config.Auth)
 
+		// stdio is a single local user on their own machine, so tools may touch the
+		// local filesystem by caller-supplied path. Opt-in only: the HTTP transport
+		// never sets this (see auth.WithLocalFilesystemAccess).
+		reqCtx = auth.WithLocalFilesystemAccess(reqCtx)
+
 		// Add SDK cache
 		reqCtx = auth.WithSDKCache(reqCtx, s.sdkCache)
 

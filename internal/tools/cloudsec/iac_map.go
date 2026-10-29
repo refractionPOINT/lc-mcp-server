@@ -206,7 +206,7 @@ func validateSanitizedMap(raw interface{}) ([]byte, error) {
 func stringValue(raw interface{}) string { v, _ := raw.(string); return v }
 
 func handleIaCExtract(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	if refusal := requireStdio(); refusal != nil {
+	if refusal := requireStdio(ctx); refusal != nil {
 		return refusal, nil
 	}
 	b, e := boundedCodeFields(args, []string{"input", "repository", "commit", "source_kind"}, "input", "repository", "commit", "source_kind", "workspace", "provider", "tool", "observed_at")
