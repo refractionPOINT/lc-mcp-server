@@ -88,11 +88,15 @@ func TestEmailSecurityReadonlyRejectsPrivilegedCalls(t *testing.T) {
 				Error struct {
 					Code    int    `json:"code"`
 					Message string `json:"message"`
+					Data    string `json:"data"`
 				} `json:"error"`
 			}
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-			assert.Equal(t, -32601, response.Error.Code)
-			assert.Equal(t, "Tool not available", response.Error.Message)
+			// Outside the endpoint's tool set is an unknown tool for this
+			// endpoint, which MCP reports as invalid params.
+			assert.Equal(t, -32602, response.Error.Code)
+			assert.Equal(t, "Unknown tool: "+name, response.Error.Message)
+			assert.Contains(t, response.Error.Data, "not available on this endpoint")
 		})
 	}
 }
@@ -132,7 +136,7 @@ func TestUnknownProductProfileDoesNotExposeTools(t *testing.T) {
 				if method == "tools/list" {
 					assert.Empty(t, response.Result.Tools)
 				} else {
-					assert.Equal(t, -32601, response.Error.Code)
+					assert.Equal(t, -32602, response.Error.Code)
 				}
 			}
 		})

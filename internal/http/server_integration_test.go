@@ -134,7 +134,9 @@ func TestInvalidJSONRPC(t *testing.T) {
 
 		server.mux.ServeHTTP(w, req)
 
-		assert.Equal(t, http.StatusOK, w.Code) // JSON-RPC errors still return 200
+		// A body that is not JSON cannot be a request: 400, as every MCP
+		// HTTP transport revision expects for input the server cannot accept.
+		assert.Equal(t, http.StatusBadRequest, w.Code)
 
 		var response map[string]interface{}
 		err := json.Unmarshal(w.Body.Bytes(), &response)

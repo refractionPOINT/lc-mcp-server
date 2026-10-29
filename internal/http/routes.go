@@ -25,6 +25,13 @@ func (s *Server) setupRoutes() {
 
 	// OAuth discovery endpoints (RFC 8414, RFC 9728)
 	s.mux.HandleFunc("/.well-known/oauth-protected-resource", s.handleProtectedResourceMetadata)
+	// RFC 9728 path-inserted form for a resource with a path component
+	// (/.well-known/oauth-protected-resource/mcp, .../mcp/<profile>), which
+	// clients since the 2025-06-18 spec try before the root form. Every MCP
+	// path shares one protected resource, so they all get the same document.
+	s.mux.HandleFunc("/.well-known/oauth-protected-resource/", s.handlePathInsertedProtectedResourceMetadata)
+	// Some clients append the well-known suffix to the MCP URL instead.
+	s.mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", s.handleProtectedResourceMetadata)
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server", s.handleAuthorizationServerMetadata)
 	// Claude Code also looks for the /mcp variant
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", s.handleAuthorizationServerMetadata)
@@ -158,6 +165,40 @@ func (s *Server) handleRootRequest(w http.ResponseWriter, r *http.Request) {
 // OAuth Metadata endpoints
 func (s *Server) handleProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
 	s.oauthHandlers.HandleProtectedResourceMetadata(w, r)
+}
+
+// handlePathInsertedProtectedResourceMetadata serves the protected resource
+// metadata for /.well-known/oauth-protected-resource/<mcp path>, and 404s any
+// suffix that is not an MCP endpoint of this server.
+func (s *Server) handlePathInsertedProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	suffix := strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource")
+	if !s.isMCPEndpointPath(suffix) {
+		http.NotFound(w, r)
+		return
+	}
+	s.oauthHandlers.HandleProtectedResourceMetadata(w, r)
+}
+
+// isMCPEndpointPath reports whether path is one of the routes served by
+// handleMCPRequest: /mcp, /mcp/v1, /mcp/<profile> or /mcp/v1/<profile>.
+func (s *Server) isMCPEndpointPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/mcp")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimPrefix(rest, "/"+APIVersionV1)
+	if rest == "" {
+		return true
+	}
+	profile, ok := strings.CutPrefix(rest, "/")
+	if !ok || profile == "" {
+		return false
+	}
+	if profile == "all" {
+		return true
+	}
+	_, known := tools.ProfileDefinitions[profile]
+	return known
 }
 
 func (s *Server) handleAuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) {

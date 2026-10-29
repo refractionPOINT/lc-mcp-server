@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/gcs"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
@@ -18,7 +21,19 @@ import (
 // Note: tools.GetOrganization is used for permission checking
 
 func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
+	// DNS-rebinding defence (Streamable HTTP, all revisions): a browser
+	// context from an untrusted origin must not reach the MCP endpoint.
+	if origin := r.Header.Get("Origin"); !s.originAllowed(origin) {
+		s.logger.Warn("Rejected MCP request from disallowed Origin", "origin", origin, "path", r.URL.Path)
+		s.writeRPCError(w, nil, newRPCError(http.StatusForbidden, rpcInvalidRequest, "Forbidden", "origin not allowed"))
+		return
+	}
+
+	// The endpoint only takes POST. GET (the legacy standalone SSE stream)
+	// and DELETE (legacy session termination) are answered with 405, which
+	// every protocol revision allows.
 	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
 		s.writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
@@ -27,92 +42,177 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	apiVersion := GetVersionFromContext(r.Context())
 	s.logger.Debug("Handling MCP request", "api_version", apiVersion, "path", r.URL.Path)
 
-	// Parse JSON-RPC request
-	var req struct {
-		JSONRPC string                 `json:"jsonrpc"`
-		ID      interface{}            `json:"id"`
-		Method  string                 `json:"method"`
-		Params  map[string]interface{} `json:"params"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeJSONRPCError(w, nil, -32700, "Parse error", err.Error())
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeRPCError(w, nil, newRPCError(http.StatusRequestEntityTooLarge, rpcInvalidRequest, "Invalid Request", "request body too large"))
+			return
+		}
+		s.writeRPCError(w, nil, newRPCError(http.StatusBadRequest, rpcParseError, "Parse error", "failed to read request body"))
 		return
 	}
 
-	// Validate JSON-RPC version
-	if req.JSONRPC != "2.0" {
-		s.writeJSONRPCError(w, req.ID, -32600, "Invalid Request", "jsonrpc must be '2.0'")
+	msg, rpcErr := parseMCPMessage(body)
+	if rpcErr != nil {
+		var id json.RawMessage
+		if msg != nil {
+			id = msg.id
+		}
+		s.writeRPCError(w, id, rpcErr)
 		return
 	}
 
-	// Handle different MCP methods
-	switch req.Method {
+	if msg.notification {
+		// Notifications get no JSON-RPC response. None of the ones clients
+		// send (notifications/initialized, notifications/cancelled, ...)
+		// need any action here: requests are answered synchronously and
+		// carry no session state.
+		s.logger.Debug("MCP notification received", "method", msg.method)
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	call := msg.call
+	if rpcErr := classifyEra(r, call); rpcErr != nil {
+		s.writeRPCError(w, call.id, rpcErr)
+		return
+	}
+
+	if call.era == eraModern {
+		s.dispatchModern(w, r, call)
+		return
+	}
+	s.dispatchLegacy(w, r, call)
+}
+
+// dispatchModern serves a 2026-07-28 request.
+func (s *Server) dispatchModern(w http.ResponseWriter, r *http.Request, call *mcpCall) {
+	switch call.method {
+	case methodServerDiscover:
+		// Mirrors initialize in the legacy era: the first thing a client
+		// does, so an OAuth client learns here that it must sign in.
+		if !s.requestHasCredentials(r) {
+			s.writeAuthChallenge(w, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
+			return
+		}
+		s.handleDiscover(w, call)
+	case "tools/list":
+		s.handleToolsList(w, r, call)
+	case "tools/call":
+		s.handleToolCall(w, r, call)
+	default:
+		// Includes the RPCs 2026-07-28 removed (ping, initialize,
+		// logging/setLevel) and features this server does not offer.
+		s.writeRPCError(w, call.id, newRPCError(http.StatusNotFound, rpcMethodNotFound, "Method not found", fmt.Sprintf("Unknown method: %s", call.method)))
+	}
+}
+
+// dispatchLegacy serves a request from a client using an initialize-based
+// protocol revision (2025-11-25 and earlier).
+func (s *Server) dispatchLegacy(w http.ResponseWriter, r *http.Request, call *mcpCall) {
+	switch call.method {
 	case "ping":
-		// Heartbeat/keepalive - return empty response
-		s.writeJSONRPCSuccess(w, req.ID, map[string]interface{}{})
+		s.writeRPCResult(w, call, map[string]any{}, false)
 	case "initialize":
 		// Opening a session needs a credential so that an OAuth client learns,
 		// before it lists or calls anything, that it must sign in. tools/list
 		// stays open: the tool catalog is public and holds no org data.
 		if !s.requestHasCredentials(r) {
-			s.writeAuthChallenge(w, req.ID, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
+			s.writeAuthChallenge(w, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
 			return
 		}
-		s.handleInitialize(w, r, req.ID, req.Params)
-	case "notifications/initialized":
-		// Client confirms initialization is complete - just log it
-		s.logger.Info("Client initialization complete")
-		// Notifications don't require a response, but we'll send success for compatibility
-		s.writeJSONRPCSuccess(w, req.ID, map[string]interface{}{})
-	case "tools/call":
-		s.handleToolCall(w, r, req.ID, req.Params)
+		s.handleInitialize(w, call)
+	case methodServerDiscover:
+		// Reached only when a legacy version is carried in _meta. Discovery
+		// is answered for any supported version.
+		if !s.requestHasCredentials(r) {
+			s.writeAuthChallenge(w, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
+			return
+		}
+		s.handleDiscover(w, call)
 	case "tools/list":
-		s.handleToolsList(w, r, req.ID)
+		s.handleToolsList(w, r, call)
+	case "tools/call":
+		s.handleToolCall(w, r, call)
 	default:
-		s.writeJSONRPCError(w, req.ID, -32601, "Method not found", fmt.Sprintf("Unknown method: %s", req.Method))
+		s.writeRPCError(w, call.id, newRPCError(http.StatusOK, rpcMethodNotFound, "Method not found", fmt.Sprintf("Unknown method: %s", call.method)))
 	}
 }
 
-func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, id interface{}, params map[string]interface{}) {
-	// Log client info if provided
-	if clientInfo, ok := params["clientInfo"].(map[string]interface{}); ok {
-		clientName, _ := clientInfo["name"].(string)
-		clientVersion, _ := clientInfo["version"].(string)
-		s.logger.Info("MCP client initializing", "client", clientName, "version", clientVersion)
+func (s *Server) handleInitialize(w http.ResponseWriter, call *mcpCall) {
+	var params struct {
+		ProtocolVersion string             `json:"protocolVersion"`
+		ClientInfo      mcp.Implementation `json:"clientInfo"`
 	}
+	// initialize params are informational here: a malformed field must not
+	// stop a client from connecting, so decode errors are ignored.
+	_ = json.Unmarshal(call.params, &params)
 
-	// Return server capabilities per MCP protocol spec
-	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
-		"protocolVersion": "2024-11-05",
-		"capabilities": map[string]interface{}{
-			"tools": map[string]interface{}{}, // We support tools
-		},
-		"serverInfo": map[string]interface{}{
-			"name":    "LimaCharlie MCP Server",
-			"version": "1.0.0",
-		},
-	})
+	negotiated := negotiateLegacyVersion(params.ProtocolVersion)
+	s.logger.Info("MCP client initializing",
+		"client", params.ClientInfo.Name,
+		"version", params.ClientInfo.Version,
+		"requested_protocol", params.ProtocolVersion,
+		"negotiated_protocol", negotiated)
+
+	s.writeRPCResult(w, call, map[string]any{
+		"protocolVersion": negotiated,
+		"capabilities":    serverCapabilities(),
+		"serverInfo":      serverInfo(),
+	}, false)
 }
 
-func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id interface{}, params map[string]interface{}) {
+func (s *Server) handleDiscover(w http.ResponseWriter, call *mcpCall) {
+	clientName, clientVersion := "", ""
+	if call.clientInfo != nil {
+		clientName, clientVersion = call.clientInfo.Name, call.clientInfo.Version
+	}
+	s.logger.Info("MCP client discovering",
+		"client", clientName,
+		"version", clientVersion,
+		"protocol", call.protocolVersion)
+
+	// DiscoverResult is a modern type: it always carries resultType, the
+	// caching hints and the server identity in _meta, whichever version the
+	// caller named.
+	modern := *call
+	modern.era = eraModern
+	s.writeRPCResult(w, &modern, map[string]any{
+		"supportedVersions": supportedProtocolVersions,
+		"capabilities":      serverCapabilities(),
+	}, true)
+}
+
+func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mcpCall) {
+	id := call.id
 	// Generate request ID for tracking
 	requestID := fmt.Sprintf("req_%d", time.Now().UnixNano())
 	startTime := time.Now()
 
-	// Extract tool name and arguments
-	toolName, ok := params["name"].(string)
-	if !ok {
-		s.writeJSONRPCError(w, id, -32602, "Invalid params", "Missing or invalid 'name' parameter")
+	var params struct {
+		Name      *string         `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(call.params, &params); err != nil || params.Name == nil || *params.Name == "" {
+		s.writeRPCError(w, id, newRPCError(http.StatusOK, rpcInvalidParams, "Invalid params", "Missing or invalid 'name' parameter"))
 		return
 	}
+	toolName := *params.Name
 
-	s.logger.Info("Tool call started", "request_id", requestID, "tool", toolName)
-
-	arguments, ok := params["arguments"].(map[string]interface{})
-	if !ok {
-		arguments = make(map[string]interface{})
+	arguments := map[string]interface{}{}
+	if len(params.Arguments) > 0 && string(params.Arguments) != "null" {
+		if err := json.Unmarshal(params.Arguments, &arguments); err != nil || arguments == nil {
+			s.writeRPCError(w, id, newRPCError(http.StatusOK, rpcInvalidParams, "Invalid params", "'arguments' must be an object"))
+			return
+		}
 	}
+
+	clientName := ""
+	if call.clientInfo != nil {
+		clientName = call.clientInfo.Name
+	}
+	s.logger.Info("Tool call started", "request_id", requestID, "tool", toolName, "client", clientName, "protocol", call.protocolVersion)
 
 	// Determine authentication method:
 	// 1. If Bearer token provided → use OAuth/JWT passthrough
@@ -277,7 +377,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	// Handle OID switching if tool requires it and OID is provided
 	tool, ok := tools.GetTool(toolName)
 	if !ok {
-		s.writeJSONRPCError(w, id, -32601, "Tool not found", fmt.Sprintf("Unknown tool: %s", toolName))
+		s.writeJSONRPCError(w, id, rpcInvalidParams, fmt.Sprintf("Unknown tool: %s", toolName), fmt.Sprintf("Unknown tool: %s", toolName))
 		return
 	}
 
@@ -296,7 +396,9 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 			"request_id", requestID,
 			"tool", toolName,
 			"profile", s.getActiveProfile(r))
-		s.writeJSONRPCError(w, id, -32601, "Tool not available",
+		// An unknown tool as far as this endpoint is concerned, which the
+		// spec reports as invalid params.
+		s.writeJSONRPCError(w, id, rpcInvalidParams, fmt.Sprintf("Unknown tool: %s", toolName),
 			fmt.Sprintf("Tool '%s' is not available on this endpoint; it is outside the active profile's tool set", toolName))
 		return
 	}
@@ -318,14 +420,16 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 			var err error
 			ctx, err = auth.WithOID(ctx, oidParam, s.logger)
 			if err != nil {
-				s.writeJSONRPCError(w, id, -32000, "Invalid OID", fmt.Sprintf("Failed to switch OID: %v", err))
+				// Reported as a tool execution error so the model can correct
+				// the argument and retry.
+				s.writeToolError(w, call, fmt.Sprintf("Invalid OID: failed to switch OID: %v", err))
 				return
 			}
 			effectiveOID = oidParam
 		} else if isJWTPassthrough {
 			// JWT passthrough mode requires OID in tool arguments
-			s.writeJSONRPCError(w, id, -32602, "Missing parameter",
-				fmt.Sprintf("'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
+			s.writeToolError(w, call,
+				fmt.Sprintf("Missing parameter: 'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
 			return
 		} else {
 			effectiveOID = authCtx.OID
@@ -349,7 +453,9 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	toolDuration := time.Since(toolStartTime)
 	if err != nil {
 		s.logger.Info("Tool execution failed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds(), "error", err.Error())
-		s.writeJSONRPCError(w, id, -32000, "Tool execution error", err.Error())
+		// A failure inside the tool is a tool execution error (isError), not
+		// a protocol error, so the model sees the reason and can adapt.
+		s.writeToolError(w, call, err.Error())
 		return
 	}
 	s.logger.Info("Tool execution completed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds())
@@ -366,16 +472,32 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, id inter
 	s.logger.Info("Tool call completed successfully", "request_id", requestID, "tool", toolName, "total_duration_ms", totalDuration.Milliseconds())
 
 	// Return success response
-	s.writeJSONRPCSuccess(w, id, wrappedResult)
+	s.writeRPCResult(w, call, wrappedResult, false)
 }
 
-func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id interface{}) {
+// writeToolError answers a tools/call with a tool execution error.
+func (s *Server) writeToolError(w http.ResponseWriter, call *mcpCall, message string) {
+	s.writeRPCResult(w, call, tools.ErrorResult(message), false)
+}
+
+func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, call *mcpCall) {
+	toolList, err := s.listTools(r)
+	if err != nil {
+		// Error from header parsing/validation
+		s.writeJSONRPCError(w, call.id, rpcInvalidParams, "Invalid params", err.Error())
+		return
+	}
+	s.writeRPCResult(w, call, map[string]any{"tools": toolList}, true)
+}
+
+// listTools returns the tool definitions this request may see, sorted by name
+// so that the listing is stable across requests (clients cache it, and a
+// stable order keeps LLM prompt caches warm).
+func (s *Server) listTools(r *http.Request) ([]mcp.Tool, error) {
 	// Get tools for this request (may be from profile or X-MCP-Tools header)
 	toolNames, err := s.getToolsForRequest(r)
 	if err != nil {
-		// Error from header parsing/validation
-		s.writeJSONRPCError(w, id, -32602, "Invalid params", err.Error())
-		return
+		return nil, err
 	}
 
 	// Determine if we need to add OID parameter to tools
@@ -388,12 +510,14 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 		needsOIDParam = false
 	}
 
-	toolList := make([]map[string]interface{}, 0, len(toolNames))
+	toolList := make([]mcp.Tool, 0, len(toolNames))
+	seen := make(map[string]bool, len(toolNames))
 	for _, name := range toolNames {
 		tool, ok := tools.GetTool(name)
-		if !ok {
+		if !ok || seen[tool.ToolName()] {
 			continue
 		}
+		seen[tool.ToolName()] = true
 
 		schema := tool.ToolSchema()
 
@@ -401,17 +525,16 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, id inte
 		if tool.NeedsOID() && needsOIDParam {
 			schema = tools.AddOIDToToolSchema(schema)
 		}
+		// The registry name is the one tools/call dispatches on.
+		schema.Name = tool.ToolName()
 
-		toolList = append(toolList, map[string]interface{}{
-			"name":        tool.ToolName(),
-			"description": schema.Description,
-			"inputSchema": schema.InputSchema,
-		})
+		// The full definition goes out, including annotations (read-only /
+		// destructive hints, title) and any output schema, so clients can
+		// gate and present tools correctly.
+		toolList = append(toolList, schema)
 	}
-
-	s.writeJSONRPCSuccess(w, id, map[string]interface{}{
-		"tools": toolList,
-	})
+	sort.Slice(toolList, func(i, j int) bool { return toolList[i].Name < toolList[j].Name })
+	return toolList, nil
 }
 
 // jwtCoversOID reports whether a LimaCharlie JWT's own claims authorize the
@@ -510,14 +633,14 @@ func (s *Server) extractUIDFromToken(token string) (string, string, string, erro
 	return validation.UID, validation.LimaCharlieJWT, validation.FirebaseIDToken, nil
 }
 
-func (s *Server) writeJSONRPCSuccess(w http.ResponseWriter, id interface{}, result interface{}) {
-	rw := NewResponseWriter(w, s.logger)
-	rw.WriteJSONRPCSuccess(id, result)
-}
-
-func (s *Server) writeJSONRPCError(w http.ResponseWriter, id interface{}, code int, message string, data string) {
-	rw := NewResponseWriter(w, s.logger)
-	rw.WriteJSONRPCError(id, code, message, data)
+// writeJSONRPCError writes a JSON-RPC error carried by an HTTP 200, the
+// status for errors raised while processing a well-formed request.
+func (s *Server) writeJSONRPCError(w http.ResponseWriter, id json.RawMessage, code int, message string, data string) {
+	var d any
+	if data != "" {
+		d = data
+	}
+	s.writeRPCError(w, id, newRPCError(http.StatusOK, code, message, d))
 }
 
 // parseToolList parses a comma-separated list of tool names from a header value
