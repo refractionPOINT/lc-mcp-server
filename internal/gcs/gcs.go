@@ -5,14 +5,13 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
 	"time"
 
-	credentials "cloud.google.com/go/iam/credentials/apiv1"
-	"cloud.google.com/go/iam/credentials/apiv1/credentialspb"
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
 )
@@ -64,6 +63,9 @@ func LoadConfig() *Config {
 type Manager struct {
 	config *Config
 	client *storage.Client
+	store  objectStore
+	// nameKey keys the tenant hashes embedded in object names.
+	nameKey []byte
 }
 
 // NewManager creates a new GCS manager
@@ -78,9 +80,17 @@ func NewManager(ctx context.Context, config *Config) (*Manager, error) {
 		return nil, fmt.Errorf("failed to create GCS client: %w", err)
 	}
 
+	nameKey, err := newNameKey()
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+
 	return &Manager{
-		config: config,
-		client: client,
+		config:  config,
+		client:  client,
+		store:   newGCSStore(client, config.BucketName, config.SignerServiceAcct),
+		nameKey: nameKey,
 	}, nil
 }
 
@@ -116,11 +126,9 @@ func (m *Manager) uploadToTempFile(data interface{}, toolName string) (*UploadRe
 		return nil, fmt.Errorf("failed to marshal JSON: %w", err)
 	}
 
-	// Create unique filename
-	timestamp := time.Now().UTC().Format("20060102_150405")
-	uniqueID := fmt.Sprintf("%x", time.Now().UnixNano()%0xFFFFFFFF)
-
-	tempFile, err := os.CreateTemp("", fmt.Sprintf("lc-mcp-%s-%s-%s-*.json", toolName, timestamp, uniqueID))
+	// os.CreateTemp appends a random suffix and creates the file with O_EXCL and
+	// mode 0600, so the name is unique and private to the server process.
+	tempFile, err := os.CreateTemp("", fmt.Sprintf("lc-mcp-%s-*.json", sanitizeToolName(toolName)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -171,67 +179,55 @@ func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName st
 	compressedSize := len(compressedBytes)
 	compressionRatio := float64(compressedSize) / float64(originalSize) * 100
 
-	// Create unique filename with .gz extension
-	timestamp := time.Now().UTC().Format("20060102_150405")
-	uniqueID := fmt.Sprintf("%x", time.Now().UnixNano()%0xFFFFFFFF)
-	filename := fmt.Sprintf("%s_%s_%s.json.gz", toolName, timestamp, uniqueID)
-
-	// Upload to GCS
-	bucket := m.client.Bucket(m.config.BucketName)
-	obj := bucket.Object(filename)
-
-	writer := obj.NewWriter(ctx)
-	writer.ContentType = "application/json"
-	writer.ContentEncoding = "gzip"
-
-	if _, err := writer.Write(compressedBytes); err != nil {
-		writer.Close()
-		return nil, fmt.Errorf("failed to write to GCS: %w", err)
+	if m.store == nil {
+		return nil, errors.New("storage is not initialized")
 	}
 
-	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("failed to close GCS writer: %w", err)
-	}
-
-	// Generate signed URL using IAM Credentials API for signing
-	expiryTime := time.Now().Add(time.Duration(m.config.URLExpiryHours) * time.Hour)
-
-	// Create IAM Credentials client for signing
-	iamClient, err := credentials.NewIamCredentialsClient(ctx)
+	// Object names are <tenant hash>/<credential hash>/<tool>_<128-bit random id>.
+	// The prefix is derived from the authenticated request, and the upload is
+	// create-only, so one tenant's upload can never replace the object behind
+	// another tenant's still-valid signed URL.
+	prefix, err := tenantPrefix(ctx, m.nameKey)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create IAM credentials client: %w", err)
-	}
-	defer iamClient.Close()
-
-	// Build service account resource name for IAM API
-	serviceAccountResource := fmt.Sprintf("projects/-/serviceAccounts/%s", m.config.SignerServiceAcct)
-
-	// Use bucket.SignedURL with SignBytes function that uses IAM Credentials API
-	opts := &storage.SignedURLOptions{
-		GoogleAccessID: m.config.SignerServiceAcct,
-		Method:         "GET",
-		Expires:        expiryTime,
-		Scheme:         storage.SigningSchemeV4,
-		SignBytes: func(b []byte) ([]byte, error) {
-			// Use IAM Credentials API to sign the blob
-			resp, err := iamClient.SignBlob(ctx, &credentialspb.SignBlobRequest{
-				Name:    serviceAccountResource,
-				Payload: b,
-			})
-			if err != nil {
-				return nil, fmt.Errorf("signBlob failed: %w", err)
-			}
-			return resp.SignedBlob, nil
-		},
+		return nil, err
 	}
 
-	signedURL, err := bucket.SignedURL(filename, opts)
+	var (
+		filename   string
+		generation int64
+	)
+	for attempt := 1; ; attempt++ {
+		filename, err = newObjectName(prefix, toolName)
+		if err != nil {
+			return nil, err
+		}
+		generation, err = m.store.Create(ctx, filename, compressedBytes)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, errObjectExists) {
+			return nil, fmt.Errorf("failed to write to GCS: %w", err)
+		}
+		// 128-bit random names make this practically unreachable; if it happens,
+		// pick a new name rather than touching the existing object.
+		slog.Warn("Object name collision on create-only upload, regenerating",
+			"tool", toolName, "attempt", attempt)
+		if attempt >= maxCreateAttempts {
+			return nil, fmt.Errorf("failed to write to GCS: object name collision persisted after %d attempts", maxCreateAttempts)
+		}
+	}
+
+	// The signed URL is GET-only, short-lived and pinned to the generation just
+	// written.
+	expiryTime := time.Now().Add(signedURLExpiry(m.config.URLExpiryHours))
+	signedURL, err := m.store.SignGetURL(ctx, filename, generation, expiryTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate signed URL: %w", err)
 	}
 
 	slog.Info("Uploaded large result to GCS",
 		"filename", filename,
+		"generation", generation,
 		"original_size", originalSize,
 		"compressed_size", compressedSize,
 		"compression_ratio", fmt.Sprintf("%.1f%%", compressionRatio),
@@ -272,19 +268,13 @@ func (m *Manager) WrapResult(ctx context.Context, data interface{}, toolName str
 
 		result, err := m.UploadToGCS(ctx, data, toolName)
 		if err != nil {
-			slog.Warn("Failed to upload to GCS, falling back to temp file",
+			// Do not fall back to a server-local temp file: the caller is a remote
+			// tenant who cannot read it. Report the failure so the caller returns
+			// the original result inline.
+			slog.Warn("Failed to upload to GCS, returning result inline",
 				"tool", toolName,
 				"error", err)
-
-			// Fall back to temp file - don't return inline!
-			result, err = m.uploadToTempFile(data, toolName)
-			if err != nil {
-				// If temp file also fails, return error instead of inline data
-				slog.Error("Failed to save to temp file",
-					"tool", toolName,
-					"error", err)
-				return nil, fmt.Errorf("failed to save large result: %w", err)
-			}
+			return nil, fmt.Errorf("failed to upload large result: %w", err)
 		}
 
 		// Return alternate response
