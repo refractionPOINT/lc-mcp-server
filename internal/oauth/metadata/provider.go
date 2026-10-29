@@ -72,6 +72,11 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 		// Issuer identifier for this authorization server
 		"issuer": p.serverURL,
 
+		// RFC 9207: authorization responses (success and error) carry an "iss"
+		// parameter equal to the issuer above. Clients that see this flag reject
+		// responses without a matching iss.
+		"authorization_response_iss_parameter_supported": true,
+
 		// OAuth 2.0 endpoints
 		"authorization_endpoint": p.serverURL + "/authorize",
 		"token_endpoint":         p.serverURL + "/token",
