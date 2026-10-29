@@ -183,7 +183,7 @@ func TestHandleCallback_SuccessRedirectCarriesIss(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+url.QueryEscape(fbState)+"&code=test", nil)
 			w := httptest.NewRecorder()
-			handlers.HandleCallback(w, req)
+			handlers.HandleCallback(w, withBrowser(handlers, req))
 
 			require.Equal(t, http.StatusFound, w.Code)
 			loc, err := url.Parse(w.Header().Get("Location"))
@@ -213,7 +213,7 @@ func TestHandleCallback_ErrorRedirectCarriesIss(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+fbState+"&code=test", nil)
 	w := httptest.NewRecorder()
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	require.Equal(t, http.StatusFound, w.Code)
 	loc, err := url.Parse(w.Header().Get("Location"))
@@ -242,7 +242,7 @@ func TestHandleMFAVerify_RedirectURLCarriesIss(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "123456")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "123456")
 	require.Equal(t, http.StatusOK, w.Code)
 
 	var resp map[string]interface{}

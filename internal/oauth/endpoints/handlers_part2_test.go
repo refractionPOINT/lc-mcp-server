@@ -435,7 +435,7 @@ func TestHandleMFAVerify_Success(t *testing.T) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 
-	handlers.HandleMFAVerify(w, req, sessionID, "123456")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, req), sessionID, "123456")
 
 	assert.Equal(t, http.StatusOK, w.Code)
 
@@ -489,7 +489,7 @@ func TestHandleMFAVerify_InvalidCode(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleMFAVerify(w, req, sessionID, "wrong-code")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, req), sessionID, "wrong-code")
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
@@ -542,25 +542,25 @@ func TestHandleMFAVerify_BruteForceProtection(t *testing.T) {
 	// Attempt 1
 	req1 := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w1 := httptest.NewRecorder()
-	handlers.HandleMFAVerify(w1, req1, sessionID, "wrong1")
+	handlers.HandleMFAVerify(w1, withBrowser(handlers, req1), sessionID, "wrong1")
 	assert.Equal(t, http.StatusBadRequest, w1.Code)
 
 	// Attempt 2
 	req2 := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w2 := httptest.NewRecorder()
-	handlers.HandleMFAVerify(w2, req2, sessionID, "wrong2")
+	handlers.HandleMFAVerify(w2, withBrowser(handlers, req2), sessionID, "wrong2")
 	assert.Equal(t, http.StatusBadRequest, w2.Code)
 
 	// Attempt 3
 	req3 := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w3 := httptest.NewRecorder()
-	handlers.HandleMFAVerify(w3, req3, sessionID, "wrong3")
+	handlers.HandleMFAVerify(w3, withBrowser(handlers, req3), sessionID, "wrong3")
 	assert.Equal(t, http.StatusBadRequest, w3.Code)
 
 	// Attempt 4 should be blocked (max 3 attempts)
 	req4 := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w4 := httptest.NewRecorder()
-	handlers.HandleMFAVerify(w4, req4, sessionID, "wrong4")
+	handlers.HandleMFAVerify(w4, withBrowser(handlers, req4), sessionID, "wrong4")
 	assert.Equal(t, http.StatusForbidden, w4.Code)
 
 	var resp map[string]interface{}
@@ -578,7 +578,7 @@ func TestHandleMFAVerify_SessionNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleMFAVerify(w, req, "non-existent-session", "123456")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, req), "non-existent-session", "123456")
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
@@ -631,7 +631,7 @@ func TestHandleMFAVerify_UIDValidation(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleMFAVerify(w, req, sessionID, "123456")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, req), sessionID, "123456")
 
 	// Should detect UID mismatch and reject
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -682,7 +682,7 @@ func TestHandleCallback_MFARequired(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	// Should redirect to MFA challenge page
 	assert.Equal(t, http.StatusFound, w.Code)
@@ -939,7 +939,7 @@ func TestHandleCallback_StoreAuthCodeRedisFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	// Redis error should cause ConsumeOAuthState to fail (it does a Redis DELETE),
 	// resulting in an error redirect
@@ -996,7 +996,7 @@ func TestHandleMFAVerify_StoreAuthCodeRedisFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleMFAVerify(w, req, sessionID, "123456")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, req), sessionID, "123456")
 
 	// Redis error should cause ConsumeOAuthState to fail,
 	// resulting in an error JSON response
@@ -1049,7 +1049,7 @@ func TestHandleCallback_MFASessionStoreFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	// StoreMFASession should fail due to Redis error, resulting in error redirect
 	assert.Equal(t, http.StatusFound, w.Code)

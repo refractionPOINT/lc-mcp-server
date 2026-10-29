@@ -185,9 +185,20 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bind the transaction to this browser for its whole life: the provider
+	// callback and the MFA steps only proceed from the browser that holds the
+	// secret behind this hash.
+	browserBinding, err := h.bindTransactionToBrowser(w, r)
+	if err != nil {
+		h.logger.Error("Failed to bind OAuth transaction to browser", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to generate session", http.StatusInternalServerError))
+		return
+	}
+
 	// Store the transaction under a server-generated id; the client's state is
 	// only data in it.
 	oauthState := state.NewOAuthState(stateParam, codeChallenge, codeChallengeMethod, redirectURI, clientID, scope, canonicalResource, providerID)
+	oauthState.BrowserBinding = browserBinding
 	txID, err := h.stateManager.CreateOAuthState(r.Context(), oauthState)
 	if err != nil {
 		h.logger.Error("Failed to store OAuth state", "error", err)
@@ -271,6 +282,17 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil || oauthState == nil {
 		h.logger.Error("Failed to get OAuth state", "error", err)
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>State expired</p>")
+		return
+	}
+
+	// The browser returning from the provider must be the one that started this
+	// transaction: otherwise a provider URL prepared by someone else (with their
+	// own client and redirect URI) could be completed by a victim, whose code
+	// would go to the preparer. Checked before anything is exchanged with the
+	// provider, and a code is never issued without it.
+	if !h.transactionBoundToBrowser(r, oauthState) {
+		h.abandonOnBrowserMismatch(r, "callback", txID, oauthState)
+		h.renderOAuthError(w, http.StatusForbidden, browserMismatchPage)
 		return
 	}
 
@@ -796,6 +818,12 @@ func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, se
 	// Get MFA session to extract email
 	mfaSession, _ := h.stateManager.GetMFASession(r.Context(), sessionID)
 
+	// The challenge belongs to a transaction, which belongs to one browser.
+	if mfaSession != nil && !h.mfaBrowserBound(r, "mfa-challenge", sessionID, mfaSession) {
+		h.renderOAuthError(w, http.StatusForbidden, browserMismatchPage)
+		return
+	}
+
 	email := "user"
 	if mfaSession != nil && mfaSession.Email != "" {
 		email = mfaSession.Email
@@ -828,7 +856,36 @@ func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, se
 	h.templates.ExecuteTemplate(w, "mfa_challenge.html", data)
 }
 
+// mfaBrowserBound reports whether the request comes from the browser the MFA
+// session's transaction was started in. When it does not, the transaction and
+// the MFA session are abandoned. A transaction that no longer exists passes:
+// there is nothing left to complete, and the caller reports it as expired.
+func (h *Handlers) mfaBrowserBound(r *http.Request, step, sessionID string, mfaSession *state.MFASession) bool {
+	tx, err := h.stateManager.GetOAuthState(r.Context(), mfaSession.OAuthState)
+	if err != nil || tx == nil {
+		return true
+	}
+	if h.transactionBoundToBrowser(r, tx) {
+		return true
+	}
+	h.abandonOnBrowserMismatch(r, step, mfaSession.OAuthState, tx)
+	h.stateManager.ConsumeMFASession(context.WithoutCancel(r.Context()), sessionID)
+	return false
+}
+
 func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessionID, code string) {
+	// Before anything is counted or sent to the provider: only the browser the
+	// transaction was started in may verify its MFA challenge, and a session id
+	// seen by anyone else cannot be used to burn its attempts.
+	if pre, _ := h.stateManager.GetMFASession(r.Context(), sessionID); pre != nil && !h.mfaBrowserBound(r, "mfa-verify", sessionID, pre) {
+		writeJSON(w, http.StatusForbidden, map[string]interface{}{
+			"success":           false,
+			"error":             "browser_mismatch",
+			"error_description": "This sign-in was not started in this browser, or it expired. Go back to the application you were signing in to and start the sign-in again from there.",
+		})
+		return
+	}
+
 	// SECURITY FIX: Check and increment attempts BEFORE processing MFA verification
 	// This prevents brute force attacks on MFA codes
 	attempts, err := h.stateManager.IncrementMFAAttempts(r.Context(), sessionID)
@@ -900,6 +957,20 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 			"success":           false,
 			"error":             "invalid_request",
 			"error_description": "OAuth state expired. Please restart the authentication flow.",
+		})
+		return
+	}
+
+	// The record just consumed is the authority: no code without the binding.
+	// (Checked above too, but the transaction could have been replaced between.)
+	if !h.transactionBoundToBrowser(r, oauthState) {
+		h.logger.Warn("SECURITY: MFA verification from a browser the transaction was not started in",
+			"redirect_host", redirectHost(oauthState.RedirectURI))
+		h.stateManager.ConsumeMFASession(r.Context(), sessionID)
+		writeJSON(w, http.StatusForbidden, map[string]interface{}{
+			"success":           false,
+			"error":             "browser_mismatch",
+			"error_description": "This sign-in was not started in this browser, or it expired. Go back to the application you were signing in to and start the sign-in again from there.",
 		})
 		return
 	}

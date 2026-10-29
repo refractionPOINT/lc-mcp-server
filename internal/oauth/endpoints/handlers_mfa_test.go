@@ -22,8 +22,7 @@ func setupMFASession(t *testing.T, stateManager *state.Manager, oauthStateParam 
 	oauthState := state.NewOAuthState(oauthStateParam, "challenge", "S256", "https://app.example.com/callback", "test-client", "openid", "", "google.com")
 	// Transactions are keyed by a server-generated id; the client's state is
 	// only data, and the MFA session points at the transaction id.
-	txID, err := stateManager.CreateOAuthState(ctx, oauthState)
-	require.NoError(t, err)
+	txID := mustCreateTx(t, stateManager, oauthState)
 	sessionID, err := stateManager.GenerateMFASessionID()
 	require.NoError(t, err)
 	mfaSession := state.NewMFASession("pending", "totp-id", txID, "User", "uid", "user@test.com", nil)
@@ -53,7 +52,7 @@ func TestHandleMFAVerify_FirebaseErrorMapping(t *testing.T) {
 			}
 
 			w := httptest.NewRecorder()
-			handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "123456")
+			handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "123456")
 
 			assert.Equal(t, tt.wantStatus, w.Code)
 			var resp map[string]interface{}
@@ -80,13 +79,13 @@ func TestHandleMFAVerify_AfterSessionExpiredReportsExpiry(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "123456")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "123456")
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// The challenge page lets the user submit again; that must say the
 	// session is gone rather than fail with a server error.
 	w = httptest.NewRecorder()
-	handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "654321")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "654321")
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp map[string]interface{}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
@@ -105,7 +104,7 @@ func TestHandleCallback_MFAWithoutTOTPFactor(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handlers.HandleCallback(w, httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+fbState+"&code=test", nil))
+	handlers.HandleCallback(w, withBrowser(handlers, httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+fbState+"&code=test", nil)))
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Empty(t, w.Header().Get("Location"), "must not start an MFA challenge that cannot succeed")

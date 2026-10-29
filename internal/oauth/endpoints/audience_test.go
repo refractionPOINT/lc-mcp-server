@@ -203,9 +203,11 @@ func TestResourceFlow_AuthorizeToTokenToRefresh(t *testing.T) {
 	w := audAuthorize(t, handlers, url.Values{"resource": {testIssuer + "/mcp/v1/all"}})
 	require.Equal(t, http.StatusFound, w.Code)
 
-	// Provider callback (the mock Firebase client uses state "firebase-state-123").
+	// Provider callback (the mock Firebase client uses state "firebase-state-123"),
+	// in the browser that started the flow.
+	cookies := w.Result().Cookies()
 	w = httptest.NewRecorder()
-	handlers.HandleCallback(w, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=x", nil))
+	handlers.HandleCallback(w, withCookies(httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=x", nil), cookies...))
 	require.Equal(t, http.StatusFound, w.Code)
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
@@ -409,7 +411,7 @@ func TestCallback_StateResource(t *testing.T) {
 			seedMappings(t, sm, "fb-st-1", txID, "sess-1")
 
 			w := httptest.NewRecorder()
-			handlers.HandleCallback(w, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=fb-st-1&code=x", nil))
+			handlers.HandleCallback(w, withBrowser(handlers, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=fb-st-1&code=x", nil)))
 			require.Equal(t, http.StatusFound, w.Code)
 			loc, err := url.Parse(w.Header().Get("Location"))
 			require.NoError(t, err)
@@ -478,7 +480,7 @@ func TestMFAVerify_CodeCarriesResource(t *testing.T) {
 			require.NoError(t, sm.StoreMFASession(ctx, sessionID, mfaSession))
 
 			w := httptest.NewRecorder()
-			handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "123456")
+			handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "123456")
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
 			resp := audDecode(t, w)

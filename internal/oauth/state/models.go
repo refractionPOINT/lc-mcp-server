@@ -23,6 +23,13 @@ type OAuthState struct {
 	Resource            string `json:"resource"`
 	Provider            string `json:"provider"` // e.g., "google.com", "microsoft.com"
 	CreatedAt           int64  `json:"created_at"`
+	// BrowserBinding is the SHA-256 (hex) of the secret in the browser-binding
+	// cookie of the browser that went through the selection page and
+	// /authorize. The provider callback and the MFA steps only proceed from a
+	// browser presenting that secret, so an authorization URL sent to someone
+	// else cannot complete this transaction. Empty on transactions written
+	// before the binding existed; those are never completed (fail closed).
+	BrowserBinding string `json:"browser_binding,omitempty"`
 }
 
 // AuthorizationCode represents an authorization code with associated data
