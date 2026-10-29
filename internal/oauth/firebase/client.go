@@ -259,7 +259,9 @@ func classifyFinalizeMFAError(err error) error {
 	switch firebaseErrorCode(fbErr) {
 	case "INVALID_CODE", "MISSING_CODE":
 		return fmt.Errorf("%w: %w", ErrMFAInvalidCode, err)
-	case "INVALID_MFA_PENDING_CREDENTIAL", "MISSING_MFA_PENDING_CREDENTIAL", "SESSION_EXPIRED":
+	// Firebase answers INVALID_PENDING_TOKEN when it cannot use the pending
+	// credential at all (observed on mfaSignIn:finalize); no code can succeed.
+	case "INVALID_MFA_PENDING_CREDENTIAL", "MISSING_MFA_PENDING_CREDENTIAL", "INVALID_PENDING_TOKEN", "SESSION_EXPIRED":
 		return fmt.Errorf("%w: %w", ErrMFASessionExpired, err)
 	case "TOO_MANY_ATTEMPTS_TRY_LATER":
 		return fmt.Errorf("%w: %w", ErrMFATooManyAttempts, err)
