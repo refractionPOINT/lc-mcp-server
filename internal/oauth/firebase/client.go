@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"log/slog"
@@ -113,10 +115,13 @@ func (c *Client) SignInWithIdp(ctx context.Context, requestURI, queryString, ses
 
 	// Check if MFA is required
 	if resp.MFAPendingCredential != "" && len(resp.MFAInfo) > 0 {
-		// Extract first MFA method (usually TOTP)
-		mfaMethod := resp.MFAInfo[0]
+		mfaMethod, ok := selectTOTPFactor(resp.MFAInfo)
+		if !ok {
+			c.logger.Warn("MFA required but no TOTP factor enrolled", "factor_count", len(resp.MFAInfo))
+			return nil, &MFAUnsupportedError{FactorCount: len(resp.MFAInfo)}
+		}
 
-		c.logger.Info("MFA required")
+		c.logger.Info("MFA required", "factor_count", len(resp.MFAInfo))
 
 		return nil, &MFARequiredError{
 			MFAPendingCredential: resp.MFAPendingCredential,
@@ -205,13 +210,7 @@ func (c *Client) FinalizeMFASignIn(ctx context.Context, mfaPendingCredential, mf
 
 	var resp FinalizeMFAResponse
 	if err := c.doRequest(ctx, "POST", finalizeMFAEndpoint, req, &resp); err != nil {
-		// Check for invalid code error
-		if fbErr, ok := err.(*FirebaseError); ok {
-			if fbErr.ErrorDetails.Message == "INVALID_MFA_PENDING_CREDENTIAL" || fbErr.ErrorDetails.Message == "INVALID_CODE" {
-				return nil, fmt.Errorf("invalid verification code")
-			}
-		}
-		return nil, fmt.Errorf("MFA finalization failed: %w", err)
+		return nil, classifyFinalizeMFAError(err)
 	}
 
 	if resp.IDToken == "" || resp.RefreshToken == "" {
@@ -221,6 +220,52 @@ func (c *Client) FinalizeMFASignIn(ctx context.Context, mfaPendingCredential, mf
 	c.logger.Info("Successfully completed MFA sign-in")
 
 	return &resp, nil
+}
+
+// Errors returned by FinalizeMFASignIn. Callers use errors.Is to tell a wrong
+// code (the user can retry) apart from failures a new code will not fix.
+var (
+	ErrMFAInvalidCode     = errors.New("invalid verification code")
+	ErrMFASessionExpired  = errors.New("MFA sign-in session expired")
+	ErrMFATooManyAttempts = errors.New("too many MFA attempts, try later")
+)
+
+// selectTOTPFactor returns the first TOTP enrollment. Factor order is not
+// meaningful: an account may list an SMS factor before its authenticator app.
+func selectTOTPFactor(methods []MFAMethod) (MFAMethod, bool) {
+	for _, m := range methods {
+		if m.IsTOTP() && m.MFAEnrollmentID != "" {
+			return m, true
+		}
+	}
+	return MFAMethod{}, false
+}
+
+// firebaseErrorCode extracts the server error code from a Firebase error
+// message, which may carry detail after " : " (e.g. "INVALID_CODE : ...").
+func firebaseErrorCode(fbErr *FirebaseError) string {
+	code, _, _ := strings.Cut(fbErr.ErrorDetails.Message, " : ")
+	return strings.TrimSpace(code)
+}
+
+// classifyFinalizeMFAError maps a mfaSignIn:finalize failure to one of the
+// ErrMFA* sentinels, wrapping the original error so it stays loggable.
+// Anything not listed is a server-side problem, not a wrong code.
+func classifyFinalizeMFAError(err error) error {
+	var fbErr *FirebaseError
+	if !errors.As(err, &fbErr) {
+		return fmt.Errorf("MFA finalization failed: %w", err)
+	}
+	switch firebaseErrorCode(fbErr) {
+	case "INVALID_CODE", "MISSING_CODE":
+		return fmt.Errorf("%w: %w", ErrMFAInvalidCode, err)
+	case "INVALID_MFA_PENDING_CREDENTIAL", "MISSING_MFA_PENDING_CREDENTIAL", "SESSION_EXPIRED":
+		return fmt.Errorf("%w: %w", ErrMFASessionExpired, err)
+	case "TOO_MANY_ATTEMPTS_TRY_LATER":
+		return fmt.Errorf("%w: %w", ErrMFATooManyAttempts, err)
+	default:
+		return fmt.Errorf("MFA finalization failed: %w", err)
+	}
 }
 
 // ValidateProviderCallback validates and extracts query string from provider callback
