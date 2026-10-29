@@ -380,9 +380,9 @@ func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToke
 //     holder gets no further guesses. Only a presenter that already holds the
 //     token can trigger this, so it hands nobody a new lever; the legitimate
 //     user is asked to sign in again.
-//   - A missing client_id on a bound token is refused with ErrClientMismatch
-//     but the token is left alone: that is the shape of a client that does not
-//     send client_id, not of a guess.
+//   - A missing client_id on a bound token is accepted and the binding is kept:
+//     refusing it would sign out every client that omits client_id on refresh.
+//     It is logged so such clients can be identified.
 //   - A legacy refresh token (issued before client binding) is accepted
 //     whatever client_id is presented, and the rotated tokens are bound to the
 //     one presented, so signed-in clients keep working and become bound on
@@ -412,8 +412,13 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 		boundClientID = clientID
 	case subtle.ConstantTimeCompare([]byte(boundClientID), []byte(clientID)) != 1:
 		if clientID == "" {
-			m.logger.Warn("Refresh refused: bound refresh token presented without a client_id", "uid", uid, "client_id", boundClientID)
-			return nil, ErrClientMismatch
+			// Accepted, and the token stays bound: refusing would sign out any
+			// client that omits client_id on refresh (OAuth 2.1 asks public
+			// clients to send it, but not every client does). A thief gains
+			// nothing over today by omitting it, while a wrong client_id is
+			// still refused and revokes the token below.
+			m.logger.Info("Refresh token presented without a client_id; accepting, binding kept", "uid", uid, "client_id", boundClientID)
+			break
 		}
 		m.logger.Warn("Refresh refused: refresh token presented by a different client; revoking it",
 			"uid", uid, "expected_client_id", boundClientID, "presented_client_id", clientID)

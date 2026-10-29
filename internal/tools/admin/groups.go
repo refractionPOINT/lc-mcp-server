@@ -493,6 +493,11 @@ func RegisterAddOrgToGroup() {
 			if !ok || oid == "" {
 				return tools.ErrorResult("oid parameter is required"), nil
 			}
+			// The target org comes from an argument, so the transport's
+			// ai_agent.operate check (on the effective org) doesn't cover it.
+			if err := tools.RequireAIAgentAccessToOrg(ctx, oid); err != nil {
+				return tools.ErrorResultf("permission check for organization %s failed: %v", oid, err), nil
+			}
 
 			client, err := tools.GetClient(ctx)
 			if err != nil {
@@ -540,6 +545,11 @@ func RegisterRemoveOrgFromGroup() {
 			oid, ok := args["oid"].(string)
 			if !ok || oid == "" {
 				return tools.ErrorResult("oid parameter is required"), nil
+			}
+			// The target org comes from an argument, so the transport's
+			// ai_agent.operate check (on the effective org) doesn't cover it.
+			if err := tools.RequireAIAgentAccessToOrg(ctx, oid); err != nil {
+				return tools.ErrorResultf("permission check for organization %s failed: %v", oid, err), nil
 			}
 
 			client, err := tools.GetClient(ctx)

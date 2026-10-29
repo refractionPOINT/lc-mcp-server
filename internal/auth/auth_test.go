@@ -262,36 +262,36 @@ func TestWithOID(t *testing.T) {
 	t.Run("can switch OID in UID mode", func(t *testing.T) {
 		auth := &AuthContext{
 			Mode:   AuthModeUIDKey,
-			OID:    "org1",
+			OID:    "11111111-1111-1111-1111-111111111111",
 			APIKey: "key1",
 			UID:    "user1",
 		}
 
 		ctx := WithAuthContext(context.Background(), auth)
-		newCtx, err := WithOID(ctx, "org2", nil)
+		newCtx, err := WithOID(ctx, "22222222-2222-2222-2222-222222222222", nil)
 
 		require.NoError(t, err)
 
 		newAuth, err := FromContext(newCtx)
 		require.NoError(t, err)
-		assert.Equal(t, "org2", newAuth.OID)
+		assert.Equal(t, "22222222-2222-2222-2222-222222222222", newAuth.OID)
 		assert.Equal(t, auth.UID, newAuth.UID)
 		assert.Equal(t, auth.APIKey, newAuth.APIKey)
 
 		// Original context should be unchanged
 		origAuth, _ := FromContext(ctx)
-		assert.Equal(t, "org1", origAuth.OID)
+		assert.Equal(t, "11111111-1111-1111-1111-111111111111", origAuth.OID)
 	})
 
 	t.Run("cannot switch to different OID in normal mode", func(t *testing.T) {
 		auth := &AuthContext{
 			Mode:   AuthModeNormal,
-			OID:    "org1",
+			OID:    "11111111-1111-1111-1111-111111111111",
 			APIKey: "key1",
 		}
 
 		ctx := WithAuthContext(context.Background(), auth)
-		_, err := WithOID(ctx, "org2", nil)
+		_, err := WithOID(ctx, "22222222-2222-2222-2222-222222222222", nil)
 
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cannot switch OID in normal mode")
@@ -300,12 +300,12 @@ func TestWithOID(t *testing.T) {
 	t.Run("same OID in normal mode succeeds", func(t *testing.T) {
 		auth := &AuthContext{
 			Mode:   AuthModeNormal,
-			OID:    "org1",
+			OID:    "11111111-1111-1111-1111-111111111111",
 			APIKey: "key1",
 		}
 
 		ctx := WithAuthContext(context.Background(), auth)
-		newCtx, err := WithOID(ctx, "org1", nil)
+		newCtx, err := WithOID(ctx, "11111111-1111-1111-1111-111111111111", nil)
 
 		require.NoError(t, err)
 		// Should return original context (same OID, no change)
@@ -315,7 +315,7 @@ func TestWithOID(t *testing.T) {
 	t.Run("rejects invalid OID", func(t *testing.T) {
 		auth := &AuthContext{
 			Mode:   AuthModeUIDKey,
-			OID:    "org1",
+			OID:    "11111111-1111-1111-1111-111111111111",
 			APIKey: "key1",
 			UID:    "user1",
 		}
@@ -563,12 +563,19 @@ func TestValidateOID(t *testing.T) {
 		oid     string
 		wantErr bool
 	}{
-		{"valid oid", "my-org-123", false},
-		{"valid with underscores", "my_org_123", false},
-		{"valid with dots", "my.org.123", false},
+		{"valid uuid", "550e8400-e29b-41d4-a716-446655440000", false},
+		{"valid uuid uppercase", "550E8400-E29B-41D4-A716-446655440000", false},
 		{"empty", "", true},
 		{"too long", strings.Repeat("a", 129), true},
 		{"invalid chars", "my org!", true},
+		// OIDs reach API paths, cache keys and object names: only UUIDs.
+		{"name-like", "my-org-123", true},
+		{"underscores", "my_org_123", true},
+		{"dot", ".", true},
+		{"dot dot", "..", true},
+		{"traversal", "../550e8400-e29b-41d4-a716-446655440000", true},
+		{"uuid with suffix", "550e8400-e29b-41d4-a716-446655440000/x", true},
+		{"missing dashes", "550e8400e29b41d4a716446655440000", true},
 	}
 
 	for _, tt := range tests {

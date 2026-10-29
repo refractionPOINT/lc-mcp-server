@@ -37,7 +37,7 @@ func TestLoad(t *testing.T) {
 		os.Unsetenv("MCP_MODE")
 		os.Unsetenv("MCP_PROFILE")
 		os.Unsetenv("LOG_LEVEL")
-		os.Setenv("LC_OID", "test-org")
+		os.Setenv("LC_OID", "33333333-3333-3333-3333-333333333333")
 		os.Setenv("LC_API_KEY", "test-key-1234567890")
 
 		cfg, err := Load()
@@ -58,7 +58,7 @@ func TestLoad(t *testing.T) {
 		os.Setenv("LOG_LEVEL", "debug")
 		os.Setenv("AUDIT_LOG_ENABLED", "true")
 		os.Setenv("SDK_CACHE_TTL", "10m")
-		os.Setenv("LC_OID", "test-org")
+		os.Setenv("LC_OID", "33333333-3333-3333-3333-333333333333")
 		os.Setenv("LC_API_KEY", "test-key-1234567890")
 
 		cfg, err := Load()
@@ -73,14 +73,14 @@ func TestLoad(t *testing.T) {
 
 	t.Run("normal mode authentication", func(t *testing.T) {
 		os.Unsetenv("LC_UID")
-		os.Setenv("LC_OID", "test-org")
+		os.Setenv("LC_OID", "33333333-3333-3333-3333-333333333333")
 		os.Setenv("LC_API_KEY", "test-key-1234567890")
 
 		cfg, err := Load()
 		require.NoError(t, err)
 
 		require.NotNil(t, cfg.Auth)
-		assert.Equal(t, "test-org", cfg.Auth.OID)
+		assert.Equal(t, "33333333-3333-3333-3333-333333333333", cfg.Auth.OID)
 		assert.Equal(t, "test-key-1234567890", cfg.Auth.APIKey)
 	})
 
@@ -99,7 +99,7 @@ func TestLoad(t *testing.T) {
 
 	t.Run("invalid mode", func(t *testing.T) {
 		os.Setenv("MCP_MODE", "invalid")
-		os.Setenv("LC_OID", "test-org")
+		os.Setenv("LC_OID", "33333333-3333-3333-3333-333333333333")
 		os.Setenv("LC_API_KEY", "test-key-1234567890")
 
 		_, err := Load()

@@ -90,19 +90,19 @@ func TestClientBinding_DifferentClientIsRefusedAndTheFamilyRevoked(t *testing.T)
 
 // A bound token presented with no client_id is refused too, but left alone: it
 // is the shape of a client that omits client_id, not of someone guessing.
-func TestClientBinding_MissingClientIsRefusedButTheTokenIsKept(t *testing.T) {
+func TestClientBinding_MissingClientIsAcceptedAndBindingKept(t *testing.T) {
 	m, sm, _ := setupTestManager(t)
 	ctx := context.Background()
 	issued := issueFor(t, m, clientA)
 
 	got, err := m.RefreshAccessToken(ctx, issued.RefreshToken, "", nil)
-	assert.Nil(t, got)
-	assert.ErrorIs(t, err, ErrClientMismatch)
-	rt, _ := sm.GetRefreshTokenData(ctx, issued.RefreshToken)
-	assert.NotNil(t, rt)
+	require.NoError(t, err)
+	rt, _ := sm.GetRefreshTokenData(ctx, got.RefreshToken)
+	require.NotNil(t, rt)
+	assert.Equal(t, clientA, rt.ClientID, "the rotated token keeps its binding")
 
-	_, err = m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
-	assert.NoError(t, err)
+	_, err = m.RefreshAccessToken(ctx, got.RefreshToken, "some-other-client", nil)
+	assert.ErrorIs(t, err, ErrClientMismatch)
 }
 
 // Refresh tokens that are in Redis from before client binding have no client_id.

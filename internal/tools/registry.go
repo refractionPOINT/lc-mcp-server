@@ -1051,6 +1051,22 @@ func checkAIAgentPermission(ctx context.Context, oid string) error {
 	return nil
 }
 
+// RequireAIAgentAccessToOrg runs the ai_agent.operate check against an
+// organization a tool acts on through an argument, rather than the request's
+// effective org (which the transport has already checked). The credential is
+// switched to that org first, exactly as for an org-scoped call, so an org
+// that blocks AI agents can't be reached by naming it in a tool argument.
+func RequireAIAgentAccessToOrg(ctx context.Context, oid string) error {
+	if err := auth.ValidateOID(oid); err != nil {
+		return fmt.Errorf("invalid organization ID: %w", err)
+	}
+	orgCtx, err := auth.WithOID(ctx, oid, nil)
+	if err != nil {
+		return fmt.Errorf("cannot act on organization %s with this credential: %w", oid, err)
+	}
+	return checkAIAgentPermission(orgCtx, oid)
+}
+
 // Helper functions for creating tool results
 
 // ToJSON converts a value to compact JSON string without HTML escaping

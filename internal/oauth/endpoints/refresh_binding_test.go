@@ -81,19 +81,24 @@ func TestRefresh_AnotherClientIsRefusedWithInvalidGrant(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestRefresh_MissingClientIDOnABoundTokenIsRefusedWithoutRevoking(t *testing.T) {
+func TestRefresh_MissingClientIDOnABoundTokenIsAcceptedAndStaysBound(t *testing.T) {
+	// A client that omits client_id on refresh keeps working (refusing would
+	// sign it out every day), and the rotated token keeps its binding, so a
+	// wrong client_id is still refused afterwards.
 	h, sm, mockFB, _ := testHandlers(t)
 	realisticFirebase(mockFB)
 	_, refresh := signInAs(t, h)
 
 	w := audPostToken(t, h, refreshFormFor(refresh, ""))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	next := audDecode(t, w)["refresh_token"].(string)
+	rt, _ := sm.GetRefreshTokenData(context.Background(), next)
+	require.NotNil(t, rt)
+	assert.Equal(t, victimClient, rt.ClientID, "binding kept through rotation")
+
+	w = audPostToken(t, h, refreshFormFor(next, attackerClient))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Equal(t, ErrInvalidGrant, audDecode(t, w)["error"])
-	rt, _ := sm.GetRefreshTokenData(context.Background(), refresh)
-	assert.NotNil(t, rt, "left usable")
-
-	w = audPostToken(t, h, refreshFormFor(refresh, victimClient))
-	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 // Refresh tokens already in Redis have no client_id. Users signed in with them
