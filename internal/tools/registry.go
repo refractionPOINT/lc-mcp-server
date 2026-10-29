@@ -1198,6 +1198,13 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 		return ErrorResultf("tool %q not found", toolName), nil
 	}
 
+	// Every internal dispatch honors the caller's OAuth scope, so a meta tool
+	// cannot reach a tool its token may not call (no-op for credentials that
+	// are not OAuth-scoped).
+	if err := CheckToolScope(ctx, reg); err != nil {
+		return nil, err
+	}
+
 	// Validate parameters against schema
 	if err := ValidateToolParameters(reg.ToolSchema(), args); err != nil {
 		return ErrorResultf("parameter validation failed: %v", err), nil

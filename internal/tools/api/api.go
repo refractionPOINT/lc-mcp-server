@@ -14,6 +14,9 @@ func init() {
 
 // RegisterLCCallTool registers the lc_call_tool meta-tool
 func RegisterLCCallTool() {
+	// The transport lets any OAuth token with read access reach this tool; what
+	// the call needs is decided by the target, checked in handleLCCallTool.
+	tools.MarkScopeDispatcher("lc_call_tool")
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name: "lc_call_tool",
 		Description: "Call any registered LimaCharlie MCP tool locally. " +
@@ -76,6 +79,16 @@ func handleLCCallTool(ctx context.Context, args map[string]interface{}) (*mcp.Ca
 	reg, ok := tools.GetTool(toolName)
 	if !ok {
 		return tools.ErrorResultf("tool %q not found", toolName), nil
+	}
+
+	// OAuth scope: the TARGET tool's classification decides, not this
+	// meta-tool's. Without this a read-only token could reach any destructive
+	// tool through lc_call_tool. The typed error is mapped by the HTTP
+	// transport to the 403 insufficient_scope challenge, so a client can step
+	// up; anywhere else it surfaces as a plain error. Credentials that are not
+	// OAuth-scoped are not restricted.
+	if err := tools.CheckToolScope(ctx, reg); err != nil {
+		return nil, err
 	}
 
 	// Get schema from the tool, enhanced with OID if required
