@@ -23,9 +23,8 @@ type Client struct {
 // Config holds Redis configuration
 type Config struct {
 	URL string
-
-	// MaxRetries overrides the number of command retries. Zero keeps the
-	// default (5); a negative value disables retries.
+	// MaxRetries overrides the command retry count when non-zero.
+	// -1 disables retries (go-redis semantics), e.g. for fault-injection tests.
 	MaxRetries int
 }
 

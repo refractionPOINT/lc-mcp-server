@@ -1,12 +1,14 @@
 package endpoints
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"html/template"
 	"net/http"
 	"net/url"
@@ -299,6 +301,24 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		// Redirect to MFA challenge page
 		mfaURL := h.metadataProvider.GetServerURL() + "/oauth/mfa-challenge?session=" + mfaSessionID
 		http.Redirect(w, r, mfaURL, http.StatusFound)
+		return
+	}
+
+	var unsupportedErr *firebase.MFAUnsupportedError
+	if errors.As(err, &unsupportedErr) {
+		// The account only has factors this server cannot verify (e.g. SMS).
+		// Tell the user in the browser; a redirect would surface only a
+		// generic error in the MCP client.
+		if _, err := h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam); err != nil {
+			h.logger.Warn("Failed to consume OAuth state after unsupported MFA", "error", err)
+		}
+		h.renderOAuthError(w, http.StatusForbidden, oauthErrorPage{
+			ErrorTitle:   "Authenticator App Required",
+			ErrorMessage: "Your account uses a multi-factor method that MCP sign-in does not support. MCP sign-in supports authenticator apps (TOTP) only. Add an authenticator app as a second factor in the LimaCharlie web app, then sign in again from your MCP client.",
+			ErrorCode:    "mfa_method_unsupported",
+			RetryURL:     limaCharlieWebAppURL,
+			RetryLabel:   "Open LimaCharlie",
+		})
 		return
 	}
 
@@ -663,6 +683,72 @@ func (h *Handlers) validatePKCE(verifier, challenge string) bool {
 	return computed == challenge
 }
 
+// writeMFAVerifyError reports a failed mfaSignIn:finalize call. Only a wrong
+// code is reported as one; other failures will not be fixed by a new code.
+func (h *Handlers) writeMFAVerifyError(w http.ResponseWriter, r *http.Request, sessionID string, attempts int, err error) {
+	switch {
+	case errors.Is(err, firebase.ErrMFAInvalidCode):
+		// SECURITY FIX: Include attempts info in error response
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":            false,
+			"error":              "invalid_code",
+			"error_description":  fmt.Sprintf("Invalid verification code. %d attempt(s) remaining.", state.MaxMFAAttempts-attempts),
+			"attempts_remaining": state.MaxMFAAttempts - attempts,
+		})
+	case errors.Is(err, firebase.ErrMFASessionExpired):
+		// Firebase no longer accepts the pending credential, so no code can succeed
+		h.stateManager.ConsumeMFASession(r.Context(), sessionID)
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"success":           false,
+			"error":             "session_expired",
+			"error_description": "Your sign-in session expired. Please restart authentication from your MCP client.",
+		})
+	case errors.Is(err, firebase.ErrMFATooManyAttempts):
+		writeJSON(w, http.StatusTooManyRequests, map[string]interface{}{
+			"success":           false,
+			"error":             "too_many_attempts",
+			"error_description": "Too many verification attempts. Please wait a few minutes, then restart authentication from your MCP client.",
+		})
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success":           false,
+			"error":             "server_error",
+			"error_description": "We could not verify your code because of a server error. Please restart authentication from your MCP client. If this keeps happening, contact support.",
+		})
+	}
+}
+
+// limaCharlieWebAppURL is where users manage their account, including MFA
+const limaCharlieWebAppURL = "https://app.limacharlie.io"
+
+// oauthErrorPage is the data for templates/oauth_error.html
+type oauthErrorPage struct {
+	ErrorTitle   string
+	ErrorMessage string
+	ErrorCode    string
+	ErrorDetails string
+	RetryURL     string
+	RetryLabel   string
+	SupportURL   string
+}
+
+// renderOAuthError renders the browser-facing error page, falling back to
+// plain HTML when templates are unavailable or fail to render.
+func (h *Handlers) renderOAuthError(w http.ResponseWriter, statusCode int, page oauthErrorPage) {
+	if h.templates != nil {
+		var buf bytes.Buffer
+		err := h.templates.ExecuteTemplate(&buf, "oauth_error.html", page)
+		if err == nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(statusCode)
+			buf.WriteTo(w)
+			return
+		}
+		h.logger.Error("Failed to render OAuth error page", "error", err, "error_code", page.ErrorCode)
+	}
+	writeHTML(w, statusCode, "<h1>"+html.EscapeString(page.ErrorTitle)+"</h1><p>"+html.EscapeString(page.ErrorMessage)+"</p>")
+}
+
 // Templates are now loaded from files in templates/ directory
 // See: templates/select_provider.html, templates/mfa_challenge.html, templates/oauth_error.html
 
@@ -747,8 +833,7 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	// This prevents brute force attacks on MFA codes
 	attempts, err := h.stateManager.IncrementMFAAttempts(r.Context(), sessionID)
 	if errors.Is(err, state.ErrMFASessionNotFound) {
-		// Missing/expired session is a client error, not a server fault
-		h.logger.Warn("MFA session not found or expired", "session_id", sessionID)
+		h.logger.Warn("MFA verify for missing or expired session", "session_id", sessionID)
 		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
 			"success":           false,
 			"error":             "invalid_request",
@@ -801,14 +886,7 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 			"session_id", sessionID,
 			"attempt", attempts,
 			"remaining", state.MaxMFAAttempts-attempts)
-
-		// SECURITY FIX: Include attempts info in error response
-		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
-			"success":            false,
-			"error":              "invalid_code",
-			"error_description":  fmt.Sprintf("Invalid verification code. %d attempt(s) remaining.", state.MaxMFAAttempts-attempts),
-			"attempts_remaining": state.MaxMFAAttempts - attempts,
-		})
+		h.writeMFAVerifyError(w, r, sessionID, attempts, err)
 		return
 	}
 
