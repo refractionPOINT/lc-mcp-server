@@ -377,7 +377,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	// Handle OID switching if tool requires it and OID is provided
 	tool, ok := tools.GetTool(toolName)
 	if !ok {
-		s.writeJSONRPCError(w, id, rpcInvalidParams, fmt.Sprintf("Unknown tool: %s", toolName), fmt.Sprintf("Unknown tool: %s", toolName))
+		s.writeJSONRPCError(w, id, rpcInvalidParams, fmt.Sprintf("Unknown tool: %s", toolName), "")
 		return
 	}
 
