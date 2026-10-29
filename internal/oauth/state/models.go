@@ -2,8 +2,18 @@ package state
 
 import "time"
 
-// OAuthState represents OAuth authorization request state (CSRF protection)
+// OAuthState is one OAuth authorization transaction.
+//
+// It is stored under TxID, which the server generates. State is the client's
+// own "state" parameter: opaque data that is only echoed back to the client's
+// redirect URI, never used to find or key anything.
 type OAuthState struct {
+	// TxID is the server-generated transaction id (the Redis key suffix). It is
+	// empty on transactions written before transaction ids existed, which were
+	// keyed by the client's state; callers always look transactions up by the
+	// id they were handed (a provider-callback mapping or an MFA session), so
+	// those finish normally.
+	TxID                string `json:"tx_id,omitempty"`
 	State               string `json:"state"`
 	CodeChallenge       string `json:"code_challenge"`
 	CodeChallengeMethod string `json:"code_challenge_method"`
@@ -53,6 +63,9 @@ type AccessTokenData struct {
 	// was issued for. Empty on tokens issued before resource binding existed
 	// (legacy): they are accepted for every endpoint of this server.
 	Resource string `json:"resource,omitempty"`
+	// ClientID is the OAuth client the token was issued to. Empty on tokens
+	// issued before client binding existed (legacy).
+	ClientID string `json:"client_id,omitempty"`
 }
 
 // RefreshTokenData represents a refresh token mapping
@@ -66,6 +79,11 @@ type RefreshTokenData struct {
 	// Resource is the canonical RFC 8707 resource the token family is bound to;
 	// it is carried over, or narrowed, on every rotation. Empty means legacy.
 	Resource string `json:"resource,omitempty"`
+	// ClientID is the OAuth client this token family is bound to; it is carried
+	// through every rotation and must be presented on refresh. Empty means a
+	// token issued before client binding existed (legacy): the first refresh
+	// that names a client binds it.
+	ClientID string `json:"client_id,omitempty"`
 }
 
 // ClientRegistration represents a dynamically registered OAuth client
@@ -80,7 +98,7 @@ type ClientRegistration struct {
 type MFASession struct {
 	MFAPendingCredential string  `json:"mfa_pending_credential"`
 	MFAEnrollmentID      string  `json:"mfa_enrollment_id"`
-	OAuthState           string  `json:"oauth_state"`
+	OAuthState           string  `json:"oauth_state"` // transaction id of the OAuthState this challenge belongs to
 	DisplayName          string  `json:"display_name"`
 	LocalID              string  `json:"local_id"`
 	Email                string  `json:"email"`

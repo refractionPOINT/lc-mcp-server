@@ -306,7 +306,7 @@ func (s *Server) handleProviderSelectionWithProvider(w http.ResponseWriter, r *h
 	}
 
 	// Consume the session and go back to /authorize with the provider set
-	// (CIMD clients only from the browser that was shown the selection page).
+	// (only from the browser that was shown the selection page).
 	s.oauthHandlers.CompleteProviderSelection(w, r, sessionID, provider)
 }
 

@@ -145,15 +145,12 @@ func TestWriteOAuthErrorRedirect_FailsClosedOnBadRedirectURI(t *testing.T) {
 // callback handler consumes, returning the firebase state to put in the callback URL.
 func storeCallbackFixtures(t *testing.T, sm *state.Manager, oauthStateParam, redirectURI string) string {
 	t.Helper()
-	ctx := context.Background()
 	oauthState := state.NewOAuthState(oauthStateParam, "challenge", "S256", redirectURI, "test-client", "openid", "", "google.com")
-	require.NoError(t, sm.StoreOAuthState(ctx, oauthState))
+	txID := mustCreateTx(t, sm, oauthState)
 
 	fbState := "fb-" + oauthStateParam
 	sessionID := "session-" + oauthStateParam
-	sm.StoreSelectionSession(ctx, "oauth:session:"+oauthStateParam, map[string]string{"firebase_state": fbState})
-	sm.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": oauthStateParam})
-	sm.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+	seedMappings(t, sm, fbState, txID, sessionID)
 	return fbState
 }
 
@@ -234,9 +231,9 @@ func TestHandleMFAVerify_RedirectURLCarriesIss(t *testing.T) {
 
 	oauthState := state.NewOAuthState("mfa st/+", generatePKCEChallenge("v-123456789012345678901234567890123"), "S256",
 		"http://localhost:3000/callback?x=1", "test-client", "openid", "", "google.com")
-	require.NoError(t, sm.StoreOAuthState(ctx, oauthState))
+	txID := mustCreateTx(t, sm, oauthState)
 
-	mfaSession := state.NewMFASession("pending", "enroll", "mfa st/+", "Test User", "test-uid-123", "user@example.com", nil)
+	mfaSession := state.NewMFASession("pending", "enroll", txID, "Test User", "test-uid-123", "user@example.com", nil)
 	sessionID, _ := sm.GenerateMFASessionID()
 	require.NoError(t, sm.StoreMFASession(ctx, sessionID, mfaSession))
 

@@ -163,6 +163,28 @@ func validateClientName(name string) error {
 	return nil
 }
 
+// SanitizeClientName makes a client-supplied name safe to show on the consent
+// page for clients that were not validated by validateClientName (dynamic
+// registrations, opaque client ids): invalid UTF-8, control, bidi and other
+// formatting characters are dropped, surrounding space is trimmed, and the
+// result is cut to the same length limit a metadata document is held to.
+// HTML escaping is the template's job; this only removes what could spoof or
+// reorder the text. The result may be empty.
+func SanitizeClientName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToValidUTF8(name, "") {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := strings.TrimSpace(b.String())
+	if utf8.RuneCountInString(out) > maxClientNameRunes {
+		out = string([]rune(out)[:maxClientNameRunes]) + "…"
+	}
+	return out
+}
+
 // ValidateRedirectURI applies the same rules as dynamic client registration:
 // https, or http only for localhost / 127.0.0.1 (MCP authorization,
 // "Communication Security"). It additionally refuses userinfo and fragments.

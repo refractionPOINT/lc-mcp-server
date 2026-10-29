@@ -309,16 +309,35 @@ func TestCIMDAuthorize_DirectProviderStillShowsSelectionPage(t *testing.T) {
 		_ = sessionFromLocation(t, w) // routed to the selection page, not to the IdP
 		assert.False(t, created, name)
 	}
-	st, _ := e.sm.GetOAuthState(context.Background(), cimdTestStateP)
-	assert.Nil(t, st, "no OAuth state may be created before the selection page")
+	assert.Empty(t, storedTxs(t, e.sm, e.mr), "no OAuth state may be created before the selection page")
 }
 
-func TestCIMDAuthorize_NonCIMDClientsCanSkipSelectionPage(t *testing.T) {
+func TestAuthorize_NonCIMDClientsCannotSkipSelectionPage(t *testing.T) {
 	e := newCIMDEnv(t)
-	q := e.authorizeQuery("test-client", cimdRedirect, "google")
-	w := e.authorize(q)
-	assert.Equal(t, http.StatusFound, w.Code)
-	assert.Contains(t, w.Header().Get("Location"), "firebase.example.com")
+	created := false
+	e.h.firebaseClient.(*mockFirebaseClient).createAuthURIFunc = func(ctx context.Context, provider, continueURI string, scopes []string) (string, string, error) {
+		created = true
+		return "s", "https://firebase.example.com/auth?state=fb", nil
+	}
+	require.NoError(t, e.sm.StoreClientRegistration(context.Background(), state.NewClientRegistration(
+		"mcp_dcrclient", "DCR Client", []string{"https://dcr.example.com/cb"})))
+
+	for name, c := range map[string]struct{ clientID, redirect string }{
+		"allow-listed opaque client": {"test-client", cimdRedirect},
+		"dynamically registered":     {"mcp_dcrclient", "https://dcr.example.com/cb"},
+	} {
+		for pname, mutate := range map[string]func(q url.Values){
+			"no ack":     func(q url.Values) {},
+			"forged ack": func(q url.Values) { q.Set("selection_ack", "forged-token") },
+		} {
+			q := e.authorizeQuery(c.clientID, c.redirect, "google")
+			mutate(q)
+			w := e.authorize(q, &http.Cookie{Name: selectionAckCookie, Value: "whatever"})
+			_ = sessionFromLocation(t, w) // routed to the selection page, not to the IdP
+			assert.False(t, created, name+" / "+pname)
+		}
+	}
+	assert.Empty(t, storedTxs(t, e.sm, e.mr), "no OAuth state may be created before the selection page")
 }
 
 func TestCIMDSelectionAck_CookieAttributes(t *testing.T) {
@@ -335,12 +354,19 @@ func TestCIMDSelectionAck_CookieAttributes(t *testing.T) {
 	assert.Equal(t, http.SameSiteLaxMode, ck.SameSite)
 }
 
-func TestCIMDSelectionAck_NotIssuedToOpaqueClients(t *testing.T) {
+func TestSelectionAck_IssuedToOpaqueClientsToo(t *testing.T) {
 	e := newCIMDEnv(t)
 	session := sessionFromLocation(t, e.authorize(e.authorizeQuery("test-client", cimdRedirect, "")))
 	q, cookies := e.clickProvider(t, session, "google")
-	assert.Empty(t, q.Get("selection_ack"))
-	assert.Empty(t, cookies)
+	assert.NotEmpty(t, q.Get("selection_ack"))
+	require.Len(t, cookies, 1)
+	assert.Equal(t, selectionAckCookie, cookies[0].Name)
+
+	// ... and it carries the client to the provider exactly once.
+	w := e.authorize(q, cookies...)
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.Contains(t, w.Header().Get("Location"), "firebase.example.com")
+	_ = sessionFromLocation(t, e.authorize(q, cookies...))
 }
 
 func TestCIMDSelectionAck_MissingCookieOrChangedRequestRejected(t *testing.T) {
@@ -461,12 +487,15 @@ func TestCIMDSelectionPage_FailsClosedWhenDocumentNoLongerValid(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), "Sign in to LimaCharlie")
 }
 
-func TestSelectionPage_NonCIMDClientHasNoClientBlock(t *testing.T) {
+func TestSelectionPage_OpaqueClientShowsItsClientIDAndRedirectHost(t *testing.T) {
 	e := newCIMDEnv(t)
 	w := e.authorize(e.authorizeQuery("test-client", cimdRedirect, ""))
 	session := sessionFromLocation(t, w)
 	body := e.selectionPage(t, session).Body.String()
-	assert.NotContains(t, body, "client-info\"")
+	assert.Contains(t, body, "client-info\"")
+	assert.Contains(t, body, "test-client")
+	assert.Contains(t, body, "app.example.com")
+	assert.Contains(t, body, "not verified")
 	assert.Contains(t, body, "Sign in to LimaCharlie MCP")
 }
 
@@ -641,10 +670,17 @@ func TestCIMDSelection_BindingCookieAttributes(t *testing.T) {
 	assert.Empty(t, q.Get(selectionBindKey))
 }
 
-func TestSelection_NonCIMDClientsNeedNoBinding(t *testing.T) {
+func TestSelection_NonCIMDClientsNeedTheBindingToo(t *testing.T) {
 	e := newCIMDEnv(t)
 	session := sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
-	w := e.postProvider(session, "google")
+	w := e.postProvider(session, "google") // a browser that was never shown the page
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	// The session is gone: the link is single-use whoever tried it.
+	session = sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
+	page := e.selectionPage(t, session)
+	require.Equal(t, http.StatusOK, page.Code)
+	w = e.postProvider(session, "google", page.Result().Cookies()...)
 	assert.Equal(t, http.StatusFound, w.Code, w.Body.String())
 }
 

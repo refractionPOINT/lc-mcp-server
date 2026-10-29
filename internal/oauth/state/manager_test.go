@@ -59,10 +59,10 @@ func TestOAuthStateLifecycle(t *testing.T) {
 			"google.com",
 		)
 
-		err := manager.StoreOAuthState(ctx, state)
+		txID, err := manager.CreateOAuthState(ctx, state)
 		require.NoError(t, err)
 
-		retrieved, err := manager.GetOAuthState(ctx, "state123")
+		retrieved, err := manager.GetOAuthState(ctx, txID)
 		assert.NoError(t, err)
 		require.NotNil(t, retrieved)
 		assert.Equal(t, state.State, retrieved.State)
@@ -72,31 +72,31 @@ func TestOAuthStateLifecycle(t *testing.T) {
 
 	t.Run("consume state (single-use)", func(t *testing.T) {
 		state := NewOAuthState("state456", "", "", "https://app.com/cb", "client", "scope", "", "microsoft.com")
-		err := manager.StoreOAuthState(ctx, state)
+		txID, err := manager.CreateOAuthState(ctx, state)
 		require.NoError(t, err)
 
 		// First consumption succeeds
-		consumed, err := manager.ConsumeOAuthState(ctx, "state456")
+		consumed, err := manager.ConsumeOAuthState(ctx, txID)
 		assert.NoError(t, err)
 		require.NotNil(t, consumed)
 		assert.Equal(t, "state456", consumed.State)
 
 		// Second consumption returns nil (single-use)
-		consumed2, err := manager.ConsumeOAuthState(ctx, "state456")
+		consumed2, err := manager.ConsumeOAuthState(ctx, txID)
 		assert.NoError(t, err)
 		assert.Nil(t, consumed2)
 	})
 
 	t.Run("state expires after TTL", func(t *testing.T) {
 		state := NewOAuthState("state789", "", "", "https://app.com/cb", "client", "scope", "", "github.com")
-		err := manager.StoreOAuthState(ctx, state)
+		txID, err := manager.CreateOAuthState(ctx, state)
 		require.NoError(t, err)
 
 		// Fast forward past TTL
 		mr.FastForward((StateTTL + 1) * time.Second)
 
 		// State should be expired
-		retrieved, err := manager.GetOAuthState(ctx, "state789")
+		retrieved, err := manager.GetOAuthState(ctx, txID)
 		assert.NoError(t, err)
 		assert.Nil(t, retrieved)
 	})
@@ -114,7 +114,7 @@ func TestOAuthState_ReplayAttackPrevention(t *testing.T) {
 	ctx := context.Background()
 
 	state := NewOAuthState("replay-test", "", "", "https://app.com/cb", "client", "scope", "", "google.com")
-	err := manager.StoreOAuthState(ctx, state)
+	txID, err := manager.CreateOAuthState(ctx, state)
 	require.NoError(t, err)
 
 	// Launch concurrent attempts to consume the same state
@@ -126,7 +126,7 @@ func TestOAuthState_ReplayAttackPrevention(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			consumed, err := manager.ConsumeOAuthState(ctx, "replay-test")
+			consumed, err := manager.ConsumeOAuthState(ctx, txID)
 			if err == nil && consumed != nil {
 				results <- consumed
 			}
