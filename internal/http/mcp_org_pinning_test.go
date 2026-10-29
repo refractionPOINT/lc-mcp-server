@@ -1,10 +1,14 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/refractionpoint/lc-mcp-go/internal/auth"
@@ -227,4 +231,148 @@ func TestResolveRequestAuth(t *testing.T) {
 		r := &resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeUIDOAuth, OID: testOID}, jwtPassthrough: true}
 		assert.Empty(t, r.pinnedOID())
 	})
+}
+
+// --- org selection inside tools/call -----------------------------------------
+
+func callOrgTool(t *testing.T, srv *Server, headers map[string]string, args map[string]any) rpcResponse {
+	t.Helper()
+	h := map[string]string{"X-MCP-Tools": protoOrgTool}
+	for k, v := range headers {
+		h[k] = v
+	}
+	return postJSON(t, srv, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+		"params": map[string]any{"name": protoOrgTool, "arguments": args}}, h)
+}
+
+func toolText(t *testing.T, resp rpcResponse) (string, bool) {
+	t.Helper()
+	res := resp.result(t)
+	isErr, _ := res["isError"].(bool)
+	return res["content"].([]any)[0].(map[string]any)["text"].(string), isErr
+}
+
+func TestToolCallOrgSelection(t *testing.T) {
+	const otherOID = "99999999-8888-7777-6666-555555555555"
+	userKey := map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey}
+	userKeyPinned := map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey, "X-LC-OID": testOID}
+	orgKey := map[string]string{"X-LC-OID": testOID, "X-LC-API-KEY": testAPIKey}
+
+	t.Run("user key: oid argument selects the org", func(t *testing.T) {
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		text, isErr := toolText(t, callOrgTool(t, srv, userKey, map[string]any{"filter": "x", "oid": otherOID}))
+		require.False(t, isErr, text)
+		assert.JSONEq(t, `{"oid":"`+otherOID+`"}`, text)
+	})
+	t.Run("pinned user key: argument overrides the pin", func(t *testing.T) {
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		text, isErr := toolText(t, callOrgTool(t, srv, userKeyPinned, map[string]any{"filter": "x", "oid": otherOID}))
+		require.False(t, isErr, text)
+		assert.JSONEq(t, `{"oid":"`+otherOID+`"}`, text)
+	})
+	t.Run("pinned user key: no argument uses the pin", func(t *testing.T) {
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		text, isErr := toolText(t, callOrgTool(t, srv, userKeyPinned, map[string]any{"filter": "x"}))
+		require.False(t, isErr, text)
+		assert.JSONEq(t, `{"oid":"`+testOID+`"}`, text)
+	})
+	t.Run("malformed oid argument is a tool error", func(t *testing.T) {
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		text, isErr := toolText(t, callOrgTool(t, srv, userKey, map[string]any{"filter": "x", "oid": "bad oid!"}))
+		assert.True(t, isErr)
+		assert.Contains(t, text, "Invalid OID")
+	})
+	t.Run("org key cannot switch to another org", func(t *testing.T) {
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		text, isErr := toolText(t, callOrgTool(t, srv, orgKey, map[string]any{"filter": "x", "oid": otherOID}))
+		assert.True(t, isErr)
+		assert.Contains(t, text, "cannot switch OID")
+	})
+	t.Run("org key naming its own org is fine", func(t *testing.T) {
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		text, isErr := toolText(t, callOrgTool(t, srv, orgKey, map[string]any{"filter": "x", "oid": testOID}))
+		require.False(t, isErr, text)
+		assert.JSONEq(t, `{"oid":"`+testOID+`"}`, text)
+	})
+	t.Run("ai_agent.operate check fails closed", func(t *testing.T) {
+		// With enforcement on, a permission lookup that cannot complete (here
+		// the fake key cannot build an API client) must deny, not run the tool.
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		srv.config.Features.EnforceAIAgentOperate = true
+		srv.permissionCache = auth.NewPermissionCache(time.Minute, slog.Default())
+		t.Cleanup(srv.permissionCache.Close)
+		resp := callOrgTool(t, srv, orgKey, map[string]any{"filter": "x"})
+		require.Equal(t, http.StatusOK, resp.Status)
+		assert.Equal(t, -32000, resp.errorCode(t))
+		assert.Equal(t, "Permission denied", resp.errorObj(t)["message"])
+	})
+}
+
+func TestResolveToolOID(t *testing.T) {
+	srv := newProtocolTestServer(t)
+	base := auth.WithAuthContext(context.Background(), &auth.AuthContext{Mode: auth.AuthModeUIDOAuth, UID: testUID, JWTToken: "jwt"})
+
+	t.Run("unpinned JWT must name the org", func(t *testing.T) {
+		resolved := &resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeUIDOAuth, UID: testUID}, jwtPassthrough: true}
+		_, oid, toolErr := srv.resolveToolOID(base, "t", map[string]any{}, resolved)
+		assert.Empty(t, oid)
+		assert.Contains(t, toolErr, "'oid' parameter is required for tool 't'")
+	})
+	t.Run("unpinned JWT with oid switches context", func(t *testing.T) {
+		resolved := &resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeUIDOAuth, UID: testUID}, jwtPassthrough: true}
+		ctx, oid, toolErr := srv.resolveToolOID(base, "t", map[string]any{"oid": testOID}, resolved)
+		require.Empty(t, toolErr)
+		assert.Equal(t, testOID, oid)
+		got, err := auth.FromContext(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, testOID, got.OID)
+	})
+	t.Run("non-string oid argument is ignored", func(t *testing.T) {
+		resolved := &resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeNormal, OID: testOID}}
+		_, oid, toolErr := srv.resolveToolOID(base, "t", map[string]any{"oid": 12}, resolved)
+		assert.Empty(t, toolErr)
+		assert.Equal(t, testOID, oid)
+	})
+}
+
+func TestAuthChallengePointsAtPathMetadata(t *testing.T) {
+	s, _ := createOAuthTestServer(t)
+	var someProfile string
+	for p := range tools.ProfileDefinitions {
+		someProfile = p
+		break
+	}
+	for path, want := range map[string]string{
+		"/":                      "https://mcp.example.com/.well-known/oauth-protected-resource\"",
+		"/mcp":                   "https://mcp.example.com/.well-known/oauth-protected-resource/mcp\"",
+		"/mcp/v1":                "https://mcp.example.com/.well-known/oauth-protected-resource/mcp/v1\"",
+		"/mcp/v1/" + someProfile: "https://mcp.example.com/.well-known/oauth-protected-resource/mcp/v1/" + someProfile + "\"",
+	} {
+		t.Run(path, func(t *testing.T) {
+			resp := postJSON(t, s, path, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": map[string]any{}}, nil)
+			require.Equal(t, http.StatusUnauthorized, resp.Status)
+			assert.Contains(t, resp.Header.Get("WWW-Authenticate"), `resource_metadata="`+want)
+		})
+	}
+}
+
+func TestOversizedBodyIs413(t *testing.T) {
+	srv := newProtocolTestServer(t)
+	handler := srv.bodySizeLimitMiddleware(srv.mux)
+	big := append([]byte(`{"jsonrpc":"2.0","id":1,"method":"ping","params":{"pad":"`), bytes.Repeat([]byte("a"), 11*1024*1024)...)
+	big = append(big, []byte(`"}}`)...)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(big))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Equal(t, float64(-32600), body["error"].(map[string]any)["code"])
 }

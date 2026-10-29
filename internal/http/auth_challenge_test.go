@@ -81,8 +81,10 @@ func TestInitializeRequiresCredentials(t *testing.T) {
 			w := postMCP(t, s, path, "initialize", nil)
 
 			assert.Equal(t, http.StatusUnauthorized, w.Code)
+			// The challenge points at the metadata for the exact path used
+			// (RFC 9728 path-inserted form), whose resource matches it.
 			assert.Equal(t,
-				`Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"`,
+				`Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource`+path+`"`,
 				w.Header().Get("WWW-Authenticate"))
 
 			var resp map[string]interface{}
@@ -147,7 +149,7 @@ func TestToolCallTokenErrors(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnauthorized, w.Code)
 		assert.Equal(t,
-			`Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource", error="invalid_token", error_description="The access token is invalid or expired"`,
+			`Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", error="invalid_token", error_description="The access token is invalid or expired"`,
 			w.Header().Get("WWW-Authenticate"))
 	})
 

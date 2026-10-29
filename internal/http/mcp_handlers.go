@@ -93,7 +93,7 @@ func (s *Server) dispatchModern(w http.ResponseWriter, r *http.Request, call *mc
 		// Mirrors initialize in the legacy era: the first thing a client
 		// does, so an OAuth client learns here that it must sign in.
 		if !s.requestHasCredentials(r) {
-			s.writeAuthChallenge(w, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
+			s.writeAuthChallenge(w, r, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
 			return
 		}
 		s.handleDiscover(w, call)
@@ -119,7 +119,7 @@ func (s *Server) dispatchLegacy(w http.ResponseWriter, r *http.Request, call *mc
 		// before it lists or calls anything, that it must sign in. tools/list
 		// stays open: the tool catalog is public and holds no org data.
 		if !s.requestHasCredentials(r) {
-			s.writeAuthChallenge(w, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
+			s.writeAuthChallenge(w, r, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
 			return
 		}
 		s.handleInitialize(w, call)
@@ -127,7 +127,7 @@ func (s *Server) dispatchLegacy(w http.ResponseWriter, r *http.Request, call *mc
 		// Reached only when a legacy version is carried in _meta. Discovery
 		// is answered for any supported version.
 		if !s.requestHasCredentials(r) {
-			s.writeAuthChallenge(w, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
+			s.writeAuthChallenge(w, r, call.id, "", "Authentication required: sign in with OAuth, or provide X-LC-UID + X-LC-API-KEY or X-LC-OID + X-LC-API-KEY headers")
 			return
 		}
 		s.handleDiscover(w, call)
@@ -200,11 +200,17 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	}
 	toolName := *params.Name
 
+	// arguments must be an object. Anything else is treated as no arguments,
+	// as this server always has: some client libraries encode an empty map
+	// as [] and would otherwise fail every argument-less call. A tool that
+	// needed arguments then reports what is missing.
 	arguments := map[string]interface{}{}
-	if len(params.Arguments) > 0 && string(params.Arguments) != "null" {
-		if err := json.Unmarshal(params.Arguments, &arguments); err != nil || arguments == nil {
-			s.writeRPCError(w, id, newRPCError(http.StatusOK, rpcInvalidParams, "Invalid params", "'arguments' must be an object"))
-			return
+	if len(params.Arguments) > 0 {
+		var decoded map[string]interface{}
+		if err := json.Unmarshal(params.Arguments, &decoded); err == nil && decoded != nil {
+			arguments = decoded
+		} else if string(params.Arguments) != "null" {
+			s.logger.Debug("Ignoring non-object tool arguments", "tool", toolName)
 		}
 	}
 
@@ -219,7 +225,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 
 	resolved, authErr := s.resolveRequestAuth(r, requestID)
 	if authErr != nil {
-		authErr.write(s, w, id)
+		authErr.write(s, w, r, id)
 		return
 	}
 	authCtx := resolved.authCtx
@@ -295,24 +301,13 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 		// argument when given, otherwise the OID already pinned on the auth
 		// context (in any mode). The ai_agent.operate check keys off that
 		// effective OID so that omitting the argument cannot bypass it.
-		effectiveOID := ""
-		if oidParam, ok := arguments["oid"].(string); ok && oidParam != "" {
-			var err error
-			ctx, err = auth.WithOID(ctx, oidParam, s.logger)
-			if err != nil {
-				// Reported as a tool execution error so the model can correct
-				// the argument and retry.
-				s.writeToolError(w, call, fmt.Sprintf("Invalid OID: failed to switch OID: %v", err))
-				return
-			}
-			effectiveOID = oidParam
-		} else if isJWTPassthrough {
-			// JWT passthrough mode requires OID in tool arguments
-			s.writeToolError(w, call,
-				fmt.Sprintf("Missing parameter: 'oid' parameter is required for tool '%s' when using JWT authentication", toolName))
+		var effectiveOID, toolErr string
+		ctx, effectiveOID, toolErr = s.resolveToolOID(ctx, toolName, arguments, resolved)
+		if toolErr != "" {
+			// Reported as a tool execution error so the model can correct the
+			// argument and retry.
+			s.writeToolError(w, call, toolErr)
 			return
-		} else {
-			effectiveOID = authCtx.OID
 		}
 
 		// This ensures organizations can block AI agent access whatever the auth
@@ -355,6 +350,24 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	s.writeRPCResult(w, call, wrappedResult, false)
 }
 
+// resolveToolOID picks the organization an org-scoped tool call runs against:
+// the oid argument when given (switching the context to it), otherwise the
+// org the credential is pinned to. A JWT not pinned to one org must name it.
+// toolErr is set, for the model to see, when the call cannot proceed.
+func (s *Server) resolveToolOID(ctx context.Context, toolName string, arguments map[string]interface{}, resolved *resolvedAuth) (context.Context, string, string) {
+	if oidParam, ok := arguments["oid"].(string); ok && oidParam != "" {
+		switched, err := auth.WithOID(ctx, oidParam, s.logger)
+		if err != nil {
+			return ctx, "", fmt.Sprintf("Invalid OID: failed to switch OID: %v", err)
+		}
+		return switched, oidParam, ""
+	}
+	if resolved.jwtPassthrough {
+		return ctx, "", fmt.Sprintf("Missing parameter: 'oid' parameter is required for tool '%s' when using JWT authentication", toolName)
+	}
+	return ctx, resolved.authCtx.OID, ""
+}
+
 // writeToolError answers a tools/call with a tool execution error.
 func (s *Server) writeToolError(w http.ResponseWriter, call *mcpCall, message string) {
 	s.writeRPCResult(w, call, tools.ErrorResult(message), false)
@@ -388,9 +401,9 @@ type authFailure struct {
 	detail     string
 }
 
-func (f *authFailure) write(s *Server, w http.ResponseWriter, id json.RawMessage) {
+func (f *authFailure) write(s *Server, w http.ResponseWriter, r *http.Request, id json.RawMessage) {
 	if f.challenge {
-		s.writeAuthChallenge(w, id, f.oauthError, f.detail)
+		s.writeAuthChallenge(w, r, id, f.oauthError, f.detail)
 		return
 	}
 	s.writeJSONRPCError(w, id, rpcServerError, f.message, f.detail)
@@ -542,6 +555,15 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, call *m
 func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
 	if call.era != eraModern || !s.requestHasCredentials(r) {
 		return false
+	}
+	if r.Header.Get("X-LC-OID") == "" {
+		// Only X-LC-OID can pin a request credential to one org, so there is
+		// no need to validate (for a Bearer token, look up) the credential.
+		// Without request credentials the server-wide ones apply.
+		if r.Header.Get("Authorization") != "" || r.Header.Get("X-LC-UID") != "" || r.Header.Get("X-LC-API-KEY") != "" {
+			return false
+		}
+		return s.serverAuthCtx != nil && s.serverAuthCtx.OID != ""
 	}
 	resolved, failure := s.resolveRequestAuth(r, fmt.Sprintf("list_%d", time.Now().UnixNano()))
 	if failure != nil {

@@ -135,8 +135,17 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 // GenerateWWWAuthenticateHeader generates a WWW-Authenticate header for OAuth challenges
 // Used in 401 and 403 responses to guide clients through OAuth flow
 func (p *Provider) GenerateWWWAuthenticateHeader(error, errorDescription, scope string, statusCode int) string {
+	return p.GenerateWWWAuthenticateHeaderForResource("", error, errorDescription, scope, statusCode)
+}
+
+// GenerateWWWAuthenticateHeaderForResource is GenerateWWWAuthenticateHeader
+// for a protected resource with a path component (for example "/mcp/v1"):
+// resource_metadata then points at the RFC 9728 path-inserted metadata URL,
+// whose "resource" names exactly that path. An empty resourcePath points at
+// the root metadata document.
+func (p *Provider) GenerateWWWAuthenticateHeaderForResource(resourcePath, error, errorDescription, scope string, statusCode int) string {
 	// Base challenge with metadata URL
-	metadataURL := p.serverURL + "/.well-known/oauth-protected-resource"
+	metadataURL := p.serverURL + "/.well-known/oauth-protected-resource" + resourcePath
 	parts := []string{fmt.Sprintf(`Bearer resource_metadata="%s"`, metadataURL)}
 
 	// Add scope if provided

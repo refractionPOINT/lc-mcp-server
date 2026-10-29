@@ -190,7 +190,7 @@ func TestModernDiscoverRequiresCredentials(t *testing.T) {
 	resp := postJSON(t, s, "/mcp", body, headers)
 
 	require.Equal(t, http.StatusUnauthorized, resp.Status)
-	assert.Contains(t, resp.Header.Get("WWW-Authenticate"), `resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"`)
+	assert.Contains(t, resp.Header.Get("WWW-Authenticate"), `resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp"`)
 	assert.Equal(t, float64(7), resp.Body["id"])
 }
 
@@ -557,6 +557,23 @@ func TestToolCallErrorsInBothEras(t *testing.T) {
 	}
 }
 
+func TestToolCallNonObjectArgumentsAreEmpty(t *testing.T) {
+	// Some client libraries encode an empty map as [] (or send a string);
+	// that has always meant "no arguments" here and must keep working.
+	for name, args := range map[string]any{"empty array": []any{}, "array": []any{"a"}, "string": "{}", "number": 3} {
+		t.Run(name, func(t *testing.T) {
+			srv := newProtocolTestServer(t)
+			headers := credHeaders()
+			headers["X-MCP-Tools"] = protoEchoTool
+			resp := postJSON(t, srv, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+				"params": map[string]any{"name": protoEchoTool, "arguments": args}}, headers)
+			require.Equal(t, http.StatusOK, resp.Status, "%s", resp.Raw)
+			text := resp.result(t)["content"].([]any)[0].(map[string]any)["text"].(string)
+			assert.JSONEq(t, `{"echo":{}}`, text)
+		})
+	}
+}
+
 func TestToolCallMalformedParams(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -565,8 +582,6 @@ func TestToolCallMalformedParams(t *testing.T) {
 		{"missing name", map[string]any{"arguments": map[string]any{}}},
 		{"empty name", map[string]any{"name": ""}},
 		{"name not a string", map[string]any{"name": 42}},
-		{"arguments not an object", map[string]any{"name": protoEchoTool, "arguments": []any{"a"}}},
-		{"arguments a string", map[string]any{"name": protoEchoTool, "arguments": "{}"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1045,19 +1060,25 @@ func TestProtectedResourceMetadataPaths(t *testing.T) {
 	}
 	require.NotEmpty(t, someProfile)
 
-	for _, path := range []string{
-		"/.well-known/oauth-protected-resource/mcp",
-		"/.well-known/oauth-protected-resource/mcp/v1",
-		"/.well-known/oauth-protected-resource/mcp/all",
-		"/.well-known/oauth-protected-resource/mcp/v1/all",
-		"/.well-known/oauth-protected-resource/mcp/" + someProfile,
-		"/.well-known/oauth-protected-resource/mcp/v1/" + someProfile,
-		"/mcp/.well-known/oauth-protected-resource",
+	// RFC 9728 section 3.3: each document names exactly the resource its
+	// well-known URL was derived from; everything else matches the root.
+	for path, resource := range map[string]string{
+		"/.well-known/oauth-protected-resource/mcp":                   "/mcp",
+		"/.well-known/oauth-protected-resource/mcp/v1":                "/mcp/v1",
+		"/.well-known/oauth-protected-resource/mcp/all":               "/mcp/all",
+		"/.well-known/oauth-protected-resource/mcp/v1/all":            "/mcp/v1/all",
+		"/.well-known/oauth-protected-resource/mcp/" + someProfile:    "/mcp/" + someProfile,
+		"/.well-known/oauth-protected-resource/mcp/v1/" + someProfile: "/mcp/v1/" + someProfile,
+		"/mcp/.well-known/oauth-protected-resource":                   "/mcp",
 	} {
 		t.Run(path, func(t *testing.T) {
 			w := get(path)
 			require.Equal(t, http.StatusOK, w.Code)
-			assert.JSONEq(t, root.Body.String(), w.Body.String())
+			var doc map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
+			assert.Equal(t, "https://mcp.example.com"+resource, doc["resource"])
+			doc["resource"] = rootDoc["resource"]
+			assert.Equal(t, rootDoc, doc)
 		})
 	}
 

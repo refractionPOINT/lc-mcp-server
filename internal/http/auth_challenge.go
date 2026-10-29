@@ -36,7 +36,7 @@ func (s *Server) requestHasCredentials(r *http.Request) bool {
 //
 // oauthError is an RFC 6750 error code ("invalid_token") or "" when no
 // credential was presented at all.
-func (s *Server) writeAuthChallenge(w http.ResponseWriter, id json.RawMessage, oauthError, description string) {
+func (s *Server) writeAuthChallenge(w http.ResponseWriter, r *http.Request, id json.RawMessage, oauthError, description string) {
 	var challenge string
 	if s.metadataProvider != nil {
 		// RFC 6750 3.1: a request with no credential gets no error attributes.
@@ -44,7 +44,14 @@ func (s *Server) writeAuthChallenge(w http.ResponseWriter, id json.RawMessage, o
 		if oauthError != "" {
 			headerDescription = description
 		}
-		challenge = s.metadataProvider.GenerateWWWAuthenticateHeader(oauthError, headerDescription, "", http.StatusUnauthorized)
+		// Point at the metadata document for the exact MCP path the client
+		// used, so its "resource" matches the URL the client is talking to
+		// (RFC 9728 section 3.3). The bare root path keeps the root document.
+		resourcePath := ""
+		if r != nil && r.URL.Path != "/" && s.isMCPEndpointPath(r.URL.Path) {
+			resourcePath = r.URL.Path
+		}
+		challenge = s.metadataProvider.GenerateWWWAuthenticateHeaderForResource(resourcePath, oauthError, headerDescription, "", http.StatusUnauthorized)
 	} else {
 		// OAuth is not configured (API key or server credential deployments):
 		// there is no metadata to point to, but the header is still mandatory.

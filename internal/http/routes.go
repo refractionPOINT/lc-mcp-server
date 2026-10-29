@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,7 +32,9 @@ func (s *Server) setupRoutes() {
 	// path shares one protected resource, so they all get the same document.
 	s.mux.HandleFunc("/.well-known/oauth-protected-resource/", s.handlePathInsertedProtectedResourceMetadata)
 	// Some clients append the well-known suffix to the MCP URL instead.
-	s.mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", s.handleProtectedResourceMetadata)
+	s.mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		s.writeProtectedResourceMetadataFor(w, "/mcp")
+	})
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server", s.handleAuthorizationServerMetadata)
 	// Claude Code also looks for the /mcp variant
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", s.handleAuthorizationServerMetadata)
@@ -176,7 +179,21 @@ func (s *Server) handlePathInsertedProtectedResourceMetadata(w http.ResponseWrit
 		http.NotFound(w, r)
 		return
 	}
-	s.oauthHandlers.HandleProtectedResourceMetadata(w, r)
+	s.writeProtectedResourceMetadataFor(w, suffix)
+}
+
+// writeProtectedResourceMetadataFor serves the protected resource metadata for
+// the MCP endpoint at path. RFC 9728 section 3.3 requires "resource" to be
+// exactly the resource the well-known URL was derived from, and strict clients
+// discard a document that names another one, so it is set per path.
+func (s *Server) writeProtectedResourceMetadataFor(w http.ResponseWriter, path string) {
+	if s.metadataProvider == nil {
+		s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "OAuth is not enabled on this server"})
+		return
+	}
+	doc := maps.Clone(s.metadataProvider.GetProtectedResourceMetadata())
+	doc["resource"] = s.metadataProvider.GetServerURL() + path
+	s.writeJSON(w, http.StatusOK, doc)
 }
 
 // isMCPEndpointPath reports whether path is one of the routes served by
