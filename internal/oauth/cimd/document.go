@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/net/idna"
 )
 
 // Limits on what we accept from a document, all to keep what we store, cache
@@ -177,6 +179,11 @@ func ValidateRedirectURI(uri string) error {
 	if u.User != nil {
 		return fmt.Errorf("must not contain credentials")
 	}
+	// The host is what the user is shown to decide where their sign-in goes,
+	// so it must have an unambiguous ASCII form to show.
+	if _, err := DisplayHost(u.Hostname()); err != nil {
+		return err
+	}
 	if u.Fragment != "" || strings.Contains(uri, "#") {
 		return fmt.Errorf("must not contain a fragment")
 	}
@@ -191,6 +198,40 @@ func ValidateRedirectURI(uri string) error {
 	default:
 		return fmt.Errorf("only https (or http for localhost) is allowed")
 	}
+}
+
+// DisplayHost returns the form of a URL host (without port) that is shown to
+// the user: the ASCII form, punycode for internationalised names, so that a
+// look-alike such as a Cyrillic "а" in "аpple.com" shows as "xn--pple-43d.com"
+// and cannot pass for the real thing. Hosts containing control, format (which
+// includes the bidi overrides and isolates) or space characters, hosts that
+// are not in canonical IDNA form, and hosts that fail IDNA conversion are
+// refused. Plain ASCII hosts (names and IP literals) are returned as they are.
+func DisplayHost(host string) (string, error) {
+	ascii := true
+	for _, r := range host {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Zs, r) ||
+			unicode.Is(unicode.Zl, r) || unicode.Is(unicode.Zp, r) || r == utf8.RuneError {
+			return "", fmt.Errorf("host contains control, formatting or invalid characters")
+		}
+		if r > unicode.MaxASCII {
+			ascii = false
+		}
+	}
+	if ascii {
+		return host, nil
+	}
+	out, err := idna.Lookup.ToASCII(host)
+	if err != nil || out == "" {
+		return "", fmt.Errorf("host is not a valid internationalised domain name")
+	}
+	// The conversion maps characters (case, width, compatibility forms); the
+	// user must be shown exactly the host the URI contains, so refuse any host
+	// that is not already in its mapped form.
+	if back, err := idna.Lookup.ToUnicode(out); err != nil || back != strings.ToLower(host) {
+		return "", fmt.Errorf("host is not in canonical internationalised form")
+	}
+	return out, nil
 }
 
 // IsLoopbackRedirect reports whether uri points at the user's own machine,

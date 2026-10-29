@@ -109,17 +109,43 @@ func (h *Handlers) selectionDisplay(ctx context.Context, sessionID string) (*cli
 	if !doc.HasRedirectURI(redirectURI) {
 		return nil, NewOAuthError(ErrInvalidRequest, "redirect_uri not allowed for this client", http.StatusBadRequest)
 	}
-	u, err := url.Parse(redirectURI)
-	if err != nil || u.Host == "" {
+	// Hosts are shown in their ASCII (punycode) form so a look-alike or
+	// bidi-spoofed name can't pass for another site.
+	redirectHost, ok := displayHostPort(redirectURI)
+	if !ok {
 		return nil, NewOAuthError(ErrInvalidRequest, "redirect_uri not allowed for this client", http.StatusBadRequest)
+	}
+	idHost, err := cimd.DisplayHost(clientHost(clientID))
+	if err != nil {
+		return nil, NewOAuthError(ErrInvalidClient, "invalid client_id URL", http.StatusBadRequest)
 	}
 	return &clientDisplay{
 		Name:         doc.ClientName,
 		ClientID:     clientID,
-		ClientIDHost: clientHost(clientID),
-		RedirectHost: u.Host,
+		ClientIDHost: idHost,
+		RedirectHost: redirectHost,
 		Localhost:    cimd.IsLoopbackRedirect(redirectURI),
 	}, nil
+}
+
+// displayHostPort returns the host (and port, if any) of uri as it is shown to
+// the user: ASCII/punycode, with IPv6 literals bracketed.
+func displayHostPort(uri string) (string, bool) {
+	u, err := url.Parse(uri)
+	if err != nil || u.Hostname() == "" {
+		return "", false
+	}
+	host, err := cimd.DisplayHost(u.Hostname())
+	if err != nil {
+		return "", false
+	}
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := u.Port(); port != "" {
+		host += ":" + port
+	}
+	return host, true
 }
 
 // bindSelectionToBrowser records that this browser is being shown the
@@ -147,9 +173,22 @@ func (h *Handlers) bindSelectionToBrowser(w http.ResponseWriter, r *http.Request
 		MaxAge:   state.SelectionTTL,
 		HttpOnly: true,
 		Secure:   strings.HasPrefix(h.metadataProvider.GetServerURL(), "https://"),
-		SameSite: http.SameSiteLaxMode,
+		// Strict: the cookie is only sent when the request was initiated from
+		// this site, i.e. by a click on the selection page. With Lax, a page
+		// on another site could open the selection page in a popup (setting
+		// the cookie) and then navigate the popup to a provider link, since
+		// Lax cookies ride along on cross-site top-level GETs.
+		SameSite: http.SameSiteStrictMode,
 	})
 	return nil
+}
+
+// sameOriginRequest reports whether the browser says the request was initiated
+// by a page of this origin. Clients that send no Sec-Fetch-Site header (not a
+// browser, or an old one) are judged by the cookies alone.
+func sameOriginRequest(r *http.Request) bool {
+	site := r.Header.Get("Sec-Fetch-Site")
+	return site == "" || site == "same-origin"
 }
 
 // selectionBoundToBrowser reports whether this request comes from the browser
@@ -174,6 +213,14 @@ func (h *Handlers) CompleteProviderSelection(w http.ResponseWriter, r *http.Requ
 	params, _ := h.stateManager.ConsumeSelectionSession(r.Context(), sessionID)
 	if params == nil {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
+		return
+	}
+	if cimd.LooksLikeURL(params["client_id"]) && !sameOriginRequest(r) {
+		// Defence in depth for the Strict cookies: browsers say who initiated
+		// the request. This also covers a same-site (sibling subdomain) page,
+		// which Strict cookies do not stop.
+		h.logger.Warn("CIMD provider selection initiated from another origin", "client_host", clientHost(params["client_id"]), "sec_fetch_site", r.Header.Get("Sec-Fetch-Site"))
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Sign-in must be started from the application that requested it; open its sign-in link again", http.StatusBadRequest))
 		return
 	}
 	if !selectionBoundToBrowser(r, params) {
@@ -247,7 +294,9 @@ func (h *Handlers) ackCookie(value string, maxAge int) *http.Cookie {
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   strings.HasPrefix(h.metadataProvider.GetServerURL(), "https://"),
-		SameSite: http.SameSiteLaxMode,
+		// Strict: sent on the /authorize redirect that the provider choice
+		// (same-site) started, not on anything a third party navigates to.
+		SameSite: http.SameSiteStrictMode,
 	}
 }
 

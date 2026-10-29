@@ -631,3 +631,292 @@ func TestCacheTTLParsing(t *testing.T) {
 	assert.Equal(t, time.Duration(0), cacheTTL("no-store"))
 	assert.Equal(t, 10*time.Minute, cacheTTL("max-age=600"))
 }
+
+// ===== last known good (load-shedding fallback) =====
+
+func (e *testEnv) hasGood(id string) bool { return e.mr.Exists(GoodPrefix + cacheKey(id)) }
+
+// resolveThenExpire resolves id (a 5 minute document) and lets the cached copy
+// expire, leaving only the last-known-good copy.
+func resolveThenExpire(t *testing.T, env *testEnv, id string) {
+	t.Helper()
+	_, err := env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, env.hasGood(id))
+	env.mr.FastForward(minCacheTTL + time.Second)
+	require.False(t, env.hasDoc(id))
+	require.True(t, env.hasGood(id), "the last known good copy outlives the cache entry")
+}
+
+func TestLastKnownGood_BudgetBurntByJunkPathsDoesNotLockOutKnownClient(t *testing.T) {
+	// Review repro: resolve the real document, expire it, make perHostFetchesPerMin
+	// junk lookups on the same host, resolve the real one again.
+	env := newTestEnv(t, func(w http.ResponseWriter, r *http.Request, self string) {
+		if strings.HasPrefix(r.URL.Path, "/junk") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, nil)
+	})
+	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	id := env.url("/client.json")
+	resolveThenExpire(t, env, id)
+
+	for i := 0; i < perHostFetchesPerMin+5; i++ {
+		_, _ = env.fetcher.Resolve(context.Background(), env.url(fmt.Sprintf("/junk%d", i)))
+	}
+	// The host budget is spent: a different new URL on the host is shed...
+	_, err := env.fetcher.Resolve(context.Background(), env.url("/another-new.json"))
+	assert.Equal(t, KindBusy, kindOf(t, err))
+
+	// ...but the known client still resolves (refreshing from the network:
+	// known URLs are budgeted per URL, not against the host).
+	before := env.hits.Load()
+	doc, err := env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err)
+	assert.Equal(t, id, doc.ClientID)
+	assert.EqualValues(t, before+1, env.hits.Load())
+}
+
+func TestLastKnownGood_ServedWhenFetchIsShed(t *testing.T) {
+	var changed atomic.Bool
+	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, func(m map[string]any) {
+			if changed.Load() {
+				m["client_name"] = "Changed"
+			}
+		})
+	})
+	id := env.url("/client.json")
+	resolveThenExpire(t, env, id)
+	changed.Store(true)
+	hits := env.hits.Load()
+
+	t.Run("global rate limit", func(t *testing.T) {
+		env.fetcher.limiter = rate.NewLimiter(0, 0)
+		doc, err := env.fetcher.Resolve(context.Background(), id)
+		require.NoError(t, err)
+		assert.Equal(t, "Example MCP Client", doc.ClientName, "the old validated copy, no fetch")
+		assert.Equal(t, hits, env.hits.Load())
+		assert.False(t, env.hasDoc(id), "serving the fallback does not re-cache it")
+	})
+
+	t.Run("per-URL budget", func(t *testing.T) {
+		env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+		var shed, fetched int
+		for i := 0; i < perURLFetchesPerMin+3; i++ {
+			before := env.hits.Load()
+			doc, err := env.fetcher.Resolve(context.Background(), id)
+			require.NoError(t, err)
+			if env.hits.Load() == before {
+				shed++
+				assert.Equal(t, "Changed", doc.ClientName, "the cache was repopulated by the first refresh")
+			} else {
+				fetched++
+			}
+			env.mr.Del(DocPrefix + cacheKey(id)) // keep forcing refreshes (FastForward would also reset the counter)
+		}
+		assert.Equal(t, perURLFetchesPerMin, fetched)
+		assert.Equal(t, 3, shed)
+	})
+}
+
+func TestLastKnownGood_NotServedForUnknownURLs(t *testing.T) {
+	env := newTestEnv(t, okDoc)
+	env.fetcher.limiter = rate.NewLimiter(0, 0)
+	_, err := env.fetcher.Resolve(context.Background(), env.url("/never-seen.json"))
+	assert.Equal(t, KindBusy, kindOf(t, err))
+}
+
+func TestLastKnownGood_NeverServedWhenTheFetchHappenedAndFailed(t *testing.T) {
+	// The draft: the AS MUST NOT cache error responses or invalid documents.
+	// A fetch that fails, or returns something invalid, must surface as that
+	// error even though a previously validated copy exists.
+	cases := map[string]struct {
+		serve    func(w http.ResponseWriter, r *http.Request, self string)
+		wantKind ErrorKind
+	}{
+		"http 500": {func(w http.ResponseWriter, _ *http.Request, _ string) { w.WriteHeader(500) }, KindFetch},
+		"http 404": {func(w http.ResponseWriter, r *http.Request, _ string) { http.NotFound(w, r) }, KindFetch},
+		"invalid document": {func(w http.ResponseWriter, _ *http.Request, self string) {
+			writeDoc(w, self, func(m map[string]any) { delete(m, "client_name") })
+		}, KindInvalidDocument},
+		"redirect uris now invalid": {func(w http.ResponseWriter, _ *http.Request, self string) {
+			writeDoc(w, self, func(m map[string]any) { m["redirect_uris"] = []string{"http://evil.example.com/cb"} })
+		}, KindInvalidDocument},
+		"now a confidential client": {func(w http.ResponseWriter, _ *http.Request, self string) {
+			writeDoc(w, self, func(m map[string]any) { m["token_endpoint_auth_method"] = "client_secret_basic" })
+		}, KindUnsupported},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			var healthy atomic.Bool
+			healthy.Store(true)
+			env := newTestEnv(t, func(w http.ResponseWriter, r *http.Request, self string) {
+				if healthy.Load() {
+					w.Header().Set("Cache-Control", "max-age=300")
+					writeDoc(w, self, nil)
+					return
+				}
+				tc.serve(w, r, self)
+			})
+			env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+			id := env.url("/client.json")
+			resolveThenExpire(t, env, id)
+			healthy.Store(false)
+
+			_, err := env.fetcher.Resolve(context.Background(), id)
+			assert.Equal(t, tc.wantKind, kindOf(t, err))
+			assert.False(t, env.hasDoc(id), "errors are not cached")
+
+			if tc.wantKind != KindFetch {
+				assert.False(t, env.hasGood(id), "a document that is now invalid loses its fallback copy")
+				// So even a shed fetch cannot bring the old copy back.
+				env.fetcher.limiter = rate.NewLimiter(0, 0)
+				_, err = env.fetcher.Resolve(context.Background(), id)
+				assert.Equal(t, KindBusy, kindOf(t, err))
+			}
+		})
+	}
+}
+
+func TestLastKnownGood_IsRefreshedByEachSuccessfulFetch(t *testing.T) {
+	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, nil)
+	})
+	id := env.url("/client.json")
+	_, err := env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err)
+	assert.Equal(t, lastKnownGoodTTL, env.mr.TTL(GoodPrefix+cacheKey(id)))
+	env.mr.FastForward(lastKnownGoodTTL - time.Hour)
+	_, err = env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err)
+	assert.Equal(t, lastKnownGoodTTL, env.mr.TTL(GoodPrefix+cacheKey(id)))
+
+	env.mr.FastForward(lastKnownGoodTTL + time.Second)
+	assert.False(t, env.hasGood(id), "the fallback expires")
+}
+
+func TestLastKnownGood_NotWrittenWhenNotCacheable(t *testing.T) {
+	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
+		w.Header().Set("Cache-Control", "no-store")
+		writeDoc(w, self, nil)
+	})
+	id := env.url("/client.json")
+	_, err := env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err)
+	assert.False(t, env.hasGood(id), "no-store documents are not kept anywhere")
+}
+
+// ===== bounds on what the cache can hold =====
+
+func TestCacheBounds_OversizedDocumentServedButNotCached(t *testing.T) {
+	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
+		writeDoc(w, self, func(m map[string]any) {
+			var uris []string
+			for i := 0; i < maxRedirectURIs; i++ {
+				uris = append(uris, fmt.Sprintf("https://app.example.com/%d/%s", i, strings.Repeat("x", 1000)))
+			}
+			m["redirect_uris"] = uris
+		})
+	})
+	id := env.url("/big.json")
+	for i := 0; i < 2; i++ {
+		doc, err := env.fetcher.Resolve(context.Background(), id)
+		require.NoError(t, err, "a valid large document still works")
+		assert.Len(t, doc.RedirectURIs, maxRedirectURIs)
+	}
+	assert.EqualValues(t, 2, env.hits.Load())
+	assert.False(t, env.hasDoc(id))
+	assert.False(t, env.hasGood(id))
+}
+
+func TestCacheBounds_PerHostDailyCapOnNewDocuments(t *testing.T) {
+	env := newTestEnv(t, okDoc)
+	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	// Spread the fetches over time so the per-minute host budget is not what limits us.
+	var ids []string
+	for i := 0; i < newDocsPerHostPerDay+5; i++ {
+		id := env.url(fmt.Sprintf("/c%d.json", i))
+		ids = append(ids, id)
+		_, err := env.fetcher.Resolve(context.Background(), id)
+		require.NoError(t, err, "every document is served")
+		env.mr.FastForward(61 * time.Second)
+		// FastForward also ages cache entries; the per-day window is 24h, so stay below it.
+	}
+	cached := 0
+	for _, id := range ids {
+		if env.hasGood(id) {
+			cached++
+		}
+	}
+	assert.Equal(t, newDocsPerHostPerDay, cached, "beyond the daily cap documents are served but not cached")
+	for _, id := range ids[newDocsPerHostPerDay:] {
+		assert.False(t, env.hasDoc(id))
+	}
+
+	// A day later the host can cache new documents again.
+	env.mr.FastForward(24 * time.Hour)
+	id := env.url("/next-day.json")
+	_, err := env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err)
+	assert.True(t, env.hasDoc(id))
+}
+
+func TestCacheBounds_RefreshOfKnownDocumentIsNotCountedAsNew(t *testing.T) {
+	env := newTestEnv(t, func(w http.ResponseWriter, _ *http.Request, self string) {
+		w.Header().Set("Cache-Control", "max-age=300")
+		writeDoc(w, self, nil)
+	})
+	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	id := env.url("/client.json")
+	// More refreshes than the daily cap, one document.
+	for i := 0; i < newDocsPerHostPerDay*3; i++ {
+		_, err := env.fetcher.Resolve(context.Background(), id)
+		require.NoError(t, err)
+		require.True(t, env.hasDoc(id), "refresh %d must still be cached", i)
+		env.mr.FastForward(minCacheTTL + time.Second)
+	}
+}
+
+func TestCacheBounds_GlobalHourlyCapAcrossHosts(t *testing.T) {
+	// Hostnames are free (wildcard DNS), so the per-host cap alone does not
+	// bound the cache: the cluster-wide counter does. Model many hosts by
+	// pre-spending the per-host budget under distinct host names.
+	env := newTestEnv(t, okDoc)
+	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	ctx := context.Background()
+	for i := 0; i < newDocsPerHour; i++ {
+		require.True(t, env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("host%d.example.com", i)))
+	}
+	assert.False(t, env.fetcher.mayCacheNewDoc(ctx, "one-more.example.com"))
+
+	id := env.url("/client.json")
+	_, err := env.fetcher.Resolve(ctx, id)
+	require.NoError(t, err)
+	assert.False(t, env.hasDoc(id), "over the global cap: served, not cached")
+
+	env.mr.FastForward(time.Hour + time.Second)
+	_, err = env.fetcher.Resolve(ctx, env.url("/client2.json"))
+	require.NoError(t, err)
+	assert.True(t, env.hasDoc(env.url("/client2.json")))
+}
+
+func TestCacheBounds_FailsClosedWhenCountersUnavailable(t *testing.T) {
+	env := newTestEnv(t, okDoc)
+	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
+	env.fetcher.store = failingIncrStore{env.fetcher.store}
+	id := env.url("/client.json")
+	_, err := env.fetcher.Resolve(context.Background(), id)
+	require.NoError(t, err, "the document is still served")
+	assert.False(t, env.hasDoc(id), "nothing new is cached when the budget can't be checked")
+}
+
+type failingIncrStore struct{ Store }
+
+func (failingIncrStore) IncrEphemeral(context.Context, string, time.Duration) (int64, error) {
+	return 0, fmt.Errorf("redis down")
+}

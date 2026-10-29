@@ -39,6 +39,7 @@ func TestIsForbiddenIP(t *testing.T) {
 		// zone must not matter
 		"fe80::1%eth0",
 	}
+	forbidden = append(forbidden, rangeSamples...)
 	for _, s := range forbidden {
 		t.Run("forbidden/"+s, func(t *testing.T) {
 			ip, err := netip.ParseAddr(s)
@@ -51,6 +52,9 @@ func TestIsForbiddenIP(t *testing.T) {
 		"8.8.8.8", "1.1.1.1", "93.184.216.34", "172.15.255.255", "172.32.0.1", "100.63.255.255", "100.128.0.1",
 		"2606:4700:4700::1111", "2a00:1450:4001:81b::200e",
 		"::ffff:8.8.8.8",
+		// neighbours of blocked space that are globally reachable unicast
+		"2001:4860:4860::8888", "2001:200::1", "2620:fe::fe", "2a02:26f0::1", "3ffe::1", "2fff:ffff::1",
+		"192.88.98.1", "192.88.100.1", "192.0.1.1", "198.20.0.1", "223.255.255.254",
 	}
 	for _, s := range allowed {
 		t.Run("allowed/"+s, func(t *testing.T) {
@@ -61,6 +65,74 @@ func TestIsForbiddenIP(t *testing.T) {
 	}
 
 	assert.True(t, IsForbiddenIP(netip.Addr{}), "the zero Addr is forbidden")
+}
+
+// rangeSamples has the first, a middle and the last address of every range in
+// blockedPrefixes and of the other special-purpose space (IANA IPv4 and IPv6
+// Special-Purpose Address Registries), including ranges that embed IPv4.
+var rangeSamples = []string{
+	// IPv4-translated (the review repro: loopback, metadata and RFC 1918 behind a translator)
+	"::ffff:0:0:0", "::ffff:0:7f00:1", "::ffff:0:a9fe:a9fe", "::ffff:0:10.0.0.1", "::ffff:0:ffff:ffff",
+	// documentation, RFC 9637
+	"3fff::", "3fff::1", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff",
+	// SRv6 SIDs
+	"5f00::", "5f00::1", "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+	// NAT64 (well-known and local-use) embedding internal IPv4
+	"64:ff9b::", "64:ff9b::a9fe:a9fe", "64:ff9b::ffff:ffff",
+	"64:ff9b:1::", "64:ff9b:1::a00:1", "64:ff9b:1:ffff:ffff:ffff:ffff:ffff",
+	// discard-only
+	"100::", "100::1", "100::ffff:ffff:ffff:ffff",
+	// IETF protocol assignments incl. Teredo, and the ORCHID / drone ID ranges
+	"2001::", "2001:0:4136:e378:8000:63bf:3fff:fdd2", "2001:1ff:ffff:ffff:ffff:ffff:ffff:ffff",
+	"2001:10::", "2001:1f:ffff:ffff:ffff:ffff:ffff:ffff",
+	"2001:20::", "2001:2f:ffff:ffff:ffff:ffff:ffff:ffff",
+	"2001:30::", "2001:3f:ffff:ffff:ffff:ffff:ffff:ffff",
+	"2001:db8::", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff",
+	// 6to4 embedding private and public IPv4: the whole /16 is refused
+	"2002::", "2002:a00:1::1", "2002:7f00:1::", "2002:a9fe:a9fe::1", "2002:808:808::1", "2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+	// ULA, link-local, site-local, multicast
+	"fc00::", "fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "fe80::", "febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+	"fec0::", "feff:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "ff00::", "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+	// IPv6 space outside 2000::/3 that is not (yet) global unicast
+	"4000::1", "8000::1", "a000::1", "e000::1", "1fff:ffff::1",
+	// IPv4 special-purpose ranges, first and last
+	"0.0.0.0", "0.255.255.255", "100.64.0.0", "100.127.255.255", "192.0.0.0", "192.0.0.255",
+	"192.0.2.0", "192.0.2.255", "192.88.99.0", "192.88.99.255", "198.18.0.0", "198.19.255.255",
+	"198.51.100.0", "198.51.100.255", "203.0.113.0", "203.0.113.255", "240.0.0.0", "255.255.255.255",
+	// and their IPv4-mapped forms
+	"::ffff:192.88.99.1", "::ffff:198.19.0.1", "::ffff:240.0.0.1", "::ffff:255.255.255.255",
+}
+
+func TestSpecialPurposeRangesRefusedAtBothLayers(t *testing.T) {
+	for _, s := range rangeSamples {
+		t.Run(s, func(t *testing.T) {
+			ip, err := netip.ParseAddr(s)
+			require.NoError(t, err)
+			assert.True(t, IsForbiddenIP(ip), "IsForbiddenIP(%s)", s)
+
+			network, address := "tcp6", net.JoinHostPort(s, "443")
+			if ip.Is4() {
+				network = "tcp4"
+			}
+			assert.Error(t, ssrfDialControl(network, address, nil), "ssrfDialControl(%s)", address)
+			// a v4-mapped address may be dialled on either network type
+			if ip.Is4In6() {
+				assert.Error(t, ssrfDialControl("tcp4", address, nil))
+			}
+		})
+	}
+}
+
+func TestPublicNeighboursAllowedAtBothLayers(t *testing.T) {
+	for _, s := range []string{"2001:4860:4860::8888", "2620:fe::fe", "2a02:26f0::1", "192.88.98.1", "192.88.100.1", "8.8.8.8"} {
+		ip := netip.MustParseAddr(s)
+		assert.False(t, IsForbiddenIP(ip), s)
+		network := "tcp6"
+		if ip.Is4() {
+			network = "tcp4"
+		}
+		assert.NoError(t, ssrfDialControl(network, net.JoinHostPort(s, "443"), nil), s)
+	}
 }
 
 func TestSSRFDialControl(t *testing.T) {
