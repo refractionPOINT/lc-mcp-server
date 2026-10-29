@@ -266,7 +266,9 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		// The account only has factors this server cannot verify (e.g. SMS).
 		// Tell the user in the browser; a redirect would surface only a
 		// generic error in the MCP client.
-		h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam)
+		if _, err := h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam); err != nil {
+			h.logger.Warn("Failed to consume OAuth state after unsupported MFA", "error", err)
+		}
 		h.renderOAuthError(w, http.StatusForbidden, oauthErrorPage{
 			ErrorTitle:   "Authenticator App Required",
 			ErrorMessage: "Your account uses a multi-factor method that MCP sign-in does not support. MCP sign-in supports authenticator apps (TOTP) only. Add an authenticator app as a second factor in the LimaCharlie web app, then sign in again from your MCP client.",
