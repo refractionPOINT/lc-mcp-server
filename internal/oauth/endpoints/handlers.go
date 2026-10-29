@@ -238,7 +238,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		mfaSessionID, genErr := h.stateManager.GenerateMFASessionID()
 		if genErr != nil || mfaSessionID == "" {
 			h.logger.Error("Failed to generate MFA session ID", "error", genErr, "provider", oauthState.Provider)
-			WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
+			WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
 			return
 		}
 
@@ -246,7 +246,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		mfaSession := state.NewMFASession(mfaErr.MFAPendingCredential, mfaErr.MFAEnrollmentID, oauthStateParam, mfaErr.DisplayName, mfaErr.LocalID, mfaErr.Email, &mfaErr.PendingToken)
 		if storeErr := h.stateManager.StoreMFASession(r.Context(), mfaSessionID, mfaSession); storeErr != nil {
 			h.logger.Error("Failed to store MFA session", "error", storeErr, "provider", oauthState.Provider)
-			WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
+			WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
 			return
 		}
 
@@ -260,7 +260,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		h.logger.Error("Firebase sign-in failed", "error", err, "provider", oauthState.Provider)
-		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
+		WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
 		return
 	}
 
@@ -268,7 +268,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	_, err = h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam)
 	if err != nil {
 		h.logger.Error("Failed to consume OAuth state")
-		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
+		WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
 		return
 	}
 
@@ -276,7 +276,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	code, err := h.stateManager.GenerateAuthorizationCode()
 	if err != nil {
 		h.logger.Error("Failed to generate authorization code", "error", err)
-		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
+		WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
 		return
 	}
 
@@ -290,12 +290,17 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	authCode := state.NewAuthorizationCode(code, oauthState.State, resp.LocalID, resp.IDToken, resp.RefreshToken, expiresAt, oauthState.RedirectURI, oauthState.ClientID, oauthState.Scope, &oauthState.CodeChallenge, &oauthState.CodeChallengeMethod)
 	if err := h.stateManager.StoreAuthorizationCode(r.Context(), authCode); err != nil {
 		h.logger.Error("Failed to store authorization code", "error", err)
-		WriteOAuthErrorRedirect(w, r, oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
+		WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
 		return
 	}
 
 	// Redirect to client with code
-	redirectURL := oauthState.RedirectURI + "?code=" + code + "&state=" + oauthState.State
+	redirectURL, err := AuthorizationSuccessURL(h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, code)
+	if err != nil {
+		h.logger.Error("Failed to build authorization response URL", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to build authorization response", http.StatusInternalServerError))
+		return
+	}
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
@@ -723,7 +728,16 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 	h.stateManager.ConsumeMFASession(r.Context(), sessionID)
 
 	// Return JSON with redirect URL instead of HTTP redirect
-	redirectURL := oauthState.RedirectURI + "?code=" + authCode + "&state=" + oauthState.State
+	redirectURL, err := AuthorizationSuccessURL(h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, authCode)
+	if err != nil {
+		h.logger.Error("Failed to build authorization response URL", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"success":           false,
+			"error":             "server_error",
+			"error_description": "Failed to complete authentication.",
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success":      true,
 		"redirect_url": redirectURL,
