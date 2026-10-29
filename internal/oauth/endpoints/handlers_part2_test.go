@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -399,13 +401,13 @@ func TestHandleMFAVerify_Success(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Setup: Store MFA session
 	mfaSession := state.NewMFASession(
 		"mfa-pending-cred",
 		"mfa-enrollment-id",
-		"oauth-mfa-state",
+		txID,
 		"Test User",
 		"test-uid-123",
 		"user@example.com",
@@ -464,13 +466,13 @@ func TestHandleMFAVerify_InvalidCode(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Setup MFA session
 	mfaSession := state.NewMFASession(
 		"pending",
 		"enrollment",
-		"oauth-mfa-fail",
+		txID,
 		"User",
 		"uid",
 		"user@test.com",
@@ -517,13 +519,13 @@ func TestHandleMFAVerify_BruteForceProtection(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Setup MFA session
 	mfaSession := state.NewMFASession(
 		"pending",
 		"enrollment",
-		"oauth-brute",
+		txID,
 		"User",
 		"uid",
 		"user@test.com",
@@ -601,13 +603,13 @@ func TestHandleMFAVerify_UIDValidation(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Setup MFA session with specific UID
 	mfaSession := state.NewMFASession(
 		"pending",
 		"enrollment",
-		"oauth-uid-check",
+		txID,
 		"User",
 		"original-uid-123", // Original UID
 		"user@test.com",
@@ -657,14 +659,12 @@ func TestHandleCallback_MFARequired(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Store state mappings
 	fbState := "fb-mfa-state"
 	sessionID := "session-mfa"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-with-mfa", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-with-mfa"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+	seedMappings(t, stateManager, fbState, txID, sessionID)
 
 	// Mock Firebase requiring MFA
 	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {
@@ -701,7 +701,7 @@ func TestHandleCallback_MFARequired(t *testing.T) {
 	require.NotNil(t, mfaSession)
 	assert.Equal(t, "user@example.com", mfaSession.Email)
 	assert.Equal(t, "test-uid", mfaSession.LocalID)
-	assert.Equal(t, "oauth-with-mfa", mfaSession.OAuthState)
+	assert.Equal(t, txID, mfaSession.OAuthState, "the MFA challenge points at the server transaction id")
 }
 
 // ===== Metadata Endpoint Tests =====
@@ -772,8 +772,14 @@ func TestNormalizeProvider(t *testing.T) {
 // ===== Concurrent Access Tests (Security) =====
 
 func TestHandleAuthorize_ConcurrentRequests(t *testing.T) {
-	handlers, stateManager, _, _ := testHandlers(t)
-	ctx := context.Background()
+	handlers, stateManager, mockFB, mr := testHandlers(t)
+
+	// Like the real Firebase, every auth URI carries a fresh state.
+	var fbCalls atomic.Int64
+	mockFB.createAuthURIFunc = func(ctx context.Context, provider, continueURI string, scopes []string) (string, string, error) {
+		n := fbCalls.Add(1)
+		return fmt.Sprintf("session-%d", n), fmt.Sprintf("https://firebase.example.com/auth?state=fb-state-%d", n), nil
+	}
 
 	const numRequests = 50
 
@@ -800,10 +806,7 @@ func TestHandleAuthorize_ConcurrentRequests(t *testing.T) {
 			params.Set("code_challenge_method", "S256")
 			params.Set("provider", "google")
 
-			req := httptest.NewRequest(http.MethodGet, "/authorize?"+params.Encode(), nil)
-			w := httptest.NewRecorder()
-
-			handlers.HandleAuthorize(w, req)
+			w := browserAuthorize(t, handlers, params)
 
 			results <- result{
 				statusCode: w.Code,
@@ -821,12 +824,17 @@ func TestHandleAuthorize_ConcurrentRequests(t *testing.T) {
 		if res.statusCode == http.StatusFound {
 			successCount++
 			statesSeen[res.state] = true
-
-			// Verify state was stored correctly
-			stored, _ := stateManager.GetOAuthState(ctx, res.state)
-			assert.NotNil(t, stored, "State should be stored: %s", res.state)
 		}
 	}
+
+	// One transaction per request, each under its own server-generated id.
+	txs := storedTxs(t, stateManager, mr)
+	assert.Len(t, txs, numRequests)
+	stored := map[string]bool{}
+	for _, st := range txs {
+		stored[st.State] = true
+	}
+	assert.Equal(t, statesSeen, stored)
 
 	// All should succeed
 	assert.Equal(t, numRequests, successCount, "All concurrent requests should succeed")
@@ -896,7 +904,6 @@ func TestHandleToken_ConcurrentCodeExchange(t *testing.T) {
 
 func TestHandleCallback_StoreAuthCodeRedisFailure(t *testing.T) {
 	handlers, stateManager, mockFB, mr := testHandlers(t)
-	ctx := context.Background()
 
 	// Setup OAuth state
 	oauthState := state.NewOAuthState(
@@ -909,14 +916,12 @@ func TestHandleCallback_StoreAuthCodeRedisFailure(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Store state mappings
 	fbState := "fb-state-redis-fail"
 	sessionID := "session-redis-fail"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-redis-fail", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-redis-fail"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+	seedMappings(t, stateManager, fbState, txID, sessionID)
 
 	// Inject Redis error from the signInWithIdp mock (after all state reads succeed)
 	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {
@@ -961,13 +966,13 @@ func TestHandleMFAVerify_StoreAuthCodeRedisFailure(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Setup MFA session
 	mfaSession := state.NewMFASession(
 		"mfa-pending-cred",
 		"mfa-enrollment-id",
-		"oauth-mfa-redis-fail",
+		txID,
 		"Test User",
 		"test-uid-123",
 		"user@example.com",
@@ -1007,7 +1012,6 @@ func TestHandleMFAVerify_StoreAuthCodeRedisFailure(t *testing.T) {
 
 func TestHandleCallback_MFASessionStoreFailure(t *testing.T) {
 	handlers, stateManager, mockFB, mr := testHandlers(t)
-	ctx := context.Background()
 
 	// Setup OAuth state
 	oauthState := state.NewOAuthState(
@@ -1020,14 +1024,12 @@ func TestHandleCallback_MFASessionStoreFailure(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Store state mappings
 	fbState := "fb-mfa-store-fail"
 	sessionID := "session-mfa-store-fail"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-mfa-store-fail", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-mfa-store-fail"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+	seedMappings(t, stateManager, fbState, txID, sessionID)
 
 	// Mock Firebase requiring MFA, and inject Redis error so StoreMFASession fails
 	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {

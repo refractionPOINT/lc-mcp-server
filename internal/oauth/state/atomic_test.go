@@ -263,7 +263,7 @@ func TestSelectionSessionLifecycle(t *testing.T) {
 			"state":         "state123",
 		}
 
-		err = manager.StoreSelectionSession(ctx, sessionID, params)
+		err = manager.CreateSelectionSession(ctx, sessionID, params)
 		require.NoError(t, err)
 
 		// Consume session
@@ -284,7 +284,7 @@ func TestSelectionSessionLifecycle(t *testing.T) {
 		require.NoError(t, err)
 
 		params := map[string]string{"test": "value"}
-		err = manager.StoreSelectionSession(ctx, sessionID, params)
+		err = manager.CreateSelectionSession(ctx, sessionID, params)
 		require.NoError(t, err)
 
 		// Fast forward past SelectionTTL

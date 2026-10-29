@@ -132,6 +132,30 @@ func (c *Client) Set(ctx context.Context, key string, value interface{}, expirat
 	return c.client.Set(ctx, key, value, expiration).Err()
 }
 
+// SetNX stores a value only if the key does not exist (SET NX) and reports
+// whether it was stored. Use it for records whose id must never be overwritten.
+// A zero expiration stores the key without one.
+func (c *Client) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) (bool, error) {
+	if expiration < 0 {
+		return false, fmt.Errorf("expiration must not be negative")
+	}
+	return c.client.SetNX(ctx, key, value, expiration).Result()
+}
+
+// SetXXKeepTTL overwrites a key only if it still exists (SET XX KEEPTTL),
+// leaving its expiry unchanged, and reports whether it was updated. A record
+// that was consumed or expired in the meantime is not resurrected.
+func (c *Client) SetXXKeepTTL(ctx context.Context, key string, value interface{}) (bool, error) {
+	res, err := c.client.SetArgs(ctx, key, value, redis.SetArgs{Mode: "XX", KeepTTL: true}).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return res == "OK", nil
+}
+
 // SetEX stores a value with expiration time
 func (c *Client) SetEX(ctx context.Context, key string, value interface{}, seconds int) error {
 	return c.client.Set(ctx, key, value, time.Duration(seconds)*time.Second).Err()

@@ -32,7 +32,7 @@ func NewManager(redisClient *redis.Client, encryption *crypto.TokenEncryption, l
 
 // ===== OAuth State Management =====
 
-// GenerateState generates a secure random state parameter (32 bytes)
+// GenerateState generates a secure random identifier (32 bytes).
 func (m *Manager) GenerateState() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -41,27 +41,60 @@ func (m *Manager) GenerateState() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreOAuthState stores OAuth authorization request state
-func (m *Manager) StoreOAuthState(ctx context.Context, state *OAuthState) error {
-	key := StatePrefix + state.State
+// ErrAlreadyExists is returned when a create-only record already exists.
+var ErrAlreadyExists = errors.New("record already exists")
 
-	data, err := json.Marshal(state)
+// createOnly stores value under key only if the key is free (SET NX).
+func (m *Manager) createOnly(ctx context.Context, key, value string, ttlSeconds int) error {
+	ok, err := m.redis.SetNX(ctx, key, value, time.Duration(ttlSeconds)*time.Second)
 	if err != nil {
-		return fmt.Errorf("failed to marshal OAuth state: %w", err)
+		return err
 	}
-
-	if err := m.redis.SetEX(ctx, key, string(data), StateTTL); err != nil {
-		return fmt.Errorf("failed to store OAuth state: %w", err)
+	if !ok {
+		return ErrAlreadyExists
 	}
-
-	m.logger.Debug("Stored OAuth state")
-
 	return nil
 }
 
-// GetOAuthState retrieves OAuth state
-func (m *Manager) GetOAuthState(ctx context.Context, state string) (*OAuthState, error) {
-	key := StatePrefix + state
+// maxCreateAttempts bounds retries on an id collision, which with 256-bit
+// random ids only a broken random source or a Redis fault can cause.
+const maxCreateAttempts = 3
+
+// CreateOAuthState stores an OAuth authorization transaction under a
+// server-generated, unguessable transaction id and returns that id.
+//
+// SECURITY: the transaction is never keyed by anything the client supplied.
+// The client's own "state" is only data (OAuthState.State) that is echoed back
+// to its redirect URI. The write is create-only, so no request can replace a
+// transaction that is in flight. Everything that continues the flow (the
+// provider round trip, MFA) refers to the transaction by this id.
+func (m *Manager) CreateOAuthState(ctx context.Context, st *OAuthState) (string, error) {
+	for attempt := 0; attempt < maxCreateAttempts; attempt++ {
+		txID, err := m.GenerateState()
+		if err != nil {
+			return "", err
+		}
+		st.TxID = txID
+		data, err := json.Marshal(st)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal OAuth state: %w", err)
+		}
+		err = m.createOnly(ctx, StatePrefix+txID, string(data), StateTTL)
+		if errors.Is(err, ErrAlreadyExists) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to store OAuth state: %w", err)
+		}
+		m.logger.Debug("Stored OAuth state")
+		return txID, nil
+	}
+	return "", fmt.Errorf("failed to store OAuth state: transaction id collision")
+}
+
+// GetOAuthState retrieves an OAuth transaction by its transaction id.
+func (m *Manager) GetOAuthState(ctx context.Context, txID string) (*OAuthState, error) {
+	key := StatePrefix + txID
 
 	data, err := m.redis.Get(ctx, key)
 	if err != nil {
@@ -80,9 +113,10 @@ func (m *Manager) GetOAuthState(ctx context.Context, state string) (*OAuthState,
 	return &oauthState, nil
 }
 
-// ConsumeOAuthState retrieves and deletes OAuth state (single-use)
-func (m *Manager) ConsumeOAuthState(ctx context.Context, state string) (*OAuthState, error) {
-	key := StatePrefix + state
+// ConsumeOAuthState retrieves and deletes an OAuth transaction by its
+// transaction id (single-use).
+func (m *Manager) ConsumeOAuthState(ctx context.Context, txID string) (*OAuthState, error) {
+	key := StatePrefix + txID
 
 	// Use atomic get-and-delete
 	data, err := m.redis.AtomicGetAndDelete(ctx, key)
@@ -157,7 +191,8 @@ func (m *Manager) StoreAuthorizationCode(ctx context.Context, code *Authorizatio
 		return fmt.Errorf("failed to marshal authorization code: %w", err)
 	}
 
-	if err := m.redis.SetEX(ctx, key, string(data), CodeTTL); err != nil {
+	// Create-only: a code is never replaced once issued.
+	if err := m.createOnly(ctx, key, string(data), CodeTTL); err != nil {
 		return fmt.Errorf("failed to store authorization code: %w", err)
 	}
 
@@ -434,9 +469,14 @@ func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientReg
 		return fmt.Errorf("failed to marshal client registration: %w", err)
 	}
 
-	// No expiration for client registrations
-	if err := m.redis.Set(ctx, key, string(data), 0); err != nil {
+	// No expiration for client registrations. Create-only: a registration (and
+	// so the redirect URIs it vouches for) is never replaced under its id.
+	ok, err := m.redis.SetNX(ctx, key, string(data), 0)
+	if err != nil {
 		return fmt.Errorf("failed to store client registration: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("failed to store client registration: %w", ErrAlreadyExists)
 	}
 
 	m.logger.Info("Stored client registration")
@@ -476,21 +516,72 @@ func (m *Manager) GenerateSelectionSessionID() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreSelectionSession stores OAuth parameters for provider selection
-func (m *Manager) StoreSelectionSession(ctx context.Context, sessionID string, params map[string]string) error {
-	key := SelectionPrefix + sessionID
-
+// CreateSelectionSession stores OAuth parameters for provider selection under
+// a server-generated session id. Create-only.
+func (m *Manager) CreateSelectionSession(ctx context.Context, sessionID string, params map[string]string) error {
 	data, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("failed to marshal selection session: %w", err)
 	}
 
-	if err := m.redis.SetEX(ctx, key, string(data), SelectionTTL); err != nil {
+	if err := m.createOnly(ctx, SelectionPrefix+sessionID, string(data), SelectionTTL); err != nil {
 		return fmt.Errorf("failed to store selection session: %w", err)
 	}
 
 	m.logger.Debug("Stored selection session")
 
+	return nil
+}
+
+// UpdateSelectionSession rewrites a selection session that still exists,
+// keeping its expiry. A session that was consumed or expired in the meantime
+// is not resurrected (ErrSelectionSessionGone).
+func (m *Manager) UpdateSelectionSession(ctx context.Context, sessionID string, params map[string]string) error {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal selection session: %w", err)
+	}
+	ok, err := m.redis.SetXXKeepTTL(ctx, SelectionPrefix+sessionID, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to update selection session: %w", err)
+	}
+	if !ok {
+		return ErrSelectionSessionGone
+	}
+	return nil
+}
+
+// ErrSelectionSessionGone is returned when a selection session expired or was consumed.
+var ErrSelectionSessionGone = errors.New("selection session expired or already used")
+
+// StoreOAuthMappings records the provider round trip of a transaction: the
+// Firebase state that comes back on the callback maps to the server's
+// transaction id and to the Firebase session id. Both writes are create-only
+// (a Firebase state already in use fails the login instead of redirecting
+// another login's callback), and neither involves anything the client supplied.
+func (m *Manager) StoreOAuthMappings(ctx context.Context, firebaseState, txID, firebaseSessionID string) error {
+	if firebaseState == "" || txID == "" {
+		return fmt.Errorf("firebase state and transaction id are required")
+	}
+	stateKey := SelectionPrefix + "oauth:state:" + firebaseState
+	sessionKey := SelectionPrefix + "oauth:fbsession:" + firebaseState
+
+	stateData, err := json.Marshal(map[string]string{"oauth_state": txID})
+	if err != nil {
+		return err
+	}
+	sessionData, err := json.Marshal(map[string]string{"session_id": firebaseSessionID})
+	if err != nil {
+		return err
+	}
+	if err := m.createOnly(ctx, stateKey, string(stateData), SelectionTTL); err != nil {
+		return fmt.Errorf("failed to store OAuth state mapping: %w", err)
+	}
+	if err := m.createOnly(ctx, sessionKey, string(sessionData), SelectionTTL); err != nil {
+		// Only the key this call created is removed.
+		_ = m.redis.Delete(ctx, stateKey)
+		return fmt.Errorf("failed to store OAuth session mapping: %w", err)
+	}
 	return nil
 }
 
@@ -515,9 +606,10 @@ func (m *Manager) ConsumeSelectionSession(ctx context.Context, sessionID string)
 	return params, nil
 }
 
-// ConsumeOAuthStateMappings atomically consumes OAuth state and all related mappings
+// ConsumeOAuthStateMappings atomically consumes the mappings of a provider
+// round trip and returns the transaction id and the Firebase session id.
 // SECURITY FIX: Prevents TOCTOU race conditions during OAuth callback processing
-func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState string) (oauthState string, sessionID string, err error) {
+func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState string) (txID string, sessionID string, err error) {
 	// Build keys for atomic multi-get-and-delete
 	keys := []string{
 		SelectionPrefix + "oauth:state:" + firebaseState,
@@ -537,7 +629,7 @@ func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState s
 	if results[0] != "" {
 		var stateData map[string]string
 		if err := json.Unmarshal([]byte(results[0]), &stateData); err == nil {
-			oauthState = stateData["oauth_state"]
+			txID = stateData["oauth_state"]
 		}
 	}
 
@@ -549,19 +641,18 @@ func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState s
 		}
 	}
 
-	if oauthState == "" || sessionID == "" {
+	if txID == "" || sessionID == "" {
 		m.logger.Warn("OAuth state mappings incomplete",
-			"oauth_state", oauthState,
+			"tx_id", txID,
 			"session_id", sessionID,
 			"firebase_state", firebaseState)
 		return "", "", fmt.Errorf("invalid or incomplete OAuth state mappings")
 	}
 
 	m.logger.Debug("Atomically consumed OAuth state mappings",
-		"firebase_state", firebaseState,
-		"oauth_state", oauthState)
+		"firebase_state", firebaseState)
 
-	return oauthState, sessionID, nil
+	return txID, sessionID, nil
 }
 
 // ===== MFA Session Management =====
@@ -595,7 +686,8 @@ func (m *Manager) StoreMFASession(ctx context.Context, sessionID string, session
 		return fmt.Errorf("failed to encrypt MFA session: %w", err)
 	}
 
-	if err := m.redis.SetEX(ctx, key, encryptedData, MFATTL); err != nil {
+	// Create-only: the id is server-generated and a session is never replaced.
+	if err := m.createOnly(ctx, key, encryptedData, MFATTL); err != nil {
 		return fmt.Errorf("failed to store MFA session: %w", err)
 	}
 

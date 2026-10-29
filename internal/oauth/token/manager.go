@@ -2,6 +2,7 @@ package token
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
@@ -87,6 +88,14 @@ func (m *Manager) WithJWTExchange(fn JWTExchangeFunc) *Manager {
 // ErrInvalidTarget marks a resource (RFC 8707) that the token being issued or
 // refreshed may not have. The token endpoint answers it with "invalid_target".
 var ErrInvalidTarget = errors.New("invalid_target")
+
+// ErrClientMismatch marks a refresh presented by a client other than the one
+// the refresh token was issued to (or by none, when the token is bound). The
+// token endpoint answers it with "invalid_grant".
+var ErrClientMismatch = errors.New("refresh token was issued to a different client")
+
+// MaxClientIDLen bounds a client_id we are willing to bind a token to.
+const MaxClientIDLen = 2048
 
 // AudienceCheck decides whether a token bound to tokenResource ("" for a
 // legacy token) may be used for the request at hand. A non-nil error rejects
@@ -360,7 +369,25 @@ func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToke
 // refresh token is bound to; a nil resolve keeps it unchanged. The resolver
 // runs before anything is refreshed or rotated, so a refused request leaves
 // the refresh token usable.
-func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string, resolve ResourceResolver) (*TokenResponse, error) {
+//
+// The refresh token is bound to the client it was issued to, and clientID must
+// be that client. The check runs before anything is refreshed or rotated.
+//   - A different, non-empty client_id means someone holds the token and is not
+//     the client it was issued to (a stolen token tried with guessed client
+//     ids, or a client mixing up credentials). The token family is revoked (the
+//     refresh token and its access token) and ErrClientMismatch is returned: a
+//     secret that has shown up in the wrong hands is not left usable, and the
+//     holder gets no further guesses. Only a presenter that already holds the
+//     token can trigger this, so it hands nobody a new lever; the legitimate
+//     user is asked to sign in again.
+//   - A missing client_id on a bound token is refused with ErrClientMismatch
+//     but the token is left alone: that is the shape of a client that does not
+//     send client_id, not of a guess.
+//   - A legacy refresh token (issued before client binding) is accepted
+//     whatever client_id is presented, and the rotated tokens are bound to the
+//     one presented, so signed-in clients keep working and become bound on
+//     their next refresh.
+func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID string, resolve ResourceResolver) (*TokenResponse, error) {
 	// Look up refresh token
 	refreshData, err := m.stateManager.GetRefreshTokenData(ctx, refreshToken)
 	if err != nil {
@@ -376,6 +403,30 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string, r
 	firebaseRefreshToken := refreshData.FirebaseRefreshToken
 	scope := refreshData.Scope
 	oldAccessToken := refreshData.AccessToken
+
+	boundClientID := refreshData.ClientID
+	switch {
+	case boundClientID == "":
+		m.logger.Debug("Refresh token has no client binding (legacy), binding it to the presenting client",
+			"uid", uid, "client_bound", clientID != "")
+		boundClientID = clientID
+	case subtle.ConstantTimeCompare([]byte(boundClientID), []byte(clientID)) != 1:
+		if clientID == "" {
+			m.logger.Warn("Refresh refused: bound refresh token presented without a client_id", "uid", uid, "client_id", boundClientID)
+			return nil, ErrClientMismatch
+		}
+		m.logger.Warn("Refresh refused: refresh token presented by a different client; revoking it",
+			"uid", uid, "expected_client_id", boundClientID, "presented_client_id", clientID)
+		if err := m.stateManager.RevokeRefreshToken(ctx, refreshToken); err != nil {
+			m.logger.Error("Failed to revoke refresh token after client mismatch", "error", err, "uid", uid)
+		}
+		if oldAccessToken != "" {
+			if err := m.stateManager.RevokeAccessToken(ctx, oldAccessToken); err != nil {
+				m.logger.Error("Failed to revoke access token after client mismatch", "error", err, "uid", uid)
+			}
+		}
+		return nil, ErrClientMismatch
+	}
 
 	resource := refreshData.Resource
 	if resource == "" {
@@ -417,6 +468,7 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string, r
 		state.TokenTTL,
 	)
 	accessTokenData.Resource = resource
+	accessTokenData.ClientID = boundClientID
 	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store access token: %w", err)
 	}
@@ -430,6 +482,7 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken string, r
 		scope,
 	)
 	refreshTokenData.Resource = resource
+	refreshTokenData.ClientID = boundClientID
 	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}
@@ -504,10 +557,15 @@ func (m *Manager) IntrospectToken(ctx context.Context, token string) (*Introspec
 	// Check expiration
 	isActive := tokenData.ExpiresAt > time.Now().Unix()
 
+	clientID := tokenData.ClientID
+	if clientID == "" {
+		clientID = "mcp" // token issued before client binding: client unknown
+	}
+
 	return &IntrospectionResponse{
 		Active:    isActive,
 		Scope:     tokenData.Scope,
-		ClientID:  "mcp", // We don't track client_id per token currently
+		ClientID:  clientID,
 		TokenType: "Bearer",
 		Exp:       tokenData.ExpiresAt,
 		Iat:       tokenData.CreatedAt,
@@ -549,7 +607,9 @@ func min(a, b int) int {
 // CreateTokenResponse creates OAuth token response with new MCP tokens
 // Called after successful authorization to issue tokens. resource is the
 // canonical resource the tokens are bound to; "" issues unbound (legacy) tokens.
-func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken, firebaseRefreshToken string, firebaseExpiresAt int64, scope, resource string) (*TokenResponse, error) {
+// clientID is the client the authorization code was issued to; the tokens (and
+// every rotation of the refresh token) are bound to it.
+func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken, firebaseRefreshToken string, firebaseExpiresAt int64, scope, resource, clientID string) (*TokenResponse, error) {
 	// Generate MCP tokens
 	accessToken, err := m.stateManager.GenerateAccessToken()
 	if err != nil {
@@ -572,6 +632,7 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 		state.TokenTTL,
 	)
 	accessTokenData.Resource = resource
+	accessTokenData.ClientID = clientID
 	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store access token: %w", err)
 	}
@@ -585,6 +646,7 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 		scope,
 	)
 	refreshTokenData.Resource = resource
+	refreshTokenData.ClientID = clientID
 	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}
