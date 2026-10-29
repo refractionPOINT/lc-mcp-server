@@ -52,9 +52,9 @@ func RegisterListRules() {
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			listReq, err := ParseListArgs(args, false)
@@ -96,9 +96,9 @@ func RegisterGetRule() {
 			mcp.WithReadOnlyHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			ruleName, ok := args["rule_name"].(string)
@@ -169,9 +169,9 @@ func RegisterSetRule() {
 			mcp.WithIdempotentHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			ruleName, ok := args["rule_name"].(string)
@@ -249,9 +249,9 @@ func RegisterDeleteRule() {
 			mcp.WithDestructiveHintAnnotation(true),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-			hiveName, ok := args["hive_name"].(string)
-			if !ok || hiveName == "" {
-				return tools.ErrorResult("hive_name parameter is required"), nil
+			hiveName, errResult := hiveNameArg(args)
+			if errResult != nil {
+				return errResult, nil
 			}
 
 			ruleName, ok := args["rule_name"].(string)

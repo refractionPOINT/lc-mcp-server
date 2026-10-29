@@ -113,7 +113,8 @@ func ParseMetadataOverrides(args map[string]interface{}) (MetadataOverrides, err
 // RecordWrite describes a hive record content write.
 type RecordWrite struct {
 	HiveName string
-	// PartitionKey defaults to the organization OID when empty.
+	// PartitionKey defaults to the organization OID when empty, and must equal it when
+	// set: hives are partitioned by organization.
 	PartitionKey string
 	Key          string
 	Data         lc.Dict
@@ -140,12 +141,15 @@ func SetRecord(org *lc.Organization, w RecordWrite) (warning string, err error) 
 	if w.HiveName == "" {
 		return "", errors.New("hive name is required")
 	}
+	if !hiveNameRe.MatchString(w.HiveName) {
+		return "", errors.New("invalid hive name")
+	}
 	if w.Key == "" {
 		return "", errors.New("record key is required")
 	}
-	partitionKey := w.PartitionKey
-	if partitionKey == "" {
-		partitionKey = org.GetOID()
+	partitionKey, err := requireOwnPartition(org, w.PartitionKey)
+	if err != nil {
+		return "", err
 	}
 
 	client := lc.NewHiveClient(org)
@@ -221,11 +225,15 @@ func SetRecordMetadata(org *lc.Organization, hiveName, partitionKey, key string,
 	if hiveName == "" {
 		return errors.New("hive name is required")
 	}
+	if !hiveNameRe.MatchString(hiveName) {
+		return errors.New("invalid hive name")
+	}
 	if key == "" {
 		return errors.New("record key is required")
 	}
-	if partitionKey == "" {
-		partitionKey = org.GetOID()
+	partitionKey, err := requireOwnPartition(org, partitionKey)
+	if err != nil {
+		return err
 	}
 
 	client := lc.NewHiveClient(org)

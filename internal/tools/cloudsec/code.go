@@ -14,6 +14,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -464,7 +465,7 @@ var unavailableLocalScanners = []string{"secrets", "secrets_history"}
 const defaultLocalScanners = "sca,iac,licenses"
 
 func handleCodeScanLocal(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
-	if errResult := requireStdio(); errResult != nil {
+	if errResult := requireStdio(ctx); errResult != nil {
 		return errResult, nil
 	}
 
@@ -589,20 +590,23 @@ func addScalarsTo(dst map[string]interface{}, args map[string]interface{}, keys 
 	}
 }
 
-// requireStdio refuses a local scan outside stdio mode.
+// requireStdio refuses a local scan unless the request is allowed to use the
+// filesystem of the machine hosting this process.
 //
 // The tool runs a container on the machine hosting this process. In stdio mode that
 // machine is the caller's own and the working copy is theirs. In HTTP mode it is a
 // shared server holding many tenants' credentials, the caller has no filesystem there,
-// and "scan this path" would be one tenant asking the server to read a path it chose.
-func requireStdio() *mcp.CallToolResult {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv("MCP_MODE")))
-	if mode == "" || mode == "stdio" {
+// and "scan this path" would be one tenant asking the server to read a path it chose
+// (and output_path, to write one). The decision comes from the request context, which
+// only the stdio server marks, rather than from the process environment: a request
+// path that forgets to mark itself is refused, not allowed.
+func requireStdio(ctx context.Context) *mcp.CallToolResult {
+	if auth.HasLocalFilesystemAccess(ctx) {
 		return nil
 	}
 	return tools.ErrorResult(
-		"cloudsec_code_scan_local runs a scanner container on the machine hosting this MCP server, so it is available only in stdio mode " +
-			"(this server is running in " + mode + " mode). Run the LimaCharlie MCP server locally to scan a local working copy, " +
+		"this tool runs a scanner container on, and reads and writes the filesystem of, the machine hosting this MCP server, so it is available only in stdio mode " +
+			"(this is a shared HTTP server used by many organizations). Run the LimaCharlie MCP server locally to scan a local working copy, " +
 			"or use the hosted code lane, which scans the connected source-control organization's repositories in the datacenter.")
 }
 
