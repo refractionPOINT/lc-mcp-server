@@ -20,10 +20,13 @@ func setupMFASession(t *testing.T, stateManager *state.Manager, oauthStateParam 
 	t.Helper()
 	ctx := context.Background()
 	oauthState := state.NewOAuthState(oauthStateParam, "challenge", "S256", "https://app.example.com/callback", "test-client", "openid", "", "google.com")
-	require.NoError(t, stateManager.StoreOAuthState(ctx, oauthState))
+	// Transactions are keyed by a server-generated id; the client's state is
+	// only data, and the MFA session points at the transaction id.
+	txID, err := stateManager.CreateOAuthState(ctx, oauthState)
+	require.NoError(t, err)
 	sessionID, err := stateManager.GenerateMFASessionID()
 	require.NoError(t, err)
-	mfaSession := state.NewMFASession("pending", "totp-id", oauthStateParam, "User", "uid", "user@test.com", nil)
+	mfaSession := state.NewMFASession("pending", "totp-id", txID, "User", "uid", "user@test.com", nil)
 	require.NoError(t, stateManager.StoreMFASession(ctx, sessionID, mfaSession))
 	return sessionID
 }
@@ -91,15 +94,11 @@ func TestHandleMFAVerify_AfterSessionExpiredReportsExpiry(t *testing.T) {
 }
 
 func TestHandleCallback_MFAWithoutTOTPFactor(t *testing.T) {
-	handlers, stateManager, mockFB, _ := testHandlers(t)
+	handlers, stateManager, mockFB, mr := testHandlers(t)
 	ctx := context.Background()
 
-	oauthState := state.NewOAuthState("oauth-sms-only", "challenge", "S256", "https://app.example.com/callback", "test-client", "openid", "", "google.com")
-	require.NoError(t, stateManager.StoreOAuthState(ctx, oauthState))
-	fbState := "fb-sms-only"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-sms-only", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-sms-only"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": "session-sms"})
+	fbState := storeCallbackFixtures(t, stateManager, "oauth-sms-only", "https://app.example.com/callback")
+	txID, _ := onlyTx(t, stateManager, mr)
 
 	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {
 		return nil, &firebase.MFAUnsupportedError{FactorCount: 1}
@@ -112,7 +111,7 @@ func TestHandleCallback_MFAWithoutTOTPFactor(t *testing.T) {
 	assert.Empty(t, w.Header().Get("Location"), "must not start an MFA challenge that cannot succeed")
 	assert.Contains(t, w.Body.String(), "authenticator app")
 
-	consumed, _ := stateManager.GetOAuthState(ctx, "oauth-sms-only")
+	consumed, _ := stateManager.GetOAuthState(ctx, txID)
 	assert.Nil(t, consumed, "OAuth state must not be reusable after the flow ends")
 }
 

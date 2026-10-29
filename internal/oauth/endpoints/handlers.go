@@ -309,7 +309,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		// The account only has factors this server cannot verify (e.g. SMS).
 		// Tell the user in the browser; a redirect would surface only a
 		// generic error in the MCP client.
-		if _, err := h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam); err != nil {
+		if _, err := h.stateManager.ConsumeOAuthState(r.Context(), txID); err != nil {
 			h.logger.Warn("Failed to consume OAuth state after unsupported MFA", "error", err)
 		}
 		h.renderOAuthError(w, http.StatusForbidden, oauthErrorPage{
