@@ -17,6 +17,7 @@ type Client struct {
 	// Lua scripts for atomic operations
 	atomicGetAndDelete      *redis.Script
 	atomicMultiGetAndDelete *redis.Script
+	incrWithWindow          *redis.Script
 }
 
 // Config holds Redis configuration
@@ -102,6 +103,18 @@ func (c *Client) loadScripts() {
 		return results
 	`)
 
+	// Atomic counter with a window: increments and, in the same step, gives the
+	// key an expiry whenever it has none. A separate INCR then EXPIRE could
+	// leave a counter without a TTL if the second command failed, and it would
+	// then never reset.
+	c.incrWithWindow = redis.NewScript(`
+		local n = redis.call('INCR', KEYS[1])
+		if redis.call('PTTL', KEYS[1]) < 0 then
+			redis.call('PEXPIRE', KEYS[1], ARGV[1])
+		end
+		return n
+	`)
+
 	c.logger.Debug("Loaded atomic Redis Lua scripts")
 }
 
@@ -137,6 +150,16 @@ func (c *Client) Del(ctx context.Context, keys ...string) error {
 // Incr increments a key's value atomically and returns the new value
 func (c *Client) Incr(ctx context.Context, key string) (int64, error) {
 	return c.client.Incr(ctx, key).Result()
+}
+
+// IncrWithWindow atomically increments a counter and makes sure it expires
+// within window: a new counter gets the window as its TTL, and an existing
+// counter that somehow has no TTL gets one. It returns the new value.
+func (c *Client) IncrWithWindow(ctx context.Context, key string, window time.Duration) (int64, error) {
+	if window <= 0 {
+		return 0, fmt.Errorf("window must be positive")
+	}
+	return c.incrWithWindow.Run(ctx, c.client, []string{key}, window.Milliseconds()).Int64()
 }
 
 // Expire sets a timeout on a key

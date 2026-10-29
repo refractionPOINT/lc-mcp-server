@@ -44,6 +44,26 @@ func TestIncrEphemeralStartsWindowOnce(t *testing.T) {
 	assert.EqualValues(t, 1, n)
 }
 
+func TestIncrEphemeralRepairsACounterWithoutTTL(t *testing.T) {
+	// A counter left without an expiry (for example by an interrupted
+	// INCR/EXPIRE pair in an older version) must get one on the next
+	// increment instead of growing forever and shedding that host for good.
+	m, mr := setupTestManager(t)
+	ctx := context.Background()
+	require.NoError(t, mr.Set("stuck", "41"))
+	require.Zero(t, mr.TTL("stuck"))
+
+	n, err := m.IncrEphemeral(ctx, "stuck", time.Minute)
+	require.NoError(t, err)
+	assert.EqualValues(t, 42, n)
+	assert.Equal(t, time.Minute, mr.TTL("stuck"))
+	mr.FastForward(61 * time.Second)
+	assert.False(t, mr.Exists("stuck"))
+
+	_, err = m.IncrEphemeral(ctx, "x", 0)
+	assert.Error(t, err, "a window is mandatory")
+}
+
 func TestGetSelectionSessionDoesNotConsume(t *testing.T) {
 	m, _ := setupTestManager(t)
 	ctx := context.Background()

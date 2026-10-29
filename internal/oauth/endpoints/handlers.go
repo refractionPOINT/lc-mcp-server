@@ -651,6 +651,13 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 			WriteOAuthError(w, oerr)
 			return
 		}
+		if client != nil {
+			if err := h.bindSelectionToBrowser(w, r, sessionID); err != nil {
+				h.logger.Warn("Failed to bind selection session to browser", "error", err)
+				WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
+				return
+			}
+		}
 
 		data := struct {
 			SessionID string
@@ -664,14 +671,7 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 		h.templates.ExecuteTemplate(w, "select_provider.html", data)
 	} else {
 		// Handle POST - provider selected
-		provider := r.FormValue("provider")
-		params, _ := h.stateManager.ConsumeSelectionSession(r.Context(), sessionID)
-		if params == nil {
-			WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
-			return
-		}
-		params["provider"] = provider
-		h.RedirectToAuthorize(w, r, params)
+		h.CompleteProviderSelection(w, r, sessionID, r.FormValue("provider"))
 	}
 }
 

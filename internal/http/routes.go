@@ -305,22 +305,9 @@ func (s *Server) handleProviderSelectionWithProvider(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Get stored OAuth parameters from session
-	params, err := s.stateManager.ConsumeSelectionSession(r.Context(), sessionID)
-	if err != nil || params == nil {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":             "invalid_request",
-			"error_description": "Session expired or invalid",
-		})
-		return
-	}
-
-	// Add provider to parameters
-	params["provider"] = provider
-
-	// Back to /authorize with all parameters (CIMD clients also get their
-	// selection acknowledgement here)
-	s.oauthHandlers.RedirectToAuthorize(w, r, params)
+	// Consume the session and go back to /authorize with the provider set
+	// (CIMD clients only from the browser that was shown the selection page).
+	s.oauthHandlers.CompleteProviderSelection(w, r, sessionID, provider)
 }
 
 func (s *Server) handleMFAChallenge(w http.ResponseWriter, r *http.Request) {

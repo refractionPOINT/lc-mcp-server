@@ -118,16 +118,29 @@ func (e *cimdEnv) selectionPage(t *testing.T, session string) *httptest.Response
 	return w
 }
 
-// clickProvider performs the selection page's provider choice and returns the
-// /authorize request the browser is redirected to (with the cookies it was given).
-func (e *cimdEnv) clickProvider(t *testing.T, session, provider string) (url.Values, []*http.Cookie) {
-	t.Helper()
+// postProvider submits the selection page's provider choice from a browser
+// holding the given cookies.
+func (e *cimdEnv) postProvider(session, provider string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	form := url.Values{"provider": {provider}}
 	req := httptest.NewRequest(http.MethodPost, "/oauth/select-provider?session="+session, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
 	w := httptest.NewRecorder()
 	e.h.HandleProviderSelection(w, req, session)
-	require.Equal(t, http.StatusFound, w.Code)
+	return w
+}
+
+// clickProvider loads the selection page and picks a provider from the same
+// browser, returning the /authorize request the browser is redirected to (with
+// the cookies it was given).
+func (e *cimdEnv) clickProvider(t *testing.T, session, provider string) (url.Values, []*http.Cookie) {
+	t.Helper()
+	page := e.selectionPage(t, session)
+	require.Equal(t, http.StatusOK, page.Code, page.Body.String())
+	w := e.postProvider(session, provider, page.Result().Cookies()...)
+	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
 	require.Equal(t, "/authorize", loc.Path)
@@ -548,4 +561,98 @@ func TestCIMD_DCRAndAllowListClientsUnchanged(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rw.Code)
 	b, _ := io.ReadAll(rw.Body)
 	assert.Contains(t, string(b), `"token_endpoint_auth_method":"none"`)
+}
+
+// ===== selection page bound to the browser that saw it =====
+
+func TestCIMDSelection_PickingAProviderRequiresTheBrowserThatSawThePage(t *testing.T) {
+	// Attack: the attacker starts /authorize with their own CIMD client, state
+	// and PKCE challenge, then sends the victim the provider link for the
+	// resulting selection session. The victim's browser never rendered the
+	// page (no client name, no redirect host, no localhost warning), so it
+	// must not get past it.
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+
+	w := e.postProvider(session, "google")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Empty(t, w.Header().Get("Location"))
+	for _, c := range w.Result().Cookies() {
+		assert.NotEqual(t, selectionAckCookie, c.Name, "no acknowledgement may be issued")
+	}
+	// The session is spent: the same link can't be retried.
+	w = e.postProvider(session, "google")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestCIMDSelection_PageSeenInAnotherBrowserDoesNotCount(t *testing.T) {
+	// The attacker renders the page in their own browser first; the victim's
+	// browser still has no binding cookie.
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	attackerPage := e.selectionPage(t, session)
+	require.Equal(t, http.StatusOK, attackerPage.Code)
+
+	w := e.postProvider(session, "google")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	session = sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	_ = e.selectionPage(t, session)
+	w = e.postProvider(session, "google", &http.Cookie{Name: selectionBindCookie, Value: "attacker-guess"})
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestCIMDSelection_RenderingAgainRebindsToTheLatestBrowser(t *testing.T) {
+	// If the victim is sent the page itself, they see who is asking; whoever
+	// rendered it last is the one that can continue.
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	first := e.selectionPage(t, session)
+	second := e.selectionPage(t, session)
+
+	w := e.postProvider(session, "google", first.Result().Cookies()...)
+	assert.Equal(t, http.StatusBadRequest, w.Code, "the earlier browser's binding was replaced")
+
+	session = sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	_ = e.selectionPage(t, session)
+	second = e.selectionPage(t, session)
+	w = e.postProvider(session, "google", second.Result().Cookies()...)
+	assert.Equal(t, http.StatusFound, w.Code)
+}
+
+func TestCIMDSelection_BindingCookieAttributes(t *testing.T) {
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	page := e.selectionPage(t, session)
+	var bind *http.Cookie
+	for _, c := range page.Result().Cookies() {
+		if c.Name == selectionBindCookie {
+			bind = c
+		}
+	}
+	require.NotNil(t, bind)
+	assert.True(t, bind.HttpOnly)
+	assert.Equal(t, http.SameSiteLaxMode, bind.SameSite)
+	assert.Equal(t, "/oauth/select-provider", bind.Path)
+	assert.NotEmpty(t, bind.Value)
+
+	// The binding hash never reaches /authorize.
+	q, _ := e.postProviderOK(t, session, page.Result().Cookies())
+	assert.Empty(t, q.Get(selectionBindKey))
+}
+
+func TestSelection_NonCIMDClientsNeedNoBinding(t *testing.T) {
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
+	w := e.postProvider(session, "google")
+	assert.Equal(t, http.StatusFound, w.Code, w.Body.String())
+}
+
+func (e *cimdEnv) postProviderOK(t *testing.T, session string, cookies []*http.Cookie) (url.Values, []*http.Cookie) {
+	t.Helper()
+	w := e.postProvider(session, "google", cookies...)
+	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
+	loc, err := url.Parse(w.Header().Get("Location"))
+	require.NoError(t, err)
+	return loc.Query(), w.Result().Cookies()
 }

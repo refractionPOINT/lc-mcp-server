@@ -35,19 +35,11 @@ func (m *Manager) ConsumeEphemeral(ctx context.Context, key string) (string, err
 	return m.redis.AtomicGetAndDelete(ctx, key)
 }
 
-// IncrEphemeral increments a counter and starts a window of the given length
-// when the counter is created.
+// IncrEphemeral increments a counter whose window starts when it is created.
+// The increment and the expiry are applied atomically, so a counter can never
+// be left without a TTL.
 func (m *Manager) IncrEphemeral(ctx context.Context, key string, window time.Duration) (int64, error) {
-	n, err := m.redis.Incr(ctx, key)
-	if err != nil {
-		return 0, err
-	}
-	if n == 1 {
-		if err := m.redis.Expire(ctx, key, window); err != nil {
-			return n, err
-		}
-	}
-	return n, nil
+	return m.redis.IncrWithWindow(ctx, key, window)
 }
 
 // GetSelectionSession reads a provider-selection session without consuming it

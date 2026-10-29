@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -24,6 +25,11 @@ import (
 const (
 	selectionAckParam  = "selection_ack"
 	selectionAckCookie = "lc_oauth_selection"
+	// selectionBindCookie ties a CIMD client's selection session to the
+	// browser that was shown the selection page, and selectionBindKey is where
+	// the hash of its value is kept in the session.
+	selectionBindCookie = "lc_oauth_selection_view"
+	selectionBindKey    = "_selection_view"
 )
 
 // cimdResolver resolves a CIMD client_id to its validated metadata document.
@@ -114,6 +120,71 @@ func (h *Handlers) selectionDisplay(ctx context.Context, sessionID string) (*cli
 		RedirectHost: u.Host,
 		Localhost:    cimd.IsLoopbackRedirect(redirectURI),
 	}, nil
+}
+
+// bindSelectionToBrowser records that this browser is being shown the
+// selection page for a CIMD client: a random secret goes into an HttpOnly
+// cookie and its hash into the selection session. Only this browser can then
+// pick a provider for the session, so a selection link prepared by someone
+// else cannot carry a victim past the page that shows who is asking.
+func (h *Handlers) bindSelectionToBrowser(w http.ResponseWriter, r *http.Request, sessionID string) error {
+	params, err := h.stateManager.GetSelectionSession(r.Context(), sessionID)
+	if err != nil || params == nil {
+		return fmt.Errorf("selection session expired or invalid")
+	}
+	secret, err := randomToken()
+	if err != nil {
+		return err
+	}
+	params[selectionBindKey] = sha256Hex(secret)
+	if err := h.stateManager.StoreSelectionSession(r.Context(), sessionID, params); err != nil {
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     selectionBindCookie,
+		Value:    secret,
+		Path:     "/oauth/select-provider",
+		MaxAge:   state.SelectionTTL,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(h.metadataProvider.GetServerURL(), "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
+	return nil
+}
+
+// selectionBoundToBrowser reports whether this request comes from the browser
+// that was shown the selection page for a CIMD client's session. Sessions of
+// other clients carry no binding and always pass.
+func selectionBoundToBrowser(r *http.Request, params map[string]string) bool {
+	if !cimd.LooksLikeURL(params["client_id"]) {
+		return true
+	}
+	want := params[selectionBindKey]
+	c, err := r.Cookie(selectionBindCookie)
+	if want == "" || err != nil || c.Value == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(sha256Hex(c.Value)), []byte(want)) == 1
+}
+
+// CompleteProviderSelection handles the provider choice for a selection
+// session (from the page's form or its provider links): it consumes the
+// session and sends the browser back to /authorize with the provider set.
+func (h *Handlers) CompleteProviderSelection(w http.ResponseWriter, r *http.Request, sessionID, provider string) {
+	params, _ := h.stateManager.ConsumeSelectionSession(r.Context(), sessionID)
+	if params == nil {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
+		return
+	}
+	if !selectionBoundToBrowser(r, params) {
+		// The session is consumed either way, so a leaked link is single-use.
+		h.logger.Warn("CIMD provider selection from a browser that was not shown the selection page", "client_host", clientHost(params["client_id"]))
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Sign-in must be started from the application that requested it; open its sign-in link again", http.StatusBadRequest))
+		return
+	}
+	delete(params, selectionBindKey)
+	params["provider"] = provider
+	h.RedirectToAuthorize(w, r, params)
 }
 
 // RedirectToAuthorize sends the browser back to /authorize with the stored
