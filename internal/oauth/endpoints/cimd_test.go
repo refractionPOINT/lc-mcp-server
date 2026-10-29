@@ -351,7 +351,7 @@ func TestCIMDSelectionAck_CookieAttributes(t *testing.T) {
 	assert.True(t, ck.HttpOnly)
 	assert.True(t, ck.Secure, "server URL is https")
 	assert.Equal(t, "/authorize", ck.Path)
-	assert.Equal(t, http.SameSiteLaxMode, ck.SameSite)
+	assert.Equal(t, http.SameSiteStrictMode, ck.SameSite, "Lax cookies ride on cross-site top-level navigations")
 }
 
 func TestSelectionAck_IssuedToOpaqueClientsToo(t *testing.T) {
@@ -661,7 +661,7 @@ func TestCIMDSelection_BindingCookieAttributes(t *testing.T) {
 	}
 	require.NotNil(t, bind)
 	assert.True(t, bind.HttpOnly)
-	assert.Equal(t, http.SameSiteLaxMode, bind.SameSite)
+	assert.Equal(t, http.SameSiteStrictMode, bind.SameSite, "Lax cookies ride on cross-site top-level navigations")
 	assert.Equal(t, "/oauth/select-provider", bind.Path)
 	assert.NotEmpty(t, bind.Value)
 
@@ -691,4 +691,161 @@ func (e *cimdEnv) postProviderOK(t *testing.T, session string, cookies []*http.C
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
 	return loc.Query(), w.Result().Cookies()
+}
+
+// getProvider follows a provider link of the selection page (a plain GET, as
+// the route /oauth/select-provider/<provider> receives it) with the given
+// Sec-Fetch-Site header, when non-empty.
+func (e *cimdEnv) getProvider(session, provider, fetchSite string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, "/oauth/select-provider/"+provider+"?session="+session, nil)
+	if fetchSite != "" {
+		req.Header.Set("Sec-Fetch-Site", fetchSite)
+	}
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	w := httptest.NewRecorder()
+	e.h.CompleteProviderSelection(w, req, session, provider)
+	return w
+}
+
+func TestCIMDSelection_ChoiceInitiatedFromAnotherSiteIsRefused(t *testing.T) {
+	// Attack: a cross-site page opens the selection page in a popup (which
+	// sets the binding cookie), then navigates the popup to the provider link,
+	// skipping the user's click. Even with a valid cookie the browser's
+	// Sec-Fetch-Site gives the initiator away.
+	for _, site := range []string{"cross-site", "same-site", "none", "bogus"} {
+		t.Run(site, func(t *testing.T) {
+			e := newCIMDEnv(t)
+			session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+			page := e.selectionPage(t, session)
+			require.Equal(t, http.StatusOK, page.Code)
+
+			w := e.getProvider(session, "google", site, page.Result().Cookies()...)
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.Empty(t, w.Header().Get("Location"))
+			for _, c := range w.Result().Cookies() {
+				assert.NotEqual(t, selectionAckCookie, c.Name, "no acknowledgement may be issued")
+			}
+			// The session is spent; the legitimate click can't be replayed afterwards either.
+			w = e.getProvider(session, "google", "same-origin", page.Result().Cookies()...)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
+}
+
+func TestCIMDSelection_ClickOnThePageIsAccepted(t *testing.T) {
+	// The legitimate flow: the user clicks a provider link on the page.
+	for _, site := range []string{"same-origin", ""} { // "" = no Fetch Metadata (non-browser / old browser): the cookies decide
+		t.Run("sec-fetch-site="+site, func(t *testing.T) {
+			e := newCIMDEnv(t)
+			session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+			page := e.selectionPage(t, session)
+			w := e.getProvider(session, "google", site, page.Result().Cookies()...)
+			require.Equal(t, http.StatusFound, w.Code, w.Body.String())
+			assert.Contains(t, w.Header().Get("Location"), "/authorize?")
+		})
+	}
+}
+
+func TestCIMDSelection_CrossSitePostIsRefusedToo(t *testing.T) {
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	page := e.selectionPage(t, session)
+	form := url.Values{"provider": {"google"}}
+	req := httptest.NewRequest(http.MethodPost, "/oauth/select-provider?session="+session, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	for _, c := range page.Result().Cookies() {
+		req.AddCookie(c)
+	}
+	w := httptest.NewRecorder()
+	e.h.HandleProviderSelection(w, req, session)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSelection_NonCIMDClientsAlsoRefuseCrossSiteChoices(t *testing.T) {
+	// Every client goes through the same page, so the same cross-site
+	// protection applies to opaque (DCR/allow-listed) clients too.
+	for _, tc := range []struct {
+		site string
+		want int
+	}{{"cross-site", http.StatusBadRequest}, {"same-site", http.StatusBadRequest}, {"same-origin", http.StatusFound}} {
+		t.Run(tc.site, func(t *testing.T) {
+			e := newCIMDEnv(t)
+			session := sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
+			page := e.selectionPage(t, session)
+			require.Equal(t, http.StatusOK, page.Code)
+			w := e.getProvider(session, "google", tc.site, page.Result().Cookies()...)
+			assert.Equal(t, tc.want, w.Code, w.Body.String())
+		})
+	}
+}
+
+func TestCIMDSelectionPage_SeversTheOpener(t *testing.T) {
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	w := e.selectionPage(t, session)
+	assert.Equal(t, "same-origin", w.Header().Get("Cross-Origin-Opener-Policy"))
+}
+
+// ===== hosts shown to the user =====
+
+func TestCIMDSelectionPage_ShowsHostsInASCIIForm(t *testing.T) {
+	e := newCIMDEnv(t)
+	for i, tc := range []struct {
+		redirect string
+		shown    string
+		notShown string
+	}{
+		{"https://\u0430pple.com/callback", "xn--pple-43d.com", "\u0430"},
+		{"https://\u0430pple.com:8443/callback", "xn--pple-43d.com:8443", "\u0430"},
+		{"https://b\u00fccher.example.com/cb", "xn--bcher-kva.example.com", "\u00fc"},
+		{"https://app.example.com:8443/cb", "app.example.com:8443", ""},
+	} {
+		(*e.doc)["redirect_uris"] = []string{tc.redirect}
+		clientID := e.clientID + strconv.Itoa(i)
+		session := sessionFromLocation(t, e.authorize(e.authorizeQuery(clientID, tc.redirect, "")))
+		body := e.selectionPage(t, session).Body.String()
+		assert.Contains(t, body, "<code>"+tc.shown+"</code>", tc.redirect)
+		if tc.notShown != "" {
+			assert.NotContains(t, body, tc.notShown, tc.redirect)
+		}
+	}
+}
+
+func TestCIMDAuthorize_RedirectHostsWithBidiOrControlCharsAreRefused(t *testing.T) {
+	e := newCIMDEnv(t)
+	for i, redirect := range []string{
+		"https://app.example.com\u202e/callback",
+		"https://app\u2066.example.com/callback",
+		"https://app.example.com%e2%80%ae/callback",
+		"https://app\u200b.example.com/callback",
+		"https://\uff41pple.com/callback",
+	} {
+		(*e.doc)["redirect_uris"] = []string{redirect}
+		clientID := e.clientID + "bidi" + strconv.Itoa(i)
+		w := e.authorize(e.authorizeQuery(clientID, redirect, ""))
+		assert.Equal(t, http.StatusBadRequest, w.Code, redirect)
+		assert.Equal(t, ErrInvalidClient, oauthErrorOf(t, w).Error, redirect)
+	}
+}
+
+func TestDisplayHostPort(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://app.example.com/cb":      "app.example.com",
+		"https://app.example.com:8443/cb": "app.example.com:8443",
+		"http://localhost:3000/cb":        "localhost:3000",
+		"http://127.0.0.1:8080/cb":        "127.0.0.1:8080",
+		"https://[2606:4700::1111]:9/cb":  "[2606:4700::1111]:9",
+		"https://\u0430pple.com/cb":       "xn--pple-43d.com",
+	} {
+		got, ok := displayHostPort(in)
+		require.True(t, ok, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, in := range []string{"", "https:///x", "https://a\u202e.example.com/x", "::bad"} {
+		_, ok := displayHostPort(in)
+		assert.False(t, ok, "%q", in)
+	}
 }

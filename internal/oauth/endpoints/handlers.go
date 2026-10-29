@@ -686,6 +686,9 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 			WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
 			return
 		}
+		// No window.opener for whoever opened this page: a cross-site opener
+		// must not be able to navigate it after it has rendered.
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 
 		data := struct {
 			SessionID string

@@ -25,6 +25,15 @@ import (
 const (
 	DocPrefix  = "oauth:cimd:doc:"
 	HostPrefix = "oauth:cimd:host:"
+	// GoodPrefix holds the last known good copy of each document that
+	// validated, kept much longer than DocPrefix (see serveLastKnownGood).
+	GoodPrefix = "oauth:cimd:good:"
+	// URLPrefix counts fetches per document URL, CachedHostPrefix counts the
+	// new documents a host got cached today and CachedAllKey the same across
+	// every host (see mayCacheNewDoc).
+	URLPrefix        = "oauth:cimd:url:"
+	CachedHostPrefix = "oauth:cimd:cached-host:"
+	CachedAllKey     = "oauth:cimd:cached-all"
 )
 
 // Defaults. The 5 KiB suggested by the draft is too tight for real documents
@@ -39,11 +48,36 @@ const (
 	maxCacheTTL     = 24 * time.Hour
 	defaultCacheTTL = time.Hour
 
+	// lastKnownGoodTTL is how long the last validated copy of a document is
+	// kept for the load-shedding fallback.
+	lastKnownGoodTTL = 7 * 24 * time.Hour
+
+	// The cache lives in the Redis shared with tokens and authorization codes,
+	// so what can be written into it is bounded in size and in count. Real
+	// documents are a few hundred bytes to ~2 KiB; 8 KiB leaves several times
+	// that headroom (a document with 20 redirect URIs of 350 bytes) and is
+	// far below the 64 KiB fetch limit. A larger document is still served, it
+	// is just not cached.
+	maxCachedDocBytes = 8 << 10
+	// A host can get this many distinct new documents cached per day, and the
+	// whole cluster this many per hour, whatever the number of hosts (wildcard
+	// DNS makes hostnames free). A legitimate deployment has a handful of
+	// distinct client documents; beyond the caps documents are served but not
+	// cached, which only costs a fetch per use. Worst case the global cap
+	// bounds the footprint at 120 x 2 x 8 KiB per hour, kept 24 h (documents)
+	// or 7 days (last known good copies).
+	newDocsPerHostPerDay = 20
+	newDocsPerHour       = 120
+
 	maxConcurrentFetches = 16
 	globalRatePerSecond  = 20
 	globalRateBurst      = 40
 	perHostFetchesPerMin = 30
-	userAgent            = "LimaCharlie-MCP-OAuth/1 (client metadata document fetcher)"
+	// perURLFetchesPerMin bounds refreshes of a document we already resolved
+	// before. They do not spend the per-host budget (so junk paths on a shared
+	// host can't starve them) but are still bounded per URL.
+	perURLFetchesPerMin = 6
+	userAgent           = "LimaCharlie-MCP-OAuth/1 (client metadata document fetcher)"
 )
 
 // ErrorKind classifies a resolution failure.
@@ -70,6 +104,8 @@ func (e *Error) Error() string { return e.Message }
 type Store interface {
 	GetEphemeral(ctx context.Context, key string) (string, error)
 	SetEphemeral(ctx context.Context, key, value string, ttl time.Duration) error
+	// ConsumeEphemeral returns and deletes a value (used to drop entries).
+	ConsumeEphemeral(ctx context.Context, key string) (string, error)
 	// IncrEphemeral increments a counter, starting a new window of the given
 	// length when the counter is created, and returns the new value.
 	IncrEphemeral(ctx context.Context, key string, window time.Duration) (int64, error)
@@ -183,25 +219,42 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		return doc, nil
 	}
 
+	// A URL that validated before is "known": its refreshes are budgeted per
+	// URL instead of against the host, and its last copy can stand in if the
+	// refresh is shed.
+	lastGood, known := f.lastKnownGood(ctx, key)
+
 	// Abuse bounds: a global rate and concurrency cap on this process, and a
 	// per-host cap (shared across replicas) so we can't be used to hammer a
-	// third-party host by varying the path.
+	// third-party host by varying the path. A shed fetch is not a failed one:
+	// see lastKnownGood.
+	shed := func(msg string) (*Document, error) {
+		if known {
+			f.logger.Info("CIMD fetch shed; serving last known good document", "client_host", host)
+			return lastGood, nil
+		}
+		return nil, &Error{Kind: KindBusy, Message: msg}
+	}
 	if !f.limiter.Allow() {
 		f.logger.Warn("CIMD fetch shed: global rate limit", "client_host", host)
-		return nil, &Error{Kind: KindBusy, Message: "too many client metadata lookups in progress; try again shortly"}
+		return shed("too many client metadata lookups in progress; try again shortly")
 	}
-	n, err := f.store.IncrEphemeral(ctx, HostPrefix+hashHex(strings.ToLower(host)), time.Minute)
+	budgetKey, budget, msg := HostPrefix+hashHex(strings.ToLower(host)), int64(perHostFetchesPerMin), "too many lookups for this client's host; try again shortly"
+	if known {
+		budgetKey, budget, msg = URLPrefix+key, perURLFetchesPerMin, "too many lookups for this client; try again shortly"
+	}
+	n, err := f.store.IncrEphemeral(ctx, budgetKey, time.Minute)
 	if err != nil {
-		f.logger.Warn("CIMD per-host counter unavailable", "error", err)
-	} else if n > perHostFetchesPerMin {
-		f.logger.Warn("CIMD fetch shed: per-host limit", "client_host", host)
-		return nil, &Error{Kind: KindBusy, Message: "too many lookups for this client's host; try again shortly"}
+		f.logger.Warn("CIMD fetch counter unavailable", "error", err)
+	} else if n > budget {
+		f.logger.Warn("CIMD fetch shed: per-host/URL limit", "client_host", host, "known", known)
+		return shed(msg)
 	}
 	select {
 	case f.sem <- struct{}{}:
 		defer func() { <-f.sem }()
 	case <-ctx.Done():
-		return nil, &Error{Kind: KindBusy, Message: "too many client metadata lookups in progress; try again shortly"}
+		return shed("too many client metadata lookups in progress; try again shortly")
 	}
 
 	doc, ttl, err := f.fetch(ctx, clientID)
@@ -212,16 +265,49 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		}
 		// Failures are never cached (draft-ietf-oauth-client-id-metadata-
 		// document section 4.4: the AS MUST NOT cache error responses or
-		// invalid documents). Repeated lookups of a failing client_id are
-		// bounded by the single-flight above and the rate limits here.
+		// invalid documents), and the last known good copy is NOT served for
+		// them either: a document that is now gone or invalid must stop
+		// working. Repeated lookups of a failing client_id are bounded by the
+		// single-flight above and the rate limits here.
+		if known && (e.Kind == KindInvalidDocument || e.Kind == KindUnsupported) {
+			// The document is now definitively unacceptable: its old copy
+			// must not come back through the load-shedding fallback. (A
+			// transient fetch error keeps it, since the document may well
+			// be unchanged.)
+			_, _ = f.store.ConsumeEphemeral(ctx, GoodPrefix+key)
+		}
 		f.logger.Info("CIMD client rejected", "client_host", host, "outcome", "error", "kind", int(e.Kind), "reason", e.Message)
 		return nil, e
 	}
 	f.logger.Info("CIMD client resolved", "client_host", host, "outcome", "ok", "cache_ttl_seconds", int(ttl.Seconds()))
 	if ttl > 0 {
-		f.storeDoc(ctx, key, doc, ttl)
+		f.storeDoc(ctx, host, key, doc, ttl, known)
 	}
 	return doc, nil
+}
+
+// lastKnownGood returns the last copy of the document that validated, if any.
+//
+// It is served ONLY when we deliberately did not fetch (KindBusy-type load
+// shedding: rate limits, concurrency), never when a fetch happened and failed
+// or returned an invalid document. The draft says the AS MUST NOT cache error
+// responses or invalid documents; that is respected, since this copy is a
+// document that was fully validated when it was fetched, and answering from it
+// while we declined to ask is the same as answering from a cache that has
+// outlived its freshness, for at most lastKnownGoodTTL. It exists so that
+// third parties who spend the shared abuse budgets (any unauthenticated caller
+// can, with junk paths on the same host) cannot lock a legitimate client out
+// once its cached document has expired.
+func (f *Fetcher) lastKnownGood(ctx context.Context, key string) (*Document, bool) {
+	raw, err := f.store.GetEphemeral(ctx, GoodPrefix+key)
+	if err != nil || raw == "" {
+		return nil, false
+	}
+	var doc Document
+	if json.Unmarshal([]byte(raw), &doc) != nil {
+		return nil, false
+	}
+	return &doc, true
 }
 
 // fetch performs the HTTP exchange and validates the document. A zero ttl
@@ -319,14 +405,41 @@ func (f *Fetcher) cachedDoc(ctx context.Context, key string) (*Document, bool) {
 	return &doc, true
 }
 
-func (f *Fetcher) storeDoc(ctx context.Context, key string, doc *Document, ttl time.Duration) {
+// storeDoc caches a validated document (and its last-known-good copy) within
+// the size and count bounds. Beyond them the document is simply not cached.
+func (f *Fetcher) storeDoc(ctx context.Context, host, key string, doc *Document, ttl time.Duration, known bool) {
 	b, err := json.Marshal(doc)
 	if err != nil {
+		return
+	}
+	if len(b) > maxCachedDocBytes {
+		f.logger.Info("CIMD document too large to cache", "client_host", host, "bytes", len(b))
+		return
+	}
+	// Refreshing a known URL does not add a distinct entry; a new one must fit
+	// the budgets.
+	if !known && !f.mayCacheNewDoc(ctx, host) {
+		f.logger.Warn("CIMD new-document cache budget exhausted; not caching", "client_host", host)
 		return
 	}
 	if err := f.store.SetEphemeral(ctx, DocPrefix+key, string(b), ttl); err != nil {
 		f.logger.Warn("CIMD cache write failed", "error", err)
 	}
+	if err := f.store.SetEphemeral(ctx, GoodPrefix+key, string(b), lastKnownGoodTTL); err != nil {
+		f.logger.Warn("CIMD last-known-good write failed", "error", err)
+	}
+}
+
+// mayCacheNewDoc spends one unit of the per-host (daily) and cluster-wide
+// (hourly) budgets for caching a document for a URL not cached before. It
+// fails closed: when a counter cannot be read nothing new is cached.
+func (f *Fetcher) mayCacheNewDoc(ctx context.Context, host string) bool {
+	n, err := f.store.IncrEphemeral(ctx, CachedHostPrefix+hashHex(strings.ToLower(host)), 24*time.Hour)
+	if err != nil || n > newDocsPerHostPerDay {
+		return false
+	}
+	n, err = f.store.IncrEphemeral(ctx, CachedAllKey, time.Hour)
+	return err == nil && n <= newDocsPerHour
 }
 
 func cacheKey(clientID string) string { return hashHex(clientID) }

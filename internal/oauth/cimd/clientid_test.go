@@ -105,8 +105,64 @@ func TestValidateRedirectURI(t *testing.T) {
 		"https://user@app.example.com/cb",
 		"https://app.example.com/cb#frag",
 		"https://" + strings.Repeat("a", 2100) + ".example.com/cb",
+		// bidi / format / control characters in the host
+		"https://app.example.com\u202e/callback",
+		"https://app.example.com\u202d/callback",
+		"https://app\u2066.example.com/callback",
+		"https://app\u200b.example.com/callback",
+		"https://app\u00ad.example.com/callback",
+		"https://app.example.com\u2028/callback",
+		"https://app\u00a0.example.com/callback",
+		"https://app.example.com%e2%80%ae/callback",
+		"https://app.example.com\x00/callback",
+		// not in canonical IDNA form (fullwidth letters would be mapped), or invalid IDNA
+		"https://\uff41pple.com/callback",
+		"https://b\u00fccher.example.com\u3002com/cb",
+		"https://xn--.\u0430.com/cb",
 	} {
 		assert.Error(t, ValidateRedirectURI(bad), bad)
+	}
+	// Internationalised hosts that convert cleanly are accepted; they are
+	// displayed as punycode (see TestDisplayHost).
+	for _, ok := range []string{
+		"https://b\u00fccher.example.com/cb",
+		"https://xn--pple-43d.com/cb",
+		"https://\u0430pple.com/callback",
+		"https://%d0%b0pple.com/callback",
+	} {
+		assert.NoError(t, ValidateRedirectURI(ok), ok)
+	}
+}
+
+func TestDisplayHost(t *testing.T) {
+	good := map[string]string{
+		"app.example.com":         "app.example.com",
+		"APP.Example.com":         "APP.Example.com",
+		"localhost":               "localhost",
+		"127.0.0.1":               "127.0.0.1",
+		"::1":                     "::1",
+		"under_score.example.com": "under_score.example.com",
+		"\u0430pple.com":          "xn--pple-43d.com",
+		"b\u00fccher.example.com": "xn--bcher-kva.example.com",
+		"B\u00dcCHER.example.com": "xn--bcher-kva.example.com",
+		"\u4f8b\u3048.jp":         "xn--r8jz45g.jp",
+	}
+	for in, want := range good {
+		got, err := DisplayHost(in)
+		require.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+		for _, r := range got {
+			assert.Less(t, r, rune(0x80), "display form must be ASCII: %q", got)
+		}
+	}
+	for _, bad := range []string{
+		"app.example.com\u202e", "\u202eapp.example.com", "a\u2066b.com", "a\u200db.com", "a\u200cb.com",
+		"a\ufeffb.com", "a\u2028b.com", "a\u2029b.com", "a b.com", "a\tb.com", "a\x00b.com", "a\x7fb.com",
+		"a\u0085b.com", "a\u00a0b.com", "a\u3000b.com", "\uff41pple.com", "a\xffb.com",
+		"\u0430.\u0430\u202e.com", "xn--a.\u0430.com",
+	} {
+		_, err := DisplayHost(bad)
+		assert.Error(t, err, "%q", bad)
 	}
 }
 
