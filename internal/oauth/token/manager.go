@@ -94,6 +94,16 @@ var ErrInvalidTarget = errors.New("invalid_target")
 // token endpoint answers it with "invalid_grant".
 var ErrClientMismatch = errors.New("refresh token was issued to a different client")
 
+// ErrRefreshInFlight marks a refresh token that is being refreshed by another
+// request right now. That request either consumes the token or puts it back,
+// so a retry a moment later gets a definite answer. The token endpoint answers
+// it like any refused refresh token.
+var ErrRefreshInFlight = errors.New("refresh token is being refreshed by another request")
+
+// ErrRefreshRevoked marks a refresh whose token (or grant) was revoked while it
+// ran. Nothing was issued.
+var ErrRefreshRevoked = errors.New("refresh token was revoked")
+
 // MaxClientIDLen bounds a client_id we are willing to bind a token to.
 const MaxClientIDLen = 2048
 
@@ -130,6 +140,20 @@ func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToke
 
 	if tokenData == nil {
 		m.logger.Debug("Access token not found")
+		return &ValidationResult{
+			Valid: false,
+			Error: "invalid or expired access token",
+		}, nil
+	}
+
+	// A revoked grant's tokens are dead even if a record outlived the
+	// revocation (for instance one nobody could name when it ran).
+	revoked, err := m.stateManager.IsFamilyRevoked(ctx, tokenData.FamilyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check token revocation: %w", err)
+	}
+	if revoked {
+		m.logger.Warn("Access token rejected: its grant was revoked", "uid", tokenData.UID)
 		return &ValidationResult{
 			Valid: false,
 			Error: "invalid or expired access token",
@@ -197,12 +221,22 @@ func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToke
 			tokenData.ExtensionCount++
 			tokenData.LastExtendedAt = now
 
-			if err := m.stateManager.StoreAccessToken(ctx, tokenData); err != nil {
+			updated, err := m.stateManager.UpdateAccessToken(ctx, tokenData)
+			if err != nil {
 				m.logger.Error("Failed to extend MCP token lifetime", "error", err, "uid", tokenData.UID)
 				return &ValidationResult{
 					Valid:     false,
 					Error:     "failed to extend token lifetime",
 					Transient: true,
+				}, nil
+			}
+			if !updated {
+				// Revoked (or expired) while we were refreshing: the update is
+				// conditional, so nothing was written and the token stays dead.
+				m.logger.Warn("MCP token was revoked during lifetime extension; not extended", "uid", tokenData.UID)
+				return &ValidationResult{
+					Valid: false,
+					Error: "invalid or expired access token",
 				}, nil
 			}
 
@@ -302,8 +336,17 @@ func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToke
 					"max_extensions", state.MaxTokenExtensions)
 			}
 
-			// Store updated token data
-			if err := m.stateManager.StoreAccessToken(ctx, tokenData); err != nil {
+			// Store updated token data. The write is conditional: a token that
+			// was revoked meanwhile is not brought back, and is refused here.
+			updated, err := m.stateManager.UpdateAccessToken(ctx, tokenData)
+			if err == nil && !updated {
+				m.logger.Warn("Access token was revoked during refresh; not updated", "uid", tokenData.UID)
+				return &ValidationResult{
+					Valid: false,
+					Error: "invalid or expired access token",
+				}, nil
+			}
+			if err != nil {
 				m.logger.Error("Failed to update access token", "error", err, "uid", tokenData.UID)
 			} else {
 				m.logger.Info("Successfully refreshed tokens",
@@ -387,22 +430,55 @@ func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToke
 //     whatever client_id is presented, and the rotated tokens are bound to the
 //     one presented, so signed-in clients keep working and become bound on
 //     their next refresh.
-func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID string, resolve ResourceResolver) (*TokenResponse, error) {
-	// Look up refresh token
-	refreshData, err := m.stateManager.GetRefreshTokenData(ctx, refreshToken)
+func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID string, resolve ResourceResolver) (_ *TokenResponse, retErr error) {
+	// Claim the refresh token: one atomic step takes it out of circulation, so
+	// exactly one refresh can proceed per token and every check below runs on
+	// the data we hold. Reading it first and deleting it at the end let two
+	// refreshes both succeed, and let a refresh finish after the token's family
+	// had been revoked.
+	claim, err := m.stateManager.ClaimRefreshToken(ctx, refreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get refresh token data: %w", err)
 	}
-
-	if refreshData == nil {
+	if claim == nil {
+		inFlight, err := m.stateManager.RefreshInFlight(ctx, refreshToken)
+		if err == nil && inFlight {
+			m.logger.Warn("Refresh token is being refreshed by another request")
+			return nil, ErrRefreshInFlight
+		}
 		m.logger.Warn("Refresh token not found or already used")
 		return nil, fmt.Errorf("invalid or expired refresh token")
 	}
+	refreshData := claim.Data
+
+	// Until the successors are published, the token is put back on any failure
+	// (a Firebase or Redis blip must not sign the client out), unless it was
+	// revoked or consumed meanwhile. The cleanup outlives a cancelled request.
+	restore := true
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if restore {
+			switch _, err := m.stateManager.RestoreRefreshToken(cleanup, claim); {
+			case errors.Is(err, state.ErrTokenRevoked):
+				// Revoked while we held it. The revoker could not see the
+				// token, so finish the revocation of its grant.
+				if rerr := m.stateManager.RevokeClaimedFamily(cleanup, claim); rerr != nil {
+					m.logger.Error("Failed to finish revoking a refresh token revoked during refresh", "error", rerr, "uid", refreshData.UID)
+				}
+				if !errors.Is(retErr, ErrRefreshRevoked) {
+					retErr = fmt.Errorf("%w: %v", ErrRefreshRevoked, retErr)
+				}
+			case err != nil:
+				m.logger.Error("Failed to restore the refresh token after a failed refresh", "error", err, "uid", refreshData.UID)
+			}
+		}
+		m.stateManager.ReleaseRefreshClaim(cleanup, refreshToken)
+	}()
 
 	uid := refreshData.UID
 	firebaseRefreshToken := refreshData.FirebaseRefreshToken
 	scope := refreshData.Scope
-	oldAccessToken := refreshData.AccessToken
 
 	boundClientID := refreshData.ClientID
 	switch {
@@ -422,13 +498,11 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 		}
 		m.logger.Warn("Refresh refused: refresh token presented by a different client; revoking it",
 			"uid", uid, "expected_client_id", boundClientID, "presented_client_id", clientID)
-		if err := m.stateManager.RevokeRefreshToken(ctx, refreshToken); err != nil {
-			m.logger.Error("Failed to revoke refresh token after client mismatch", "error", err, "uid", uid)
-		}
-		if oldAccessToken != "" {
-			if err := m.stateManager.RevokeAccessToken(ctx, oldAccessToken); err != nil {
-				m.logger.Error("Failed to revoke access token after client mismatch", "error", err, "uid", uid)
-			}
+		restore = false
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if err := m.stateManager.RevokeClaimedFamily(cleanup, claim); err != nil {
+			m.logger.Error("Failed to revoke the token family after client mismatch", "error", err, "uid", uid)
 		}
 		return nil, ErrClientMismatch
 	}
@@ -440,6 +514,14 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 	if resolve != nil {
 		var err error
 		if resource, err = resolve(refreshData.Resource); err != nil {
+			return nil, err
+		}
+	}
+
+	// A token from before families existed starts one.
+	familyID := refreshData.FamilyID
+	if familyID == "" {
+		if familyID, err = m.stateManager.GenerateFamilyID(); err != nil {
 			return nil, err
 		}
 	}
@@ -462,7 +544,6 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
 
-	// Store new access token with refreshed Firebase tokens
 	accessTokenData := state.NewAccessTokenData(
 		newAccessToken,
 		uid,
@@ -474,11 +555,8 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 	)
 	accessTokenData.Resource = resource
 	accessTokenData.ClientID = boundClientID
-	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
-		return nil, fmt.Errorf("failed to store access token: %w", err)
-	}
+	accessTokenData.FamilyID = familyID
 
-	// SECURITY: Store new refresh token mapping
 	refreshTokenData := state.NewRefreshTokenData(
 		newRefreshToken,
 		newAccessToken,
@@ -488,21 +566,20 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 	)
 	refreshTokenData.Resource = resource
 	refreshTokenData.ClientID = boundClientID
-	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
-		return nil, fmt.Errorf("failed to store refresh token: %w", err)
-	}
+	refreshTokenData.FamilyID = familyID
 
-	// SECURITY: Revoke old refresh token (critical for rotation)
-	if err := m.stateManager.RevokeRefreshToken(ctx, refreshToken); err != nil {
-		m.logger.Warn("Failed to revoke old refresh token during rotation", "error", err, "uid", uid)
-	}
-
-	// Revoke old access token (optional - could keep for grace period)
-	if oldAccessToken != "" {
-		if err := m.stateManager.RevokeAccessToken(ctx, oldAccessToken); err != nil {
-			m.logger.Warn("Failed to revoke old access token during rotation", "error", err, "uid", uid)
+	// Publish both successors and retire the old access token in one atomic
+	// step, refused if the token or its family was revoked since the claim.
+	if err := m.stateManager.PublishRotation(ctx, claim, accessTokenData, refreshTokenData); err != nil {
+		if errors.Is(err, state.ErrTokenRevoked) {
+			m.logger.Warn("Refresh abandoned: the refresh token was revoked while it ran", "uid", uid)
+			// restore stays set: the restore is refused for the same reason and
+			// finishes the revocation of the grant.
+			return nil, ErrRefreshRevoked
 		}
+		return nil, fmt.Errorf("failed to store refreshed tokens: %w", err)
 	}
+	restore = false
 
 	m.logger.Info("Issued new tokens via refresh",
 		"uid", uid,
@@ -559,8 +636,15 @@ func (m *Manager) IntrospectToken(ctx context.Context, token string) (*Introspec
 		}, nil
 	}
 
-	// Check expiration
+	// Check expiration, and that the grant has not been revoked
 	isActive := tokenData.ExpiresAt > time.Now().Unix()
+	if isActive {
+		revoked, err := m.stateManager.IsFamilyRevoked(ctx, tokenData.FamilyID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check token revocation: %w", err)
+		}
+		isActive = !revoked
+	}
 
 	clientID := tokenData.ClientID
 	if clientID == "" {
@@ -626,6 +710,12 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 		return nil, fmt.Errorf("failed to generate refresh token: %w", err)
 	}
 
+	// Every sign-in starts a new family; rotations carry it.
+	familyID, err := m.stateManager.GenerateFamilyID()
+	if err != nil {
+		return nil, err
+	}
+
 	// Store access token
 	accessTokenData := state.NewAccessTokenData(
 		accessToken,
@@ -638,6 +728,7 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 	)
 	accessTokenData.Resource = resource
 	accessTokenData.ClientID = clientID
+	accessTokenData.FamilyID = familyID
 	if err := m.stateManager.StoreAccessToken(ctx, accessTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store access token: %w", err)
 	}
@@ -652,6 +743,7 @@ func (m *Manager) CreateTokenResponse(ctx context.Context, uid, firebaseIDToken,
 	)
 	refreshTokenData.Resource = resource
 	refreshTokenData.ClientID = clientID
+	refreshTokenData.FamilyID = familyID
 	if err := m.stateManager.StoreRefreshToken(ctx, refreshTokenData); err != nil {
 		return nil, fmt.Errorf("failed to store refresh token: %w", err)
 	}

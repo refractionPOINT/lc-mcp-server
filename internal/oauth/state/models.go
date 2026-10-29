@@ -73,6 +73,12 @@ type AccessTokenData struct {
 	// ClientID is the OAuth client the token was issued to. Empty on tokens
 	// issued before client binding existed (legacy).
 	ClientID string `json:"client_id,omitempty"`
+	// FamilyID identifies the grant (one sign-in) the token belongs to. Every
+	// rotation of the refresh token carries it, so revoking the family revokes
+	// every token of the grant, including ones a revoker has no name for.
+	// Empty on tokens issued before families existed (legacy): the first
+	// refresh gives the grant one.
+	FamilyID string `json:"family_id,omitempty"`
 }
 
 // RefreshTokenData represents a refresh token mapping
@@ -91,6 +97,8 @@ type RefreshTokenData struct {
 	// token issued before client binding existed (legacy): the first refresh
 	// that names a client binds it.
 	ClientID string `json:"client_id,omitempty"`
+	// FamilyID is the grant this token belongs to; see AccessTokenData.FamilyID.
+	FamilyID string `json:"family_id,omitempty"`
 }
 
 // ClientRegistration represents a dynamically registered OAuth client
@@ -149,6 +157,31 @@ const (
 	MFAPrefix       = "oauth:mfa:"
 	SessionPrefix   = "oauth:session:"   // OAuth state -> Firebase state mapping
 	FBSessionPrefix = "oauth:fbsession:" // Firebase state -> session ID mapping
+
+	// RevokedTokenPrefix + sha256(token) is a tombstone left when a refresh
+	// token is revoked. It stops an operation in flight on that token from
+	// restoring it or publishing successors.
+	RevokedTokenPrefix = "oauth:revoked:tok:"
+	// RevokedFamilyPrefix + family id marks a revoked grant: none of its tokens
+	// may be written, refreshed, extended or accepted.
+	RevokedFamilyPrefix = "oauth:revoked:fam:"
+	// RefreshClaimPrefix + sha256(token) exists while a refresh of that token is
+	// in flight.
+	RefreshClaimPrefix = "oauth:refresh_claim:"
+)
+
+// Lifetimes of the revocation records and the in-flight marker.
+const (
+	// RefreshClaimTTL bounds how long a refresh may hold a claim; a crashed
+	// pod's claim expires on its own.
+	RefreshClaimTTL = 120 * time.Second
+	// RevokedTokenTTL covers any refresh that can be in flight when its token is
+	// revoked (RefreshClaimTTL plus slack).
+	RevokedTokenTTL = time.Hour
+	// RevokedFamilyTTL outlives every token a family can hold when it is
+	// revoked: a refresh token (RefreshTTL) or an access token with its grace
+	// period.
+	RevokedFamilyTTL = (RefreshTTL + TokenTTL + TokenGracePeriod) * time.Second
 )
 
 // Token validation result
