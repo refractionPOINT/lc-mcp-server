@@ -46,7 +46,9 @@ Profiles select callable tools; the API still checks permissions.
    an enabled `mailsec_provider` record scoped to one `include_addresses` mailbox.
    Use the console or the administration profile's Hive/extension tools described
    in the onboarding guide. The provider secret is a serialized credential JSON
-   string inside `{"secret": "..."}`. Subscribing seeds `dr-mail` detection rules,
+   string inside `{"secret": "..."}`. For `imap`, skip `include_addresses` and
+   follow [IMAP mailboxes](#imap-mailboxes): one secret per mailbox, and the
+   mailbox list is the scope. Subscribing seeds `dr-mail` detection rules,
    not response automations. Keep `mailsec_policy` automations alert-only.
 5. With `mailsec.act`, call `mailsec_test_connection` on the saved provider `record`.
    Review every check, including optional failures that may leave `ok: true`.
@@ -67,7 +69,8 @@ generic IMAP hosts. An organization has ONE enabled `imap` `mailsec_provider`
 record, like every other provider, and that record lists all of its mailboxes in
 `imap.mailboxes`. Each mailbox has its own `address`, `host`, `port` (993 TLS or
 143 STARTTLS; there is no plaintext option) and its own `credentials` reference
-to a `secret` record whose value is `{"password": "..."}`. The record's top-level
+to a `secret` record whose `secret` value is the JSON string
+`{"password": "..."}`. The record's top-level
 `credentials` stays empty, and `scope.include_*` is refused because the mailbox
 list is the scope. Adding or removing a mailbox means editing that list.
 

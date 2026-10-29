@@ -221,7 +221,12 @@ func TestOnboardingAndSavedConnectionContracts(t *testing.T) {
 }
 
 func TestImapOnboardingForwardsOnlyTheProvider(t *testing.T) {
+	calls := 0
 	ctx := fixtureContext(t, func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.EscapedPath(), "/onboarding") {
+			t.Fatal("imap onboarding changed route", r.Method, r.URL.EscapedPath())
+		}
 		want := url.Values{"provider": {"imap"}}
 		if !reflect.DeepEqual(r.URL.Query(), want) {
 			t.Fatal("imap onboarding query changed", r.URL.Query())
@@ -229,6 +234,9 @@ func TestImapOnboardingForwardsOnlyTheProvider(t *testing.T) {
 		return response(200, `{"ok":true}`), nil
 	})
 	call(t, ctx, "mailsec_get_onboarding", map[string]interface{}{"provider": "imap"}, false)
+	if calls != 1 {
+		t.Fatalf("expected exactly one onboarding request, got %d", calls)
+	}
 }
 
 func TestExplicitConfirmationAndNormalizedBulkSelection(t *testing.T) {
