@@ -984,12 +984,23 @@ func TestCacheBounds_OversizedDocumentServedButNotCached(t *testing.T) {
 	assert.False(t, env.hasKnown(id))
 }
 
-func TestCacheBounds_PerHostDailyCapOnNewDocuments(t *testing.T) {
+// briefOnly asserts a document is cached for at most minCacheTTL and not
+// marked known: what happens to a valid document beyond the new-document
+// budgets.
+func (e *testEnv) briefOnly(t *testing.T, id string) {
+	t.Helper()
+	assert.False(t, e.hasKnown(id), "beyond the budgets a document is never marked known")
+	if e.hasDoc(id) {
+		assert.LessOrEqual(t, e.mr.TTL(DocPrefix+cacheKey(id)), minCacheTTL)
+	}
+}
+
+func TestCacheBounds_PerDomainDailyCapOnNewDocuments(t *testing.T) {
 	env := newTestEnv(t, okDoc)
 	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
 	// Spread the fetches over time so the per-minute host budget is not what limits us.
 	var ids []string
-	for i := 0; i < newDocsPerHostPerDay+5; i++ {
+	for i := 0; i < newDocsPerDomainPerDay+5; i++ {
 		id := env.url(fmt.Sprintf("/c%d.json", i))
 		ids = append(ids, id)
 		_, err := env.fetcher.Resolve(context.Background(), id)
@@ -997,23 +1008,70 @@ func TestCacheBounds_PerHostDailyCapOnNewDocuments(t *testing.T) {
 		env.mr.FastForward(61 * time.Second)
 		// FastForward also ages cache entries; the per-day window is 24h, so stay below it.
 	}
-	cached := 0
+	known := 0
 	for _, id := range ids {
 		if env.hasKnown(id) {
-			cached++
+			known++
 		}
 	}
-	assert.Equal(t, newDocsPerHostPerDay, cached, "beyond the daily cap documents are served but not cached")
-	for _, id := range ids[newDocsPerHostPerDay:] {
-		assert.False(t, env.hasDoc(id))
+	assert.Equal(t, newDocsPerDomainPerDay, known, "beyond the daily cap documents are only cached briefly")
+	for _, id := range ids[newDocsPerDomainPerDay:] {
+		env.briefOnly(t, id)
 	}
 
-	// A day later the host can cache new documents again.
+	// A day later the domain can cache new documents again.
 	env.mr.FastForward(24 * time.Hour)
 	id := env.url("/next-day.json")
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err)
-	assert.True(t, env.hasDoc(id))
+	assert.True(t, env.hasKnown(id))
+}
+
+func TestRegistrableDomain(t *testing.T) {
+	for host, want := range map[string]string{
+		"a.b.evil.example.com": "example.com",
+		"EVIL.example.co.uk.":  "example.co.uk",
+		"tenant1.example":      "tenant1.example",
+		"x.tenant1.example":    "tenant1.example",
+		"localhost":            "localhost",
+		"app.github.io":        "app.github.io", // github.io is a public suffix
+		"x.app.github.io":      "app.github.io",
+		"127.0.0.1":            "127.0.0.1",
+		"one.two.three.test":   "three.test",
+	} {
+		assert.Equal(t, want, registrableDomain(host), host)
+	}
+}
+
+func TestCacheBounds_SubdomainsShareTheDomainBudget(t *testing.T) {
+	env := newTestEnv(t, okDoc)
+	ctx := context.Background()
+	for i := 0; i < newDocsPerDomainPerDay; i++ {
+		require.True(t, env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("x%d.evil.example", i)))
+	}
+	assert.False(t, env.fetcher.mayCacheNewDoc(ctx, "another-sub.evil.example"), "wildcard subdomains don't get fresh budgets")
+	assert.True(t, env.fetcher.mayCacheNewDoc(ctx, "client.unrelated.example"), "other domains are unaffected")
+}
+
+func TestCacheBounds_SpentBudgetsDontStopANewClient(t *testing.T) {
+	// Anyone can spend the new-document budgets (/authorize is
+	// unauthenticated). A new client that turns up afterwards must still be
+	// served from cache, not refetched on every use until its host's
+	// per-minute fetch budget refuses it.
+	env := newTestEnv(t, okDoc)
+	ctx := context.Background()
+	for i := 0; i < newDocsPerHour; i++ {
+		env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("tenant%d.example", i))
+	}
+	require.False(t, env.fetcher.mayCacheNewDoc(ctx, "probe.example"), "global budget spent")
+
+	id := env.url("/client.json")
+	for i := 0; i < perHostFetchesPerMin*2; i++ {
+		_, err := env.fetcher.Resolve(ctx, id)
+		require.NoError(t, err, "resolve %d", i)
+	}
+	assert.EqualValues(t, 1, env.hits.Load(), "served from the brief cache after the first fetch")
+	env.briefOnly(t, id)
 }
 
 func TestCacheBounds_RefreshOfKnownDocumentIsNotCountedAsNew(t *testing.T) {
@@ -1024,7 +1082,7 @@ func TestCacheBounds_RefreshOfKnownDocumentIsNotCountedAsNew(t *testing.T) {
 	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
 	id := env.url("/client.json")
 	// More refreshes than the daily cap, one document.
-	for i := 0; i < newDocsPerHostPerDay*3; i++ {
+	for i := 0; i < newDocsPerDomainPerDay*3; i++ {
 		_, err := env.fetcher.Resolve(context.Background(), id)
 		require.NoError(t, err)
 		require.True(t, env.hasDoc(id), "refresh %d must still be cached", i)
@@ -1032,27 +1090,27 @@ func TestCacheBounds_RefreshOfKnownDocumentIsNotCountedAsNew(t *testing.T) {
 	}
 }
 
-func TestCacheBounds_GlobalHourlyCapAcrossHosts(t *testing.T) {
-	// Hostnames are free (wildcard DNS), so the per-host cap alone does not
-	// bound the cache: the cluster-wide counter does. Model many hosts by
-	// pre-spending the per-host budget under distinct host names.
+func TestCacheBounds_GlobalHourlyCapAcrossDomains(t *testing.T) {
+	// Registrable domains cost money but are still plentiful, so the
+	// per-domain cap alone does not bound the cache: the cluster-wide counter
+	// does. Model many domains by pre-spending budget under distinct ones.
 	env := newTestEnv(t, okDoc)
 	env.fetcher.limiter = rate.NewLimiter(rate.Inf, 1)
 	ctx := context.Background()
 	for i := 0; i < newDocsPerHour; i++ {
-		require.True(t, env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("host%d.example.com", i)))
+		require.True(t, env.fetcher.mayCacheNewDoc(ctx, fmt.Sprintf("tenant%d.example", i)))
 	}
-	assert.False(t, env.fetcher.mayCacheNewDoc(ctx, "one-more.example.com"))
+	assert.False(t, env.fetcher.mayCacheNewDoc(ctx, "one-more.example"))
 
 	id := env.url("/client.json")
 	_, err := env.fetcher.Resolve(ctx, id)
 	require.NoError(t, err)
-	assert.False(t, env.hasDoc(id), "over the global cap: served, not cached")
+	env.briefOnly(t, id)
 
 	env.mr.FastForward(time.Hour + time.Second)
 	_, err = env.fetcher.Resolve(ctx, env.url("/client2.json"))
 	require.NoError(t, err)
-	assert.True(t, env.hasDoc(env.url("/client2.json")))
+	assert.True(t, env.hasKnown(env.url("/client2.json")))
 }
 
 func TestCacheBounds_FailsClosedWhenCountersUnavailable(t *testing.T) {
@@ -1062,7 +1120,8 @@ func TestCacheBounds_FailsClosedWhenCountersUnavailable(t *testing.T) {
 	id := env.url("/client.json")
 	_, err := env.fetcher.Resolve(context.Background(), id)
 	require.NoError(t, err, "the document is still served")
-	assert.False(t, env.hasDoc(id), "nothing new is cached when the budget can't be checked")
+	// When the budget can't be checked the document is only cached briefly.
+	env.briefOnly(t, id)
 }
 
 type failingIncrStore struct{ Store }
