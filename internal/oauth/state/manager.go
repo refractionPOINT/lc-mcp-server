@@ -566,9 +566,6 @@ func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState s
 
 // ===== MFA Session Management =====
 
-// ErrMFASessionNotFound is returned when an MFA session does not exist or has expired.
-var ErrMFASessionNotFound = errors.New("MFA session not found or expired")
-
 // GenerateMFASessionID generates a session ID for MFA challenge
 func (m *Manager) GenerateMFASessionID() (string, error) {
 	b := make([]byte, 32)
@@ -648,6 +645,9 @@ func (m *Manager) GetMFAAttemptCount(ctx context.Context, sessionID string) (int
 	fmt.Sscanf(data, "%d", &count)
 	return count, nil
 }
+
+// ErrMFASessionNotFound means the MFA session expired or was already consumed
+var ErrMFASessionNotFound = errors.New("MFA session not found")
 
 // IncrementMFAAttempts atomically increments the MFA attempt counter
 // SECURITY: Uses Redis INCR for atomic increment to prevent race conditions

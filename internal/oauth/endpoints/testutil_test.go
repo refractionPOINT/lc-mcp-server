@@ -46,10 +46,10 @@ func setupTestRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis) {
 	mr := miniredis.RunT(t)
 
 	// Setup Redis client
+	// No retries: fault-injection tests (mr.SetError) would otherwise wait
+	// through the full production retry backoff on every failing command.
 	redisClient, err := redis.New(&redis.Config{
-		URL: "redis://" + mr.Addr(),
-		// Fail fast: tests inject Redis errors (e.g. READONLY) that go-redis
-		// would otherwise retry with multi-second backoff.
+		URL:        "redis://" + mr.Addr(),
 		MaxRetries: -1,
 	}, testLogger())
 	require.NoError(t, err)

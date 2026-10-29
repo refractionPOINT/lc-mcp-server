@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -481,7 +482,7 @@ func TestHandleMFAVerify_InvalidCode(t *testing.T) {
 
 	// Mock MFA failure
 	mockFB.finalizeMFASignInFunc = func(ctx context.Context, pending, enrollment, code string) (*firebase.FinalizeMFAResponse, error) {
-		return nil, assert.AnError
+		return nil, fmt.Errorf("%w: Firebase error 400: INVALID_CODE", firebase.ErrMFAInvalidCode)
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/mfa-verify", nil)
@@ -534,7 +535,7 @@ func TestHandleMFAVerify_BruteForceProtection(t *testing.T) {
 
 	// Mock MFA failures
 	mockFB.finalizeMFASignInFunc = func(ctx context.Context, pending, enrollment, code string) (*firebase.FinalizeMFAResponse, error) {
-		return nil, assert.AnError
+		return nil, fmt.Errorf("%w: Firebase error 400: INVALID_CODE", firebase.ErrMFAInvalidCode)
 	}
 
 	// Attempt 1

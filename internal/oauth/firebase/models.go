@@ -40,11 +40,20 @@ type SignInWithIdpResponse struct {
 	NeedConfirmation     bool        `json:"needConfirmation,omitempty"`
 }
 
-// MFAMethod represents an MFA enrollment method
+// MFAMethod represents an MFA enrollment method.
+// Firebase marks the factor type by which info field is present: phoneInfo
+// (masked number) for SMS, totpInfo (an empty object) for authenticator apps.
 type MFAMethod struct {
-	MFAEnrollmentID string `json:"mfaEnrollmentId"`
-	DisplayName     string `json:"displayName"`
-	EnrolledAt      string `json:"enrolledAt"`
+	MFAEnrollmentID string    `json:"mfaEnrollmentId"`
+	DisplayName     string    `json:"displayName"`
+	EnrolledAt      string    `json:"enrolledAt"`
+	PhoneInfo       string    `json:"phoneInfo,omitempty"`
+	TOTPInfo        *struct{} `json:"totpInfo,omitempty"`
+}
+
+// IsTOTP reports whether this enrollment is an authenticator-app (TOTP) factor
+func (m MFAMethod) IsTOTP() bool {
+	return m.TOTPInfo != nil
 }
 
 // RefreshTokenRequest represents the Firebase token refresh request
@@ -112,4 +121,15 @@ type MFARequiredError struct {
 
 func (e *MFARequiredError) Error() string {
 	return "MFA verification required"
+}
+
+// MFAUnsupportedError indicates the account requires MFA but has no factor
+// this server can verify. Only TOTP is supported: SMS sign-in needs a
+// client-side reCAPTCHA, which a server-driven flow cannot provide.
+type MFAUnsupportedError struct {
+	FactorCount int
+}
+
+func (e *MFAUnsupportedError) Error() string {
+	return fmt.Sprintf("MFA required but none of the %d enrolled factor(s) is TOTP", e.FactorCount)
 }
