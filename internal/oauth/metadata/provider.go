@@ -109,8 +109,9 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 		// We support public clients (no client authentication)
 		"token_endpoint_auth_methods_supported": []string{"none"},
 
-		// Response modes
-		"response_modes_supported": []string{"query", "fragment"},
+		// Response modes: authorization responses are only ever delivered in
+		// the query string, so that is the only mode advertised.
+		"response_modes_supported": []string{"query"},
 
 		// OAuth 2.0 features
 		"require_request_uri_registration":      false,

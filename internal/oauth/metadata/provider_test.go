@@ -19,4 +19,6 @@ func TestAuthorizationServerMetadata_AdvertisesIssParameter(t *testing.T) {
 	assert.Equal(t, true, md["authorization_response_iss_parameter_supported"])
 	assert.Equal(t, "https://mcp.example.com", md["issuer"])
 	assert.Equal(t, p.GetServerURL(), md["issuer"])
+	// Responses (and so iss) only ever go in the query string.
+	assert.Equal(t, []string{"query"}, md["response_modes_supported"])
 }
