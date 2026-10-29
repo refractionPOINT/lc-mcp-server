@@ -420,7 +420,7 @@ func (f *authFailure) write(s *Server, w http.ResponseWriter, r *http.Request, i
 
 // resolveRequestAuth determines the credentials a request carries:
 //  1. Bearer token → OAuth access token or LimaCharlie JWT passthrough
-//  2. X-LC-UID + X-LC-API-KEY → user API key (pinned when X-LC-OID is set)
+//  2. X-LC-UID + X-LC-API-KEY → user API key (X-LC-OID sets its default org)
 //  3. X-LC-OID + X-LC-API-KEY → organization API key
 //  4. server-wide credentials from the environment
 //  5. none of the above → unauthorized
@@ -508,7 +508,8 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 
 	if lcUID != "" && lcAPIKey != "" {
 		// Header-based user credentials (X-LC-UID + X-LC-API-KEY)
-		// If X-LC-OID is also provided, pin to that org
+		// If X-LC-OID is also provided it becomes the default org; the key
+		// can still switch to others with an oid argument.
 		if lcOID != "" {
 			s.logger.Debug("Authenticated via user header credentials with OID", "request_id", requestID, "uid", lcUID, "oid", lcOID)
 		} else {
@@ -542,7 +543,7 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 }
 
 func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, call *mcpCall) {
-	toolList, err := s.listTools(r, s.orgPinnedForListing(r, call))
+	toolList, err := s.listTools(r, s.oidParamNeeded(r, call))
 	if err != nil {
 		// Error from header parsing/validation
 		s.writeJSONRPCError(w, call.id, rpcInvalidParams, "Invalid params", err.Error())
@@ -551,23 +552,22 @@ func (s *Server) handleToolsList(w http.ResponseWriter, r *http.Request, call *m
 	s.writeRPCResult(w, call, map[string]any{"tools": toolList}, true)
 }
 
-// orgPinnedForListing reports whether a modern tools/list request carries
-// credentials that fix every call to one organization. The 2026-07-28 spec
-// lets the tool list vary by the authorization presented, so for such callers
-// the per-call oid parameter is left out: the credential already names the
-// org, and asking the model to repeat it only invites mistakes. Legacy
-// clients keep the listing they have always had. Credentials that fail to
-// resolve leave the oid parameter in; tools/list never rejects a caller.
-func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
-	if call.era != eraModern || !s.requestHasCredentials(r) {
-		return false
-	}
-	if r.Header.Get("X-LC-OID") == "" {
-		// Only X-LC-OID can pin a request credential to one org, so there is
-		// no need to validate (for a Bearer token, look up) the credential.
-		// Without request credentials the server-wide ones apply.
-		// (Server-wide org credentials are handled by listTools itself.)
-		return false
+// oidParamNeeded reports whether org-scoped tools are listed with the
+// injected oid parameter for this request.
+//
+// Legacy clients keep the listing they have always had: oid unless the server
+// runs with its own org credentials.
+//
+// For modern (2026-07-28) requests the spec lets the tool list vary by the
+// authorization presented, so the decision follows the credential the call
+// would actually use (resolveRequestAuth, including the server-wide fallback):
+// oid is left out only when that credential is pinned to one org, because the
+// credential already names the org and asking the model to repeat it only
+// invites mistakes. Credentials that fail to resolve keep oid; tools/list
+// never rejects a caller.
+func (s *Server) oidParamNeeded(r *http.Request, call *mcpCall) bool {
+	if call.era != eraModern {
+		return s.serverAuthCtx == nil || s.serverAuthCtx.Mode != auth.AuthModeNormal
 	}
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 		// Among Bearer tokens only an org-level LimaCharlie JWT can pin an
@@ -575,37 +575,29 @@ func (s *Server) orgPinnedForListing(r *http.Request, call *mcpCall) bool {
 		// that locally first, so a listing never costs a token-store lookup.
 		token, ok := strings.CutPrefix(authHeader, "Bearer ")
 		if !ok || !auth.IsJWTFormat(token) {
-			return false
+			return true
 		}
 		if claims, err := parseLimaCharlieJWT(token); err != nil || claims.UID != "" {
-			return false
+			return true
 		}
 	}
+	// Everything left resolves locally: header keys, a verified LimaCharlie
+	// JWT, or the server-wide credentials.
 	resolved, failure := s.resolveRequestAuth(r, fmt.Sprintf("list_%d", time.Now().UnixNano()))
 	if failure != nil {
-		return false
+		return true
 	}
-	return resolved.pinnedOID() != ""
+	return resolved.pinnedOID() == ""
 }
 
 // listTools returns the tool definitions this request may see, sorted by name
 // so that the listing is stable across requests (clients cache it, and a
 // stable order keeps LLM prompt caches warm).
-func (s *Server) listTools(r *http.Request, orgPinned bool) ([]mcp.Tool, error) {
+func (s *Server) listTools(r *http.Request, needsOIDParam bool) ([]mcp.Tool, error) {
 	// Get tools for this request (may be from profile or X-MCP-Tools header)
 	toolNames, err := s.getToolsForRequest(r)
 	if err != nil {
 		return nil, err
-	}
-
-	// Determine if we need to add OID parameter to tools
-	// OID parameter is needed for multi-org modes (UID modes) but not for single-org mode (Normal)
-	// If server has credentials in Normal mode, OID is fixed and not needed
-	// If server has credentials in UID mode or no server credentials (OAuth), OID is needed
-	needsOIDParam := !orgPinned
-	if s.serverAuthCtx != nil && s.serverAuthCtx.Mode == auth.AuthModeNormal {
-		// Server has fixed OID credentials, no need for OID parameter
-		needsOIDParam = false
 	}
 
 	toolList := make([]mcp.Tool, 0, len(toolNames))

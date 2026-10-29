@@ -509,3 +509,73 @@ func TestLimaCharlieJWTListingAndCallAgree(t *testing.T) {
 		})
 	}
 }
+
+func TestToolsListWithServerWideCredentials(t *testing.T) {
+	// The server can run with its own credentials, used when a request brings
+	// none. A request's own credential always takes precedence, so the modern
+	// listing must follow it, not the server's.
+	const userJWT = "hdr.user-token.sig"
+	serverModes := map[string]*auth.AuthContext{
+		"server org key":            {Mode: auth.AuthModeNormal, OID: testOID, APIKey: testAPIKey},
+		"server user key":           {Mode: auth.AuthModeUIDKey, UID: testUID, APIKey: testAPIKey},
+		"server user key + default": {Mode: auth.AuthModeUIDKey, UID: testUID, APIKey: testAPIKey, OID: testOID},
+	}
+	requests := []struct {
+		name    string
+		headers map[string]string
+		// wantOID per server mode name, for modern requests.
+		wantOID map[string]bool
+	}{
+		{"no request credential", map[string]string{},
+			map[string]bool{"server org key": false, "server user key": true, "server user key + default": true}},
+		{"request org key", map[string]string{"X-LC-OID": testOID, "X-LC-API-KEY": testAPIKey},
+			map[string]bool{"server org key": false, "server user key": false, "server user key + default": false}},
+		{"request user key", map[string]string{"X-LC-UID": testUID, "X-LC-API-KEY": testAPIKey},
+			map[string]bool{"server org key": true, "server user key": true, "server user key + default": true}},
+		{"request user JWT", map[string]string{"Authorization": "Bearer " + userJWT},
+			map[string]bool{"server org key": true, "server user key": true, "server user key + default": true}},
+		{"request opaque OAuth token", map[string]string{"Authorization": "Bearer opaque"},
+			map[string]bool{"server org key": true, "server user key": true, "server user key + default": true}},
+	}
+	for modeName, serverCtx := range serverModes {
+		for _, req := range requests {
+			t.Run(modeName+"/"+req.name, func(t *testing.T) {
+				fakeLCJWTs(t, map[string]*auth.LCClaims{userJWT: {UID: testUID, IsUserToken: true}})
+				srv := newProtocolTestServer(t)
+				registerOrgScopedTool(t)
+				srv.serverAuthCtx = serverCtx
+
+				body, headers := modernRequest(1, "tools/list", nil)
+				delete(headers, "X-LC-OID")
+				delete(headers, "X-LC-API-KEY")
+				for k, v := range req.headers {
+					headers[k] = v
+				}
+				headers["X-MCP-Tools"] = protoOrgTool
+				resp := postJSON(t, srv, "/mcp", body, headers)
+				require.Equal(t, http.StatusOK, resp.Status, "%s", resp.Raw)
+				props := listedTool(t, resp, protoOrgTool)["inputSchema"].(map[string]any)["properties"].(map[string]any)
+				if req.wantOID[modeName] {
+					assert.Contains(t, props, "oid")
+				} else {
+					assert.NotContains(t, props, "oid")
+				}
+
+				// Legacy listings are unchanged: oid unless the server runs
+				// with org credentials.
+				legacyHeaders := map[string]string{"X-MCP-Tools": protoOrgTool}
+				for k, v := range req.headers {
+					legacyHeaders[k] = v
+				}
+				resp = postJSON(t, srv, "/mcp", map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, legacyHeaders)
+				require.Equal(t, http.StatusOK, resp.Status)
+				legacyProps := listedTool(t, resp, protoOrgTool)["inputSchema"].(map[string]any)["properties"].(map[string]any)
+				if serverCtx.Mode == auth.AuthModeNormal {
+					assert.NotContains(t, legacyProps, "oid")
+				} else {
+					assert.Contains(t, legacyProps, "oid")
+				}
+			})
+		}
+	}
+}

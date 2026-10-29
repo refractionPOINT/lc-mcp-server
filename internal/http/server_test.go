@@ -35,7 +35,6 @@ func TestHealthEndpoint(t *testing.T) {
 	assert.Equal(t, "healthy", response["status"])
 }
 
-// TestMCPInitialize tests the initialize method
 // TestInvalidJSON tests handling of malformed JSON
 func TestInvalidJSON(t *testing.T) {
 	mux := http.NewServeMux()
