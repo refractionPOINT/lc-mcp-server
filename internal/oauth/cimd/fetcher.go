@@ -25,9 +25,10 @@ import (
 const (
 	DocPrefix  = "oauth:cimd:doc:"
 	HostPrefix = "oauth:cimd:host:"
-	// GoodPrefix holds the last known good copy of each document that
-	// validated, kept much longer than DocPrefix (see serveLastKnownGood).
-	GoodPrefix = "oauth:cimd:good:"
+	// KnownPrefix marks URLs that validated before (see fetchAndCache). The
+	// marker carries no document: it only selects which fetch budget applies
+	// and can never authorize anything.
+	KnownPrefix = "oauth:cimd:known:"
 	// URLPrefix counts fetches per document URL, CachedHostPrefix counts the
 	// new documents a host got cached today and CachedAllKey the same across
 	// every host (see mayCacheNewDoc).
@@ -48,9 +49,8 @@ const (
 	maxCacheTTL     = 24 * time.Hour
 	defaultCacheTTL = time.Hour
 
-	// lastKnownGoodTTL is how long the last validated copy of a document is
-	// kept for the load-shedding fallback.
-	lastKnownGoodTTL = 7 * 24 * time.Hour
+	// knownTTL is how long a URL stays "known" after its last validated fetch.
+	knownTTL = 7 * 24 * time.Hour
 
 	// The cache lives in the Redis shared with tokens and authorization codes,
 	// so what can be written into it is bounded in size and in count. Real
@@ -64,8 +64,7 @@ const (
 	// DNS makes hostnames free). A legitimate deployment has a handful of
 	// distinct client documents; beyond the caps documents are served but not
 	// cached, which only costs a fetch per use. Worst case the global cap
-	// bounds the footprint at 120 x 2 x 8 KiB per hour, kept 24 h (documents)
-	// or 7 days (last known good copies).
+	// bounds the footprint at 120 x 8 KiB per hour, kept at most 24 h.
 	newDocsPerHostPerDay = 20
 	newDocsPerHour       = 120
 
@@ -96,6 +95,10 @@ const (
 type Error struct {
 	Kind    ErrorKind
 	Message string
+
+	// gone is set when the document server said the document no longer exists
+	// (HTTP 404 or 410).
+	gone bool
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -220,19 +223,18 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 	}
 
 	// A URL that validated before is "known": its refreshes are budgeted per
-	// URL instead of against the host, and its last copy can stand in if the
-	// refresh is shed.
-	lastGood, known := f.lastKnownGood(ctx, key)
+	// URL instead of against the host, so junk paths on a shared host can't
+	// starve it. This only picks a rate-limit budget; it never yields a
+	// document.
+	known := f.isKnown(ctx, key)
 
 	// Abuse bounds: a global rate and concurrency cap on this process, and a
 	// per-host cap (shared across replicas) so we can't be used to hammer a
-	// third-party host by varying the path. A shed fetch is not a failed one:
-	// see lastKnownGood.
+	// third-party host by varying the path. A fetch that is shed fails closed
+	// (KindBusy): nothing but the Cache-Control bounded cache is ever served in
+	// place of a fetch, so a client that withdrew or changed its document is
+	// never answered from an older copy.
 	shed := func(msg string) (*Document, error) {
-		if known {
-			f.logger.Info("CIMD fetch shed; serving last known good document", "client_host", host)
-			return lastGood, nil
-		}
 		return nil, &Error{Kind: KindBusy, Message: msg}
 	}
 	if !f.limiter.Allow() {
@@ -265,16 +267,12 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		}
 		// Failures are never cached (draft-ietf-oauth-client-id-metadata-
 		// document section 4.4: the AS MUST NOT cache error responses or
-		// invalid documents), and the last known good copy is NOT served for
-		// them either: a document that is now gone or invalid must stop
-		// working. Repeated lookups of a failing client_id are bounded by the
-		// single-flight above and the rate limits here.
-		if known && (e.Kind == KindInvalidDocument || e.Kind == KindUnsupported) {
-			// The document is now definitively unacceptable: its old copy
-			// must not come back through the load-shedding fallback. (A
-			// transient fetch error keeps it, since the document may well
-			// be unchanged.)
-			_, _ = f.store.ConsumeEphemeral(ctx, GoodPrefix+key)
+		// invalid documents). A document that is gone (404/410) or now
+		// definitively unacceptable also drops any cached copy, so it cannot
+		// keep working until its TTL runs out. A transient error leaves the
+		// cache alone: the document may well be unchanged.
+		if e.gone || e.Kind == KindInvalidDocument || e.Kind == KindUnsupported {
+			f.dropDoc(ctx, key)
 		}
 		f.logger.Info("CIMD client rejected", "client_host", host, "outcome", "error", "kind", int(e.Kind), "reason", e.Message)
 		return nil, e
@@ -282,32 +280,27 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 	f.logger.Info("CIMD client resolved", "client_host", host, "outcome", "ok", "cache_ttl_seconds", int(ttl.Seconds()))
 	if ttl > 0 {
 		f.storeDoc(ctx, host, key, doc, ttl, known)
+	} else {
+		// no-store/no-cache/private: the new answer replaces whatever was
+		// cached before.
+		f.dropDoc(ctx, key)
 	}
 	return doc, nil
 }
 
-// lastKnownGood returns the last copy of the document that validated, if any.
-//
-// It is served ONLY when we deliberately did not fetch (KindBusy-type load
-// shedding: rate limits, concurrency), never when a fetch happened and failed
-// or returned an invalid document. The draft says the AS MUST NOT cache error
-// responses or invalid documents; that is respected, since this copy is a
-// document that was fully validated when it was fetched, and answering from it
-// while we declined to ask is the same as answering from a cache that has
-// outlived its freshness, for at most lastKnownGoodTTL. It exists so that
-// third parties who spend the shared abuse budgets (any unauthenticated caller
-// can, with junk paths on the same host) cannot lock a legitimate client out
-// once its cached document has expired.
-func (f *Fetcher) lastKnownGood(ctx context.Context, key string) (*Document, bool) {
-	raw, err := f.store.GetEphemeral(ctx, GoodPrefix+key)
-	if err != nil || raw == "" {
-		return nil, false
+// isKnown reports whether the URL validated before (see KnownPrefix).
+func (f *Fetcher) isKnown(ctx context.Context, key string) bool {
+	v, err := f.store.GetEphemeral(ctx, KnownPrefix+key)
+	return err == nil && v != ""
+}
+
+// dropDoc removes the cached document and the known marker for key.
+func (f *Fetcher) dropDoc(ctx context.Context, key string) {
+	for _, p := range []string{DocPrefix, KnownPrefix} {
+		if _, err := f.store.ConsumeEphemeral(ctx, p+key); err != nil {
+			f.logger.Warn("CIMD cache invalidation failed", "error", err)
+		}
 	}
-	var doc Document
-	if json.Unmarshal([]byte(raw), &doc) != nil {
-		return nil, false
-	}
-	return &doc, true
 }
 
 // fetch performs the HTTP exchange and validates the document. A zero ttl
@@ -330,7 +323,11 @@ func (f *Fetcher) fetch(ctx context.Context, clientID string) (*Document, time.D
 
 	if resp.StatusCode != http.StatusOK {
 		// This also covers 3xx: redirects are not followed.
-		return nil, 0, &Error{Kind: KindFetch, Message: fmt.Sprintf("client metadata document request returned HTTP %d", resp.StatusCode)}
+		return nil, 0, &Error{
+			Kind:    KindFetch,
+			Message: fmt.Sprintf("client metadata document request returned HTTP %d", resp.StatusCode),
+			gone:    resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone,
+		}
 	}
 	if mt, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type")); err != nil ||
 		!(mt == "application/json" || strings.HasSuffix(mt, "+json")) {
@@ -405,8 +402,8 @@ func (f *Fetcher) cachedDoc(ctx context.Context, key string) (*Document, bool) {
 	return &doc, true
 }
 
-// storeDoc caches a validated document (and its last-known-good copy) within
-// the size and count bounds. Beyond them the document is simply not cached.
+// storeDoc caches a validated document (and marks its URL known) within the
+// size and count bounds. Beyond them the document is simply not cached.
 func (f *Fetcher) storeDoc(ctx context.Context, host, key string, doc *Document, ttl time.Duration, known bool) {
 	b, err := json.Marshal(doc)
 	if err != nil {
@@ -425,8 +422,8 @@ func (f *Fetcher) storeDoc(ctx context.Context, host, key string, doc *Document,
 	if err := f.store.SetEphemeral(ctx, DocPrefix+key, string(b), ttl); err != nil {
 		f.logger.Warn("CIMD cache write failed", "error", err)
 	}
-	if err := f.store.SetEphemeral(ctx, GoodPrefix+key, string(b), lastKnownGoodTTL); err != nil {
-		f.logger.Warn("CIMD last-known-good write failed", "error", err)
+	if err := f.store.SetEphemeral(ctx, KnownPrefix+key, "1", knownTTL); err != nil {
+		f.logger.Warn("CIMD known-marker write failed", "error", err)
 	}
 }
 
