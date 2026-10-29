@@ -24,8 +24,7 @@ func refreshFormFor(refresh, clientID string) url.Values {
 // tokens its code was exchanged for.
 func signInAs(t *testing.T, h *Handlers) (access, refresh string) {
 	t.Helper()
-	fb := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier)))
-	w := callbackFor(h, fb)
+	w := callbackFor(h, startSignIn(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier)))
 	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)

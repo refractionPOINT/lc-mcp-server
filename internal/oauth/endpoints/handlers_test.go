@@ -366,7 +366,7 @@ func TestHandleCallback_ValidCallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	// Should redirect to client with authorization code
 	assert.Equal(t, http.StatusFound, w.Code)
@@ -402,7 +402,7 @@ func TestHandleCallback_InvalidCallbackDoesNotLogCode(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=secret-provider-code&state=secret-state", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	out := logs.String()
@@ -417,7 +417,7 @@ func TestHandleCallback_MissingFirebaseState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "Missing state")
@@ -430,7 +430,7 @@ func TestHandleCallback_InvalidState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?state=non-existent-state&code=test", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "expired or invalid")
@@ -463,13 +463,13 @@ func TestHandleCallback_StateReuseAttack(t *testing.T) {
 	// First request should succeed
 	req1 := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w1 := httptest.NewRecorder()
-	handlers.HandleCallback(w1, req1)
+	handlers.HandleCallback(w1, withBrowser(handlers, req1))
 	assert.Equal(t, http.StatusFound, w1.Code)
 
 	// Second request with same state should fail (state consumed)
 	req2 := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w2 := httptest.NewRecorder()
-	handlers.HandleCallback(w2, req2)
+	handlers.HandleCallback(w2, withBrowser(handlers, req2))
 	assert.Equal(t, http.StatusBadRequest, w2.Code)
 	assert.Contains(t, w2.Body.String(), "expired or invalid")
 }
@@ -504,7 +504,7 @@ func TestHandleCallback_FirebaseSignInFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	// Should redirect to client with error
 	assert.Equal(t, http.StatusFound, w.Code)

@@ -513,7 +513,7 @@ func TestCIMD_EndToEndTokenExchange(t *testing.T) {
 
 	// IdP callback issues our authorization code
 	cb := httptest.NewRecorder()
-	e.h.HandleCallback(cb, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil))
+	e.h.HandleCallback(cb, withCookies(httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil), w.Result().Cookies()...))
 	require.Equal(t, http.StatusFound, cb.Code)
 	loc, err := url.Parse(cb.Header().Get("Location"))
 	require.NoError(t, err)
@@ -545,9 +545,10 @@ func TestCIMD_EndToEndTokenExchange(t *testing.T) {
 	// The code was consumed by the failed attempt; run the flow again for the success case.
 	session = sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
 	q, cookies = e.clickProvider(t, session, "google")
-	require.Equal(t, http.StatusFound, e.authorize(q, cookies...).Code)
+	w = e.authorize(q, cookies...)
+	require.Equal(t, http.StatusFound, w.Code)
 	cb = httptest.NewRecorder()
-	e.h.HandleCallback(cb, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil))
+	e.h.HandleCallback(cb, withCookies(httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil), w.Result().Cookies()...))
 	require.Equal(t, http.StatusFound, cb.Code)
 	loc, _ = url.Parse(cb.Header().Get("Location"))
 	code = loc.Query().Get("code")

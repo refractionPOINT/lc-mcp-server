@@ -77,9 +77,30 @@ func firebaseStateOf(t *testing.T, w *httptest.ResponseRecorder) string {
 	return loc.Query().Get("state")
 }
 
-func callbackFor(h *Handlers, firebaseState string) *httptest.ResponseRecorder {
+// signIn is a sign-in in flight: the state the browser sent to the identity
+// provider, and the cookies that browser holds.
+type signIn struct {
+	fb      string
+	cookies []*http.Cookie
+}
+
+// startSignIn runs selection and /authorize in a fresh browser.
+func startSignIn(t *testing.T, h *Handlers, q url.Values) signIn {
+	t.Helper()
+	w := browserAuthorize(t, h, q)
+	return signIn{fb: firebaseStateOf(t, w), cookies: w.Result().Cookies()}
+}
+
+// callbackFor is the identity provider sending the browser of s back.
+func callbackFor(h *Handlers, s signIn) *httptest.ResponseRecorder {
+	return callbackIn(h, s.fb, s.cookies...)
+}
+
+// callbackIn is the provider's callback for firebaseState arriving in a browser
+// that holds cookies.
+func callbackIn(h *Handlers, firebaseState string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
-	h.HandleCallback(w, httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+url.QueryEscape(firebaseState)+"&code=idp-code", nil))
+	h.HandleCallback(w, withCookies(httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+url.QueryEscape(firebaseState)+"&code=idp-code", nil), cookies...))
 	return w
 }
 
@@ -105,8 +126,8 @@ func TestAuthorize_SameClientStateDoesNotHijackAnotherTransaction(t *testing.T) 
 	registerAttacker(t, sm)
 	const sharedState = "S-the-same-for-both"
 
-	victimFB := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, sharedState, victimVerifier)))
-	attackerFB := firebaseStateOf(t, browserAuthorize(t, h, authQuery(attackerClient, attackerRedirect, sharedState, attackerVerifier)))
+	victimFB := startSignIn(t, h, authQuery(victimClient, victimRedirect, sharedState, victimVerifier))
+	attackerFB := startSignIn(t, h, authQuery(attackerClient, attackerRedirect, sharedState, attackerVerifier))
 	require.NotEqual(t, victimFB, attackerFB)
 
 	// The victim finishes signing in.
@@ -156,8 +177,8 @@ func TestAuthorize_SameClientStateDoesNotHijackTheMFAPath(t *testing.T) {
 	}
 	const sharedState = "S-mfa"
 
-	victimFB := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, sharedState, victimVerifier)))
-	w := callbackFor(h, victimFB)
+	victim := startSignIn(t, h, authQuery(victimClient, victimRedirect, sharedState, victimVerifier))
+	w := callbackFor(h, victim)
 	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
 	mfaURL, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
@@ -165,10 +186,10 @@ func TestAuthorize_SameClientStateDoesNotHijackTheMFAPath(t *testing.T) {
 	mfaSession := mfaURL.Query().Get("session")
 
 	// While the victim types the code, the attacker starts a flow with the same state.
-	_ = firebaseStateOf(t, browserAuthorize(t, h, authQuery(attackerClient, attackerRedirect, sharedState, attackerVerifier)))
+	_ = startSignIn(t, h, authQuery(attackerClient, attackerRedirect, sharedState, attackerVerifier))
 
 	vw := httptest.NewRecorder()
-	h.HandleMFAVerify(vw, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), mfaSession, "123456")
+	h.HandleMFAVerify(vw, withCookies(httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), victim.cookies...), mfaSession, "123456")
 	require.Equal(t, http.StatusOK, vw.Code, vw.Body.String())
 	redirect, err := url.Parse(audDecode(t, vw)["redirect_url"].(string))
 	require.NoError(t, err)
@@ -194,7 +215,7 @@ func TestAuthorize_ClientStateIsOpaqueData(t *testing.T) {
 			h, sm, mockFB, mr := testHandlers(t)
 			realisticFirebase(mockFB)
 
-			fb := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, clientState, victimVerifier)))
+			fb := startSignIn(t, h, authQuery(victimClient, victimRedirect, clientState, victimVerifier))
 			txID, tx := onlyTx(t, sm, mr)
 			assert.Equal(t, clientState, tx.State)
 			assert.NotEqual(t, clientState, txID)
@@ -214,14 +235,14 @@ func TestAuthorize_SameStateForDifferentClientsIsFine(t *testing.T) {
 	realisticFirebase(mockFB)
 	registerAttacker(t, sm)
 
-	a := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, "same", victimVerifier)))
-	b := firebaseStateOf(t, browserAuthorize(t, h, authQuery(attackerClient, attackerRedirect, "same", attackerVerifier)))
+	a := startSignIn(t, h, authQuery(victimClient, victimRedirect, "same", victimVerifier))
+	b := startSignIn(t, h, authQuery(attackerClient, attackerRedirect, "same", attackerVerifier))
 	// The same client reusing a state (a retry, a buggy client) is just another transaction.
-	c := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, "same", victimVerifier)))
+	c := startSignIn(t, h, authQuery(victimClient, victimRedirect, "same", victimVerifier))
 
 	txs := storedTxs(t, sm, mr)
 	assert.Len(t, txs, 3, "three independent transactions")
-	for _, fb := range []string{a, b, c} {
+	for _, fb := range []signIn{a, b, c} {
 		w := callbackFor(h, fb)
 		assert.Equal(t, http.StatusFound, w.Code, w.Body.String())
 	}
@@ -233,10 +254,10 @@ func TestAuthorize_StateEqualToALiveTransactionIDChangesNothing(t *testing.T) {
 	realisticFirebase(mockFB)
 	registerAttacker(t, sm)
 
-	victimFB := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, "victim-state", victimVerifier)))
+	victimFB := startSignIn(t, h, authQuery(victimClient, victimRedirect, "victim-state", victimVerifier))
 	victimTx, before := onlyTx(t, sm, mr)
 
-	_ = firebaseStateOf(t, browserAuthorize(t, h, authQuery(attackerClient, attackerRedirect, victimTx, attackerVerifier)))
+	_ = startSignIn(t, h, authQuery(attackerClient, attackerRedirect, victimTx, attackerVerifier))
 
 	after, err := sm.GetOAuthState(context.Background(), victimTx)
 	require.NoError(t, err)
@@ -253,8 +274,8 @@ func TestAuthorize_StateEqualToALiveTransactionIDChangesNothing(t *testing.T) {
 func TestAuthorize_FirebaseStateAlreadyInUseFailsTheSecondLogin(t *testing.T) {
 	h, sm, _, mr := testHandlers(t)
 	// The default mock hands out the same Firebase state every time.
-	first := firebaseStateOf(t, browserAuthorize(t, h, authQuery(victimClient, victimRedirect, "one", victimVerifier)))
-	require.Equal(t, "firebase-state-123", first)
+	first := startSignIn(t, h, authQuery(victimClient, victimRedirect, "one", victimVerifier))
+	require.Equal(t, "firebase-state-123", first.fb)
 
 	w := browserAuthorize(t, h, authQuery(victimClient, victimRedirect, "two", victimVerifier))
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
@@ -285,8 +306,11 @@ func TestAuthorize_ProviderFailureLeavesNoTransaction(t *testing.T) {
 }
 
 // Transactions in flight when this code is deployed were keyed by the client's
-// state, and their provider mappings point at that key. They finish normally.
-func TestCallback_TransactionStartedByTheOldVersionStillCompletes(t *testing.T) {
+// state and carry no browser binding. They are refused (fail closed): accepting
+// a transaction nobody can tie to a browser is exactly the hole the binding
+// closes, and old instances keep writing such transactions for the length of a
+// rolling deploy. They expire within minutes; the user restarts the sign-in.
+func TestCallback_TransactionStartedByTheOldVersionIsRefused(t *testing.T) {
 	h, sm, _, mr := testHandlers(t)
 	ctx := context.Background()
 	// The old version wrote the transaction under the client's state, with no tx id.
@@ -297,10 +321,9 @@ func TestCallback_TransactionStartedByTheOldVersionStillCompletes(t *testing.T) 
 	require.NoError(t, sm.CreateSelectionSession(ctx, "oauth:state:legacy-fb", map[string]string{"oauth_state": "legacy-client-state"}))
 	require.NoError(t, sm.CreateSelectionSession(ctx, "oauth:fbsession:legacy-fb", map[string]string{"session_id": "legacy-sess"}))
 
-	w := callbackFor(h, "legacy-fb")
-	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
-	loc, _ := url.Parse(w.Header().Get("Location"))
-	assert.Equal(t, "app.example.com", loc.Host)
-	assert.Equal(t, "legacy-client-state", loc.Query().Get("state"))
-	assert.NotEmpty(t, loc.Query().Get("code"))
+	// Not even a browser presenting a binding cookie gets a code out of it.
+	w := callbackIn(h, "legacy-fb", &http.Cookie{Name: h.browserBindCookieName(), Value: testBrowserSecret})
+	assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Empty(t, w.Header().Get("Location"), "no redirect to the client")
+	assert.Empty(t, storedTxs(t, sm, mr), "the transaction is abandoned")
 }
