@@ -3,7 +3,6 @@ package token
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -104,49 +103,115 @@ func TestRefreshRace_MismatchFirstThenMatchingRefreshFails(t *testing.T) {
 	assert.Nil(t, rt)
 }
 
-// Concurrent refreshes of one token: exactly one succeeds, so one refresh
-// token never fathers two families.
-func TestRefreshRace_ConcurrentRefreshesOfOneTokenExactlyOneSucceeds(t *testing.T) {
+// Concurrent refreshes of one token, while the one that holds the claim is still
+// in flight: it alone reaches Firebase and rotates the token, and every other
+// request is refused as in flight (retryable, not a dead refresh). Firebase is
+// gated on a channel that opens only once the others have been answered, so all of
+// them meet the claim: no timing decides who is refused.
+//
+// A request that arrives after the rotation is a different case and not a second
+// winner: within the refresh grace window it is handed the same successors, and
+// nothing new is minted. So the invariant is not how many requests succeed but how
+// many successor pairs exist: one refresh token never fathers two generations.
+func TestRefreshRace_ConcurrentRefreshesOfOneTokenIssueOneSuccessorPair(t *testing.T) {
 	m, sm, mockFB := setupTestManager(t)
 	ctx := context.Background()
 	issued := issueFor(t, m, clientA)
 
-	// Hold every request in flight until all of them have started.
 	const n = 8
-	var started sync.WaitGroup
-	started.Add(n)
 	var firebaseCalls atomic.Int32
+	othersAnswered := make(chan struct{})
 	mockFB.refreshIDTokenFunc = func(ctx context.Context, _ string) (string, int64, error) {
 		firebaseCalls.Add(1)
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-othersAnswered:
+		case <-time.After(10 * time.Second):
+			return "", 0, errors.New("the requests that lost the claim were never answered")
+		}
 		return validFirebaseResult()
 	}
 
-	results := make([]*TokenResponse, n)
-	errs := make([]error, n)
-	var wg sync.WaitGroup
+	results := make(chan refreshResult, n)
 	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			started.Done()
-			started.Wait()
-			results[i], errs[i] = m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
-		}(i)
+		go func() {
+			resp, err := m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+			results <- refreshResult{resp, err}
+		}()
 	}
-	wg.Wait()
 
-	var winners []*TokenResponse
-	for i := range results {
-		if errs[i] == nil {
-			winners = append(winners, results[i])
+	// The claim holder cannot finish before othersAnswered opens, so the first n-1
+	// answers are the refused requests.
+	for i := 0; i < n-1; i++ {
+		refused := waitFor(t, results, "a refused refresh")
+		assert.Nil(t, refused.resp)
+		assert.ErrorIs(t, refused.err, ErrRefreshInFlight)
+		assert.False(t, IsDeadRefresh(refused.err), "losing the claim is retryable, not a sign-out")
+	}
+	close(othersAnswered)
+	winner := waitFor(t, results, "the refresh that holds the claim")
+	require.NoError(t, winner.err)
+	assert.EqualValues(t, 1, firebaseCalls.Load(), "the refused requests never reach Firebase")
+	assert.True(t, usable(t, m, winner.resp.AccessToken))
+	rt, _ := sm.GetRefreshTokenData(ctx, winner.resp.RefreshToken)
+	assert.NotNil(t, rt)
+
+	// Arriving after the rotation, a request is handed the winner's pair.
+	late, err := m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+	require.NoError(t, err, "within the grace window a replay gets the successors, not an error")
+	assert.Equal(t, winner.resp.RefreshToken, late.RefreshToken, "the same pair, nothing minted")
+	assert.Equal(t, winner.resp.AccessToken, late.AccessToken)
+	assert.EqualValues(t, 1, firebaseCalls.Load())
+	old, _ := sm.GetRefreshTokenData(ctx, issued.RefreshToken)
+	assert.Nil(t, old, "the rotated token is consumed")
+}
+
+// The same race with no gate: the requests land in whatever order the scheduler
+// gives them, so a request may meet the claim (refused as in flight) or arrive
+// after the rotation (handed the winner's pair). In every order the token has
+// fathered exactly one generation and Firebase was asked once.
+func TestRefreshRace_ConcurrentRefreshesInAnyOrderIssueOneSuccessorPair(t *testing.T) {
+	ctx := context.Background()
+	for iter := 0; iter < 20; iter++ {
+		m, sm, mockFB := setupTestManager(t)
+		issued := issueFor(t, m, clientA)
+
+		var firebaseCalls atomic.Int32
+		mockFB.refreshIDTokenFunc = func(ctx context.Context, _ string) (string, int64, error) {
+			firebaseCalls.Add(1)
+			// Varies how many requests are still in flight when it publishes.
+			time.Sleep(time.Duration(iter%4) * time.Millisecond)
+			return validFirebaseResult()
+		}
+
+		const n = 8
+		start := make(chan struct{})
+		results := make(chan refreshResult, n)
+		for i := 0; i < n; i++ {
+			go func() {
+				<-start
+				resp, err := m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+				results <- refreshResult{resp, err}
+			}()
+		}
+		close(start)
+
+		successors := map[string]bool{}
+		for i := 0; i < n; i++ {
+			r := waitFor(t, results, "a refresh")
+			if r.err != nil {
+				assert.ErrorIs(t, r.err, ErrRefreshInFlight, "iteration %d: a refused request is only ever told to retry", iter)
+				continue
+			}
+			successors[r.resp.RefreshToken] = true
+			assert.True(t, usable(t, m, r.resp.AccessToken), "iteration %d", iter)
+		}
+		assert.Len(t, successors, 1, "iteration %d: one refresh token, one generation of successors", iter)
+		assert.EqualValues(t, 1, firebaseCalls.Load(), "iteration %d: only the request holding the claim reaches Firebase", iter)
+		for rt := range successors {
+			data, _ := sm.GetRefreshTokenData(ctx, rt)
+			assert.NotNil(t, data, "iteration %d", iter)
 		}
 	}
-	require.Len(t, winners, 1, "exactly one refresh of a token may succeed")
-	assert.EqualValues(t, 1, firebaseCalls.Load(), "the losers never reach Firebase")
-	assert.True(t, usable(t, m, winners[0].AccessToken))
-	rt, _ := sm.GetRefreshTokenData(ctx, winners[0].RefreshToken)
-	assert.NotNil(t, rt)
 }
 
 // A refresh that fails for a transient reason after the claim puts the token

@@ -662,8 +662,13 @@ func TestFault_ARefreshHitByAFaultNeverLeavesTwoGenerations(t *testing.T) {
 // ===== Races =====
 
 // Refreshes and revocations of one grant, started together. Whatever order they
-// land in: at most one refresh succeeds, and once the revocation has returned
-// the grant has no live credential.
+// land in: the grant has at most one generation of successors, and once the
+// revocation has returned the grant has no live credential.
+//
+// More than one refresh may succeed: a request that arrives after another one
+// rotated the token is handed the same successors (the refresh grace window), so
+// the number of successes says nothing. What matters is how many distinct
+// successor refresh tokens were issued.
 func TestFault_RefreshesRacingARevocationLeaveNothingAlive(t *testing.T) {
 	ctx := context.Background()
 	for i := 0; i < 25; i++ {
@@ -671,6 +676,8 @@ func TestFault_RefreshesRacingARevocationLeaveNothingAlive(t *testing.T) {
 		_ = sm
 		issued := issueFor(t, m, clientA)
 		fb.refreshIDTokenFunc = func(ctx context.Context, _ string) (string, int64, error) {
+			// Varies the interleaving with the revocation; the assertions below
+			// hold in every order.
 			time.Sleep(time.Duration(i%3) * time.Millisecond)
 			return validFirebaseResult()
 		}
@@ -698,16 +705,46 @@ func TestFault_RefreshesRacingARevocationLeaveNothingAlive(t *testing.T) {
 		wg.Wait()
 
 		require.NoError(t, revokeErr)
-		winners := 0
+		successors := map[string]bool{}
 		for _, r := range results {
 			if r.err == nil {
-				winners++
+				successors[r.resp.RefreshToken] = true
 				assert.False(t, usable(t, m, r.resp.AccessToken), "iteration %d: a token issued by a refresh survives the revocation", i)
 				_, err := m.RefreshAccessToken(ctx, r.resp.RefreshToken, clientA, nil)
 				assert.Error(t, err, "iteration %d", i)
 			}
 		}
-		assert.LessOrEqual(t, winners, 1, "iteration %d: one refresh token never fathers two generations", i)
+		assert.LessOrEqual(t, len(successors), 1, "iteration %d: one refresh token never fathers two generations", i)
 		assert.False(t, usable(t, m, issued.AccessToken), "iteration %d", i)
 	}
+}
+
+// The order the race above can produce, pinned: one refresh rotates the token, a
+// second one arrives after it and is handed the same successors, and the
+// revocation runs last. Two refreshes succeeded and there is still one
+// generation, which the revocation kills.
+func TestFault_ALateRefreshIsHandedTheSamePairAndTheRevocationStillKillsIt(t *testing.T) {
+	ctx := context.Background()
+	m, _, fb := setupTestManager(t)
+	var firebaseCalls atomic.Int32
+	fb.refreshIDTokenFunc = func(ctx context.Context, _ string) (string, int64, error) {
+		firebaseCalls.Add(1)
+		return validFirebaseResult()
+	}
+	issued := issueFor(t, m, clientA)
+
+	first, err := m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+	require.NoError(t, err)
+	late, err := m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+	require.NoError(t, err, "within the grace window a replay is handed the successors")
+	assert.Equal(t, first.RefreshToken, late.RefreshToken, "one generation, however many requests got it")
+	assert.Equal(t, first.AccessToken, late.AccessToken)
+	assert.EqualValues(t, 1, firebaseCalls.Load())
+
+	require.NoError(t, m.RevokeToken(ctx, issued.RefreshToken, "refresh_token"))
+	assert.False(t, usable(t, m, first.AccessToken))
+	_, err = m.RefreshAccessToken(ctx, first.RefreshToken, clientA, nil)
+	assert.Error(t, err)
+	_, err = m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+	assert.Error(t, err, "the revoked grant cannot be replayed either")
 }
