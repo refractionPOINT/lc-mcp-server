@@ -19,6 +19,11 @@ func TestLoad(t *testing.T) {
 		"LC_API_KEY":     os.Getenv("LC_API_KEY"),
 		"LC_UID":         os.Getenv("LC_UID"),
 		"LC_CURRENT_ENV": os.Getenv("LC_CURRENT_ENV"),
+		// Set by the subtests below; restored too, or a repeated run
+		// (-count>1) starts "default values" with them still set.
+		"AUDIT_LOG_ENABLED":    os.Getenv("AUDIT_LOG_ENABLED"),
+		"SDK_CACHE_TTL":        os.Getenv("SDK_CACHE_TTL"),
+		"REDIS_ENCRYPTION_KEY": os.Getenv("REDIS_ENCRYPTION_KEY"),
 	}
 
 	// Restore env vars after test
