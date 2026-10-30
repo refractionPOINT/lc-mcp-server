@@ -19,7 +19,7 @@ func TestPublishDocIfGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	g1, _ := m.GetEphemeral(ctx, gen)
-	assert.Len(t, g1, 32, "publishing sets a fresh random generation")
+	assert.Len(t, g1, 40, "publishing sets a fresh generation (sha1 hex)")
 	assert.Equal(t, time.Minute, mr.TTL(gen))
 	assert.Equal(t, time.Hour, mr.TTL(doc))
 	assert.Equal(t, 24*time.Hour, mr.TTL(known))
@@ -77,7 +77,7 @@ func TestInvalidateDoc(t *testing.T) {
 			assert.Empty(t, v, k)
 		}
 		v, _ := m.GetEphemeral(ctx, gen)
-		assert.Len(t, v, 32)
+		assert.Len(t, v, 40)
 	})
 
 	t.Run("keep known", func(t *testing.T) {
