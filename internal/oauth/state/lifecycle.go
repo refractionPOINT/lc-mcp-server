@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/redis"
@@ -186,6 +187,7 @@ const (
 	publishConflict = 0
 	publishRevoked  = -1
 	publishLost     = -2
+	publishRotated  = -3
 )
 
 // publishScript creates the successors of a claimed refresh token and retires
@@ -204,7 +206,12 @@ const (
 //
 // It publishes only when the claim is still the attempt's own (an expired or
 // taken-over claim cannot), the refresh token still exists, and neither the
-// token nor its family was revoked. Then, in one step: the successors are
+// token nor its family was revoked. The refusals are told apart, because a lost
+// claim must not be reported as a dead grant: -1 is a token that is revoked or
+// gone (with no rotation record: revoked, or expired), -3 a token some attempt
+// already rotated, and -2 only a claim that is no longer the attempt's while the
+// token is still there, unrevoked and unrotated (the claim ran out, or another
+// attempt holds it and has not published). Then, in one step: the successors are
 // created (create-only), the old refresh record and access record are deleted,
 // the indices and the family record are updated, the claim is dropped and the
 // outcome is recorded. A repeat of an attempt that already published finds the
@@ -213,17 +220,17 @@ var publishScript = redis.NewScript(luaPrelude + `
 local done = redis.call('GET', KEYS[5])
 if done then
 	if done == ARGV[10] then return 2 end
-	return -2
+	return -3
 end
 if redis.call('EXISTS', KEYS[3]) == 1 or redis.call('EXISTS', KEYS[4]) == 1 then
 	return -1
 end
-if redis.call('GET', KEYS[1]) ~= ARGV[1] then
-	return -2
-end
 local old_ttl = redis.call('PTTL', KEYS[2])
 if old_ttl == -2 then
 	return -1
+end
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+	return -2
 end
 if redis.call('EXISTS', KEYS[6]) == 1 or redis.call('EXISTS', KEYS[7]) == 1 then
 	return 0
@@ -394,6 +401,10 @@ var (
 	// ErrClaimLost means the refresh attempt no longer owns its claim: it
 	// expired, or the grant was revoked, or another attempt took over.
 	ErrClaimLost = errors.New("refresh claim lost")
+	// ErrAlreadyRotated means a refresh attempt already rotated the token. It
+	// is a claim that was lost for good, so it also matches ErrClaimLost; only
+	// this error proves the token is consumed, a bare ErrClaimLost does not.
+	ErrAlreadyRotated = fmt.Errorf("%w: the refresh token was already rotated", ErrClaimLost)
 )
 
 // ms renders a duration as the millisecond count the scripts take.
@@ -616,9 +627,15 @@ func (m *Manager) releaseClaim(ctx context.Context, tokenHash, owner string) {
 // access token it was issued with), as one atomic step.
 //
 //   - ErrTokenRevoked: the token or its grant was revoked; nothing was written.
-//   - ErrClaimLost: the claim expired, was cleared, or another attempt rotated
-//     the token; nothing was written.
+//   - ErrClaimLost: the claim expired, was cleared, or is held by another
+//     attempt, and the token is still there, unrevoked and unrotated; nothing
+//     was written, and the token can be refreshed again.
+//   - ErrAlreadyRotated (also matches ErrClaimLost): another attempt rotated
+//     the token; nothing was written. RotationSuccessors finds what it issued.
 //   - ErrAlreadyExists: a successor id is taken; nothing was written.
+//
+// A token that is gone with no rotation record (revoked, or expired) is
+// ErrTokenRevoked even for an attempt whose claim also ran out.
 //
 // Publishing again as the same attempt with the same successors (a retry after
 // a lost reply) succeeds without changing anything. The successors must carry
@@ -669,7 +686,7 @@ func (m *Manager) preparePublish(claim *RefreshClaim, at *AccessTokenData, rt *R
 		keys:   keys,
 		args: []interface{}{
 			claim.Owner, fam, atData, ms(atTTL), rtData, ms(rtTTL), at.AccessToken, rt.RefreshToken, newRT,
-			claim.Owner + ":" + newAT + ":" + newRT, ms(RotationRecordTTL), ms(rtTTL), ms(max(atTTL, rtTTL)),
+			rotationValue(claim.Owner, at.AccessToken, rt.RefreshToken, claim.Data), ms(RotationRecordTTL), ms(rtTTL), ms(max(atTTL, rtTTL)),
 		},
 	}, nil
 }
@@ -691,6 +708,8 @@ func (m *Manager) publish(ctx context.Context, call *scriptCall) error {
 		return ErrTokenRevoked
 	case publishLost:
 		return ErrClaimLost
+	case publishRotated:
+		return ErrAlreadyRotated
 	}
 	return fmt.Errorf("unexpected publish result %d", n)
 }
@@ -776,4 +795,91 @@ func (m *Manager) RevokeAccessToken(ctx context.Context, accessToken string) err
 func (m *Manager) RevokeRefreshToken(ctx context.Context, refreshToken string) error {
 	_, err := m.RevokeToken(ctx, refreshToken)
 	return err
+}
+
+// ===== Recovering a committed rotation =====
+
+// rotationValue is the content of a rotation record: the attempt that rotated
+// the token, the successors it published and the resource the old token was
+// authorized for (the successors may be narrower). The owner comes first and the
+// resource, which may contain ':', last. Tokens are base64url and never contain
+// ':'.
+func rotationValue(owner, accessToken, refreshToken string, old *RefreshTokenData) string {
+	res := ""
+	if old != nil {
+		res = old.Resource
+	}
+	return owner + ":" + accessToken + ":" + refreshToken + ":" + res
+}
+
+// RotatedSuccessors is what a refresh token's rotation issued.
+type RotatedSuccessors struct {
+	Access  *AccessTokenData
+	Refresh *RefreshTokenData
+	// AuthorizedResource is the resource the rotated token was bound to, before
+	// the rotation narrowed it (or not).
+	AuthorizedResource string
+}
+
+// RotationSuccessors returns the successors a refresh token was rotated into,
+// while the rotation record is still kept (RotationRecordTTL), so that a client
+// whose reply was lost can fetch the same pair again with the token it still
+// holds. It returns nil when there is no such rotation, and also when the
+// successors can no longer be handed out: the grant was revoked, or the client
+// already moved on (the successor refresh token was itself rotated), or either
+// successor is gone. It never creates anything: a recovered rotation is the same
+// pair, not a second family.
+//
+// SECURITY: this is "refresh grace". Within RotationRecordTTL of a rotation,
+// whoever presents the already-rotated token gets the same successors. A replay
+// of a stolen, just-rotated token inside the window therefore succeeds where
+// strict one-time use would refuse it. The window is short, the pair is the
+// one the legitimate client was issued, the caller still has to satisfy the
+// client binding, a revoked grant gets nothing, and once the client uses the
+// successors the token yields nothing more.
+func (m *Manager) RotationSuccessors(ctx context.Context, rotatedRefreshToken string) (*RotatedSuccessors, error) {
+	rec, err := m.redis.Get(ctx, RotationPrefix+tokenHash(rotatedRefreshToken))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the rotation record: %w", err)
+	}
+	if rec == "" {
+		return nil, nil
+	}
+	parts := strings.SplitN(rec, ":", 4)
+	if len(parts) != 4 || parts[1] == "" || parts[2] == "" {
+		return nil, nil
+	}
+	rt, err := m.GetRefreshTokenData(ctx, parts[2])
+	if err != nil {
+		return nil, err
+	}
+	at, err := m.GetAccessTokenData(ctx, parts[1])
+	if err != nil {
+		return nil, err
+	}
+	if rt == nil || at == nil {
+		return nil, nil
+	}
+	revoked, err := m.IsFamilyRevoked(ctx, rt.FamilyID)
+	if err != nil {
+		return nil, err
+	}
+	if revoked {
+		return nil, nil
+	}
+	return &RotatedSuccessors{Access: at, Refresh: rt, AuthorizedResource: parts[3]}, nil
+}
+
+// MarkFamilyRevoked marks a grant revoked with a single command. It is the
+// fallback when RevokeToken keeps failing: the marker alone makes every path
+// refuse the grant (claims, publishes, extensions, validation), and the token
+// records it leaves behind are inert until they expire.
+func (m *Manager) MarkFamilyRevoked(ctx context.Context, familyID string) error {
+	if familyID == "" {
+		return errors.New("no family to mark revoked")
+	}
+	if err := m.redis.Set(ctx, RevokedFamilyPrefix+familyID, "1", RevokedFamilyTTL); err != nil {
+		return fmt.Errorf("failed to mark the grant revoked: %w", err)
+	}
+	return nil
 }

@@ -158,6 +158,11 @@ func TestRefreshEndpoint_TheLoserOfConcurrentRefreshesIsToldToRetry(t *testing.T
 	old, _ := sm.GetRefreshTokenData(context.Background(), refresh)
 	assert.Nil(t, old)
 
+	// The client moves on to the successors (until then the rotated token only
+	// hands back the pair it was already issued: the refresh grace), and the
+	// spent token is reported as such.
+	moved := audPostToken(t, h, refreshFormFor(next, victimClient))
+	require.Equal(t, http.StatusOK, moved.Code, moved.Body.String())
 	retry := audPostToken(t, h, refreshFormFor(refresh, victimClient))
 	assert.Equal(t, http.StatusBadRequest, retry.Code)
 	assert.Equal(t, ErrInvalidGrant, audDecode(t, retry)["error"], "the spent token is reported as such")

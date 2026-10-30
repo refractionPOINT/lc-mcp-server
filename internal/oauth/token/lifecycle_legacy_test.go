@@ -168,17 +168,21 @@ func TestLegacy_AnOldTokenRevokedAfterTheRotationEndsTheNewGrant(t *testing.T) {
 	}
 }
 
-// A rotated legacy token is gone like any other: it does not refresh twice.
+// A rotated legacy token is gone like any other: once the client has moved on
+// to the successors (the refresh grace only hands the pair back until then) it
+// does not refresh again.
 func TestLegacy_ARotatedTokenIsNotRefreshableTwice(t *testing.T) {
 	env := newLegacyEnv(t)
 	ctx := context.Background()
 	first, err := env.m.RefreshAccessToken(ctx, "legacy-rt", clientA, nil)
 	require.NoError(t, err)
-	_, err = env.m.RefreshAccessToken(ctx, "legacy-rt", clientA, nil)
-	assert.Error(t, err)
 	at, _ := env.sm.GetAccessTokenData(ctx, first.AccessToken)
 	require.NotNil(t, at)
 	assert.NotEmpty(t, at.FamilyID)
+	_, err = env.m.RefreshAccessToken(ctx, first.RefreshToken, clientA, nil)
+	require.NoError(t, err)
+	_, err = env.m.RefreshAccessToken(ctx, "legacy-rt", clientA, nil)
+	assert.Error(t, err)
 }
 
 // The family marker alone is enough to reject a token whose record is still
