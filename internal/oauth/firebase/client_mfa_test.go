@@ -150,19 +150,38 @@ func TestFinalizeMFASignIn_ErrorMapping(t *testing.T) {
 }
 
 func TestRefreshIDToken_DistinguishesDeadFromTransient(t *testing.T) {
+	fbBody := func(msg string) string {
+		b, _ := json.Marshal(map[string]any{"error": map[string]any{"code": 400, "message": msg}})
+		return string(b)
+	}
 	cases := []struct {
+		name   string
 		status int
+		body   string
 		dead   bool
 	}{
-		{http.StatusBadRequest, true}, // TOKEN_EXPIRED, USER_DISABLED, INVALID_REFRESH_TOKEN, ...
-		{http.StatusInternalServerError, false},
-		{http.StatusServiceUnavailable, false},
-		{http.StatusTooManyRequests, false},
+		{"token expired", http.StatusBadRequest, fbBody("TOKEN_EXPIRED"), true},
+		{"token expired with detail", http.StatusBadRequest, fbBody("TOKEN_EXPIRED : the credential is no longer valid"), true},
+		{"user disabled", http.StatusBadRequest, fbBody("USER_DISABLED"), true},
+		{"user not found", http.StatusBadRequest, fbBody("USER_NOT_FOUND"), true},
+		{"invalid refresh token", http.StatusBadRequest, fbBody("INVALID_REFRESH_TOKEN"), true},
+		{"api key not valid", http.StatusBadRequest, fbBody("API key not valid. Please pass a valid API key."), false},
+		{"invalid api key", http.StatusBadRequest, fbBody("INVALID_API_KEY"), false},
+		{"project mismatch", http.StatusBadRequest, fbBody("PROJECT_NUMBER_MISMATCH"), false},
+		{"invalid grant type", http.StatusBadRequest, fbBody("INVALID_GRANT_TYPE"), false},
+		{"missing refresh token", http.StatusBadRequest, fbBody("MISSING_REFRESH_TOKEN"), false},
+		{"unknown code", http.StatusBadRequest, fbBody("SOMETHING_NEW"), false},
+		{"400 that is not Firebase's format", http.StatusBadRequest, "<html>bad request</html>", false},
+		{"dead code on a 500 is not trusted", http.StatusInternalServerError, fbBody("TOKEN_EXPIRED"), false},
+		{"unavailable", http.StatusServiceUnavailable, fbBody("TOKEN_EXPIRED"), false},
+		{"rate limited", http.StatusTooManyRequests, fbBody("TOKEN_EXPIRED"), false},
 	}
 	for _, tc := range cases {
-		c := newTestClient(tc.status, `{"error":{"code":400,"message":"TOKEN_EXPIRED"}}`, nil)
-		_, _, err := c.RefreshIDToken(context.Background(), "rt")
-		require.Error(t, err)
-		assert.Equal(t, tc.dead, errors.Is(err, ErrRefreshTokenRejected), "status %d", tc.status)
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(tc.status, tc.body, nil)
+			_, _, err := c.RefreshIDToken(context.Background(), "rt")
+			require.Error(t, err)
+			assert.Equal(t, tc.dead, errors.Is(err, ErrRefreshTokenRejected))
+		})
 	}
 }

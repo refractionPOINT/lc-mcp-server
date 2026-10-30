@@ -187,9 +187,11 @@ const (
 	// through.
 	AttemptOverPrefix = "oauth:attempt_over:"
 	// RotationPrefix + sha256(refresh token) records the outcome of that token's
-	// rotation: the owner of the claim and the successors it published. A
-	// publish that runs twice (a lost reply, retried by the client library)
-	// finds it and answers like the first run.
+	// rotation: the owner of the claim, the successors it published and the
+	// resource the old token was bound to. A publish that runs twice (a lost
+	// reply, retried by the client library) finds it and answers like the first
+	// run, and a retry of the rotated token within RotationRecordTTL is answered
+	// with the same successors.
 	RotationPrefix = "oauth:rotation:"
 )
 
@@ -210,9 +212,12 @@ const (
 	// AttemptOverTTL is how long a finished attempt is remembered: longer than a
 	// packet can be delayed and retransmitted by TCP.
 	AttemptOverTTL = 15 * time.Minute
-	// RotationRecordTTL is how long a rotation's outcome is kept for a retried
-	// publish to find; it only has to outlast the client library's retries.
-	RotationRecordTTL = 5 * time.Minute
+	// RotationRecordTTL is how long a rotation's outcome is kept. It serves two
+	// readers: a publish repeated by the Redis client library after a lost reply
+	// (seconds), and the refresh grace window, in which the client that never
+	// got the reply of a committed rotation presents the same refresh token again
+	// and is handed the same successors (RotationSuccessors).
+	RotationRecordTTL = 2 * time.Minute
 )
 
 // Token validation result

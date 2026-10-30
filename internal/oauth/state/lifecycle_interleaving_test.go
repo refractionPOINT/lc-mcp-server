@@ -138,14 +138,14 @@ func (s *sim) publish(ctx context.Context) {
 	switch rec := s.get(RotationPrefix + h); {
 	case rec != "":
 		if !strings.HasPrefix(rec, a.owner+":") {
-			want = ErrClaimLost
+			want = ErrAlreadyRotated
 		}
 	case s.mr.Exists(RevokedTokenPrefix+h) || s.mr.Exists(RevokedFamilyPrefix+simFamily):
 		want = ErrTokenRevoked
+	case !s.mr.Exists(RefreshPrefix + a.token):
+		want = ErrTokenRevoked // gone and not rotated: the claim does not matter
 	case a.ended || s.get(RefreshClaimPrefix+h) != a.owner:
 		want = ErrClaimLost // an attempt that gave up is over, whatever its claim key holds
-	case !s.mr.Exists(RefreshPrefix + a.token):
-		want = ErrTokenRevoked
 	case s.mr.Exists(RefreshPrefix + next):
 		want = ErrAlreadyExists
 	}

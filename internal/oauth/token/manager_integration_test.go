@@ -268,7 +268,11 @@ func TestRefreshAccessToken_TokenRotation(t *testing.T) {
 	assert.NoError(t, err1)
 	assert.NotNil(t, refreshed1)
 
-	// Second refresh with same token should fail (token rotated)
+	// The client moves on to the successors (within the refresh grace window the
+	// rotated token only hands back the pair already issued, see
+	// TestRefreshGrace_*), so the rotated token yields nothing any more.
+	_, err = manager.RefreshAccessToken(ctx, refreshed1.RefreshToken, "", nil)
+	require.NoError(t, err)
 	refreshed2, err2 := manager.RefreshAccessToken(ctx, initial.RefreshToken, "", nil)
 	assert.Error(t, err2, "Refresh token should be invalid after first use (rotation)")
 	assert.Nil(t, refreshed2)
