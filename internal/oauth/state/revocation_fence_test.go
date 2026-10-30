@@ -86,6 +86,35 @@ func TestFenceFamily_ReplacesTheClaimOfARefreshInFlight(t *testing.T) {
 	})
 }
 
+// Review repro: the attempt a fence displaced must stay over after the fence
+// ends, even if it never got to give its claim up (its cleanup did not run). A
+// copy of its claim command that arrives late (a TCP retransmission, a client
+// retry) must not take the token back, or its publish would succeed.
+func TestFenceFamily_TheDisplacedAttemptStaysOverAfterTheFenceEnds(t *testing.T) {
+	ctx := context.Background()
+	m, mr := setupTestManager(t)
+	issueGrant(t, m, "fam", "at", "rt")
+
+	claim, err := m.ClaimRefreshToken(ctx, "rt")
+	require.NoError(t, err)
+	fenced, err := m.FenceFamily(ctx, "fam")
+	require.NoError(t, err)
+	require.True(t, fenced)
+
+	mr.FastForward(RefreshClaimTTL + time.Second)
+	require.False(t, exists(mr, RefreshClaimPrefix+tokenHash("rt")), "the fence has ended")
+
+	_, err = m.claimAs(ctx, "rt", claim.Owner)
+	assert.ErrorIs(t, err, ErrRefreshInFlight, "a late copy of the displaced attempt's claim is refused")
+	err = m.PublishRotation(ctx, claim, newAccess("at-1", "fam"), newRefresh("rt-1", "at-1", "fam"))
+	assert.Error(t, err)
+	assert.False(t, exists(mr, RefreshPrefix+"rt-1"), "the displaced attempt publishes nothing")
+
+	retry, err := m.ClaimRefreshToken(ctx, "rt")
+	require.NoError(t, err, "a new attempt can refresh the intact token")
+	require.NoError(t, m.PublishRotation(ctx, retry, newAccess("at-2", "fam"), newRefresh("rt-2", "at-2", "fam")))
+}
+
 func mustGet(t *testing.T, mr *miniredis.Miniredis, key string) string {
 	t.Helper()
 	v, err := mr.Get(key)

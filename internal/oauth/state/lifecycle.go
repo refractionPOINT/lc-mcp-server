@@ -67,6 +67,7 @@ local P_TOKEN = %q
 local P_CLAIM = %q
 local P_FAMILY = %q
 local P_FAMILY_REVOKED = %q
+local P_ATTEMPT_OVER = %q
 
 -- decode returns the table a JSON record holds, or nil when it is not JSON.
 local function decode(rec)
@@ -134,7 +135,7 @@ local function kill_family(fam, marker_ttl)
 	redis.call('DEL', fk)
 	redis.call('SET', P_FAMILY_REVOKED .. fam, '1', 'PX', marker_ttl)
 end
-`, RefreshPrefix, TokenPrefix, RefreshClaimPrefix, FamilyPrefix, RevokedFamilyPrefix)
+`, RefreshPrefix, TokenPrefix, RefreshClaimPrefix, FamilyPrefix, RevokedFamilyPrefix, AttemptOverPrefix)
 
 // Results of the claim script.
 const (
@@ -420,14 +421,16 @@ const revocationFence = "revocation-fence"
 // owns it, with the lifetime of a claim.
 //
 //	KEYS: 1 family marker, 2 family record
-//	ARGV: 1 fence value, 2 claim ttl (ms)
+//	ARGV: 1 fence value, 2 claim ttl (ms), 3 attempt-over ttl (ms)
 //
 // The token is the one the family record names, found here and not by the
 // caller: a token the caller read earlier may have been rotated away since, and
 // then holding it would hold nothing. A refresh that was running on the token
 // owned its claim; once the fence replaced it, its publish is refused (the claim
 // is no longer its own), so it publishes nothing even if the revocation that
-// follows fails.
+// follows fails. The attempt it displaced is also marked over, as if it had
+// given its claim up: otherwise a late copy of that attempt's claim command could
+// take the token back once the fence ended, and its publish would then succeed.
 //
 // A revoked grant has nothing to hold (-1), and neither has a grant whose record
 // names no refresh token (0). Running it again writes the same value and renews
@@ -443,7 +446,12 @@ local rth = redis.call('HGET', KEYS[2], 'rth')
 if not rth or rth == '' then
 	return 0
 end
-redis.call('SET', P_CLAIM .. rth, ARGV[1], 'PX', ARGV[2])
+local ck = P_CLAIM .. rth
+local owner = redis.call('GET', ck)
+if owner and owner ~= ARGV[1] then
+	redis.call('SET', P_ATTEMPT_OVER .. owner, '1', 'PX', ARGV[3])
+end
+redis.call('SET', ck, ARGV[1], 'PX', ARGV[2])
 return 1
 `)
 
@@ -916,7 +924,7 @@ func (m *Manager) FenceFamily(ctx context.Context, familyID string) (bool, error
 		return false, errors.New("no family to fence")
 	}
 	keys := []string{RevokedFamilyPrefix + familyID, FamilyPrefix + familyID}
-	n, err := scriptInt(m.redis.Run(ctx, fenceFamilyScript, keys, revocationFence, ms(RefreshClaimTTL)))
+	n, err := scriptInt(m.redis.Run(ctx, fenceFamilyScript, keys, revocationFence, ms(RefreshClaimTTL), ms(AttemptOverTTL)))
 	if err != nil {
 		return false, fmt.Errorf("failed to fence the grant: %w", err)
 	}
