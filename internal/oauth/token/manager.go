@@ -98,7 +98,8 @@ var ErrClientMismatch = errors.New("refresh token was issued to a different clie
 // request right now, or that is held by a revocation that could not be confirmed
 // (until its claim runs out). That request either consumes the token or gives it
 // up, so a retry a moment later gets a definite answer. The token endpoint
-// answers it like any refused refresh token.
+// answers it with a retryable 503 server_error, not invalid_grant: it is not a
+// dead refresh (see IsDeadRefresh), so the client keeps its token and tries again.
 var ErrRefreshInFlight = errors.New("refresh token is being refreshed by another request")
 
 // ErrRefreshRevoked marks a refresh whose token (or grant) was revoked, before

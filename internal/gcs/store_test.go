@@ -116,9 +116,13 @@ func largeData() map[string]interface{} {
 
 // ---- name generation ----
 
+// A collision in 128 bits of crypto/rand output is not something a test can
+// meaningfully detect; this guards against a regression to a weak or shared
+// source (a constant, a per-goroutine seed, a counter), which repeats within a
+// few thousand draws.
 func TestRandomID_UniqueUnderConcurrency(t *testing.T) {
 	const goroutines = 16
-	const perG = 1_000_000 / goroutines
+	const perG = 10_000 / goroutines
 
 	results := make([][]string, goroutines)
 	var wg sync.WaitGroup
