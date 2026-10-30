@@ -15,10 +15,11 @@ import (
 
 // Random interleavings of everything that can happen to one grant: several
 // refresh attempts claiming, publishing and giving up, revocations by any token
-// the grant ever had (with or without the caller knowing the grant), claims
-// running out, tokens reaching the end of their lifetime, and late copies of any
-// earlier command (what the Redis client does with a command whose reply was
-// lost). After every step the grant must satisfy the lifecycle's invariants. The
+// the grant ever had (with or without the caller knowing the grant), fences of
+// the grant's current refresh token that take its claim from whoever owns it,
+// claims running out, tokens reaching the end of their lifetime, and late copies
+// of any earlier command (what the Redis client does with a command whose reply
+// was lost). After every step the grant must satisfy the lifecycle's invariants. The
 // walks are seeded, so a failure names the seed that reproduces it.
 
 type simAttempt struct {
@@ -82,18 +83,20 @@ func (s *sim) currentRefresh() string {
 
 func (s *sim) step(ctx context.Context) {
 	switch op := s.rng.Intn(100); {
-	case op < 20:
+	case op < 19:
 		s.claim(ctx)
-	case op < 42:
+	case op < 40:
 		s.publish(ctx)
-	case op < 52:
+	case op < 49:
 		s.release(ctx)
-	case op < 66:
+	case op < 62:
 		s.revoke(ctx)
-	case op < 71:
+	case op < 69:
+		s.fence(ctx)
+	case op < 74:
 		s.logf("claims run out")
 		s.mr.FastForward(RefreshClaimTTL + time.Second)
-	case op < 80:
+	case op < 82:
 		s.logf("two seconds pass")
 		s.mr.FastForward(2 * time.Second)
 	default:
@@ -223,6 +226,36 @@ func (s *sim) revoke(ctx context.Context) {
 		s.revoked = true
 	}
 	s.replays = append(s.replays, func() { s.m.RevokeToken(ctx, tok) })
+}
+
+// fence holds the grant's current refresh token for a revocation. It must do so
+// exactly when there is something to hold, and then the claim of that token is the
+// fence, whoever owned it: the attempts that had claimed it can no longer publish
+// (publish checks that against the claim key, so every publish that follows is
+// held to it), and nobody can claim it until the claims run out.
+func (s *sim) fence(ctx context.Context) {
+	marked := s.mr.Exists(RevokedFamilyPrefix + simFamily)
+	rth := ""
+	if s.mr.Exists(FamilyPrefix + simFamily) {
+		rth = s.mr.HGet(FamilyPrefix+simFamily, "rth")
+	}
+	fenced, err := s.m.FenceFamily(ctx, simFamily)
+	s.logf("fence -> %v", fenced)
+	require.NoError(s.t, err)
+
+	if marked || rth == "" {
+		if fenced {
+			s.fatalf("a fence was placed on a grant with nothing to hold (revoked %v, current token hash %q)", marked, rth)
+		}
+	} else {
+		if !fenced {
+			s.fatalf("no fence was placed although the grant's current refresh token is %s", rth)
+		}
+		if got := s.get(RefreshClaimPrefix + rth); got != revocationFence {
+			s.fatalf("the claim of the current refresh token holds %q, not the fence", got)
+		}
+	}
+	s.replays = append(s.replays, func() { s.m.FenceFamily(ctx, simFamily) })
 }
 
 // check is the lifecycle's invariants.

@@ -114,9 +114,10 @@ var ErrRefreshSuperseded = errors.New("refresh was superseded by another request
 
 // ErrRefreshClaimLost marks a refresh that outlived its claim on the token
 // (it took longer than the claim lasts, or another refresh took the claim over
-// and has not rotated the token). Nobody rotated or revoked the token, so
-// nothing is wrong with it: the same refresh token can be tried again. It is a
-// retryable failure, not a dead grant.
+// and has not rotated the token, or a revocation that may not complete fenced the
+// token). Nobody rotated or revoked the token, so nothing is wrong with it: the
+// same refresh token can be tried again (and, while a fence holds it, is told it
+// is in flight until the fence ends). It is a retryable failure, not a dead grant.
 var ErrRefreshClaimLost = errors.New("refresh took longer than its claim on the refresh token lasts; retry")
 
 // ErrRefreshTokenUnknown means the refresh token doesn't exist (never issued,
@@ -687,14 +688,14 @@ var mismatchRevokeBackoff = 50 * time.Millisecond
 //     which blocks every refresh of the token until it expires on its own
 //     (RefreshClaimTTL); the next presentation by anyone repeats this. On the
 //     live path the claim is the token's own; for a rotated token presented
-//     during the grace window it is the claim on the current successor (see
+//     during the grace window it is the fence on the current successor (see
 //     revokeAfterReplayMismatch).
 //
 // Why not a background retry or a separate pending marker: another pod could not
 // see an in-process retry, and a marker written with a command that fails the
 // same way as the revocation protects nothing the family marker does not. The
-// claim, by contrast, is taken before anything fails. This design adds no state:
-// the confirmation is the family marker itself.
+// claim (or the fence), by contrast, is taken before anything fails. This design
+// adds no state: the confirmation is the family marker itself.
 func (m *Manager) revokeAfterMismatch(ctx context.Context, token, familyID string) error {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -733,32 +734,52 @@ func (m *Manager) revokeAfterMismatch(ctx context.Context, token, familyID strin
 // On the live path the refresh claim on the presented token is held before the
 // client is compared, and kept when the revocation cannot be confirmed, so that
 // nobody refreshes meanwhile. Nothing is held here, so the same protection is
-// built: the claim on the successor is taken before the revocation is attempted
-// and kept when it cannot be confirmed. For the claim's lifetime a refresh of the
-// successor gets ErrRefreshInFlight, and so does anybody presenting the rotated
-// token with the right client id (recoverRotation), who might be a thief trying
-// client ids. A confirmed revocation deletes the claim along with the successor.
+// built before the revocation is attempted: the successor is fenced
+// (state.FenceFamily), which sets its claim to a revocation fence whoever owns it.
+// The fence is kept when the revocation cannot be confirmed. For its lifetime:
+//   - a refresh of the successor gets ErrRefreshInFlight, and so does anybody
+//     presenting the rotated token with the right client id (recoverRotation), who
+//     might be a thief trying client ids;
+//   - a refresh already running on the successor cannot publish, because its claim
+//     was replaced. It gets ErrRefreshClaimLost, which is retryable like any
+//     refresh whose claim ran out: the token is intact, so the legitimate user is
+//     not signed out by a revocation that did not happen, and the retry meets the
+//     fence until it ends. If the revocation does land, that refresh is
+//     ErrRefreshRevoked, like any refresh of a revoked grant.
 //
-// If the claim cannot be taken (the successor is being refreshed already, it is
-// gone, or Redis fails) the revocation is attempted anyway: it is still what the
-// mismatch calls for, and the claim is only the fallback for when it fails.
+// A confirmed revocation deletes the fence along with the successor; a grant that
+// was only marked revoked leaves it to end on its own (every path refuses a revoked
+// grant before looking at a claim).
+//
+// A claim would not do here. It is only granted to a token nobody holds, so it
+// cannot hold a token whose refresh is in flight, and the helper that takes it
+// gives it up when its reply is lost, although it may be in place. The fence has
+// neither flaw: it replaces the claim whoever owns it, and it is never released
+// here, only repeated, which is harmless. If the fence cannot be placed (Redis
+// fails) the revocation is attempted anyway: it is still what the mismatch calls
+// for, and the fence is only the fallback for when it fails.
+//
+// Residual: if the fence, every revocation attempt and the family marker all fail,
+// nothing holds the grant and a refresh already running on it can publish. Nothing
+// can be guaranteed when no protective write lands. The fence goes first because
+// that is when Redis is the most likely to still be answering, and the next
+// presentation by the wrong client repeats all of it.
 func (m *Manager) revokeAfterReplayMismatch(ctx context.Context, rotatedToken string, rot *state.RotatedSuccessors) error {
-	claim, err := m.stateManager.ClaimRefreshToken(ctx, rot.Refresh.RefreshToken)
-	if err != nil {
-		m.logger.Warn("Could not claim the successor refresh token before revoking after a client mismatch; revoking without the claim", "error", err)
-		claim = nil
+	familyID := rot.Refresh.FamilyID
+
+	// The fence outlives a cancelled request, like the revocation that follows.
+	fenceCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	switch fenced, err := m.stateManager.FenceFamily(fenceCtx, familyID); {
+	case err != nil:
+		m.logger.Warn("Could not confirm the fence on the successor refresh token before revoking after a client mismatch; revoking anyway", "error", err)
+	case !fenced:
+		m.logger.Debug("Nothing to fence before revoking after a client mismatch: the grant has no current refresh token or is revoked already")
 	}
 
-	if err := m.revokeAfterMismatch(ctx, rotatedToken, rot.Refresh.FamilyID); err != nil {
-		// Unconfirmed: the claim stays, nobody refreshes the successor meanwhile.
-		return err
-	}
-	if claim != nil {
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		m.stateManager.ReleaseRefreshClaim(cleanup, claim)
-	}
-	return nil
+	// If the revocation cannot be confirmed, its error comes back and the fence
+	// stays: nobody refreshes the successor meanwhile.
+	return m.revokeAfterMismatch(ctx, rotatedToken, familyID)
 }
 
 // recoverRotation answers a presentation of a refresh token that no longer
@@ -776,8 +797,8 @@ func (m *Manager) revokeAfterReplayMismatch(ctx context.Context, rotatedToken st
 // token (a different client_id revokes the grant, with the same protection when
 // the revocation cannot be confirmed), and the resource requested must be the one
 // the successors were issued for. While a refresh of the successors is in flight,
-// or a revocation that could not be confirmed holds them, nothing is handed out
-// (ErrRefreshInFlight).
+// or a revocation that could not be confirmed holds them (its fence), nothing is
+// handed out (ErrRefreshInFlight).
 //
 // SECURITY (refresh grace): the rotated token is not restored, but for this
 // short window a replay of it by a presenter that satisfies the client binding

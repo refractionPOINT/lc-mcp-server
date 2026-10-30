@@ -26,7 +26,9 @@ import (
 //	oauth:revoked:fam:<id>        set when the grant is revoked
 //	oauth:revoked:tok:<sha256>    set when a token is revoked
 //	oauth:refresh_claim:<sha256>  the refresh in flight on a refresh token,
-//	                              valued with the id of the attempt that owns it
+//	                              valued with the id of the attempt that owns it,
+//	                              or with the revocation fence while a revocation
+//	                              holds the token (see FenceFamily)
 //	oauth:attempt_over:<id>       set when an attempt gives its claim up
 //	oauth:rotation:<sha256>       the outcome of a refresh token's rotation: the
 //	                              attempt, the successors, the grant and the
@@ -42,6 +44,10 @@ import (
 //     attempt that still owns the claim, and only if nothing was revoked
 //   - revoke: mark the grant, tombstone the token and delete the grant's
 //     current tokens and claim
+//   - fence: set the claim of the grant's current refresh token to the
+//     revocation fence, whoever owns it, so that a revocation that may not
+//     complete leaves the token held (nothing starts a refresh on it, and a
+//     refresh running on it cannot publish)
 //
 // The Redis client retries a command whose reply was lost, so a script can run
 // twice with the same arguments. claim and publish recognise the repeat (same
@@ -395,6 +401,52 @@ kill_family(ARGV[1], ARGV[2])
 return 1
 `)
 
+// Results of the fence script.
+const (
+	fenceDone    = 1
+	fenceNothing = 0
+	fenceRevoked = -1
+)
+
+// revocationFence is what a fence writes as the owner of a claim. It is not an
+// attempt id (those are hex), so no attempt owns it, matches it, or can release
+// it: the publish of an attempt that held the claim before fails, a claim of the
+// token is refused, and neither a release nor a late copy of an attempt's command
+// touches it.
+const revocationFence = "revocation-fence"
+
+// fenceFamilyScript holds the current refresh token of a grant for a revocation:
+// it sets the token's claim to the revocation fence, replacing whatever attempt
+// owns it, with the lifetime of a claim.
+//
+//	KEYS: 1 family marker, 2 family record
+//	ARGV: 1 fence value, 2 claim ttl (ms)
+//
+// The token is the one the family record names, found here and not by the
+// caller: a token the caller read earlier may have been rotated away since, and
+// then holding it would hold nothing. A refresh that was running on the token
+// owned its claim; once the fence replaced it, its publish is refused (the claim
+// is no longer its own), so it publishes nothing even if the revocation that
+// follows fails.
+//
+// A revoked grant has nothing to hold (-1), and neither has a grant whose record
+// names no refresh token (0). Running it again writes the same value and renews
+// the lifetime, so a copy of the command is harmless.
+var fenceFamilyScript = redis.NewScript(luaPrelude + `
+if redis.call('EXISTS', KEYS[1]) == 1 then
+	return -1
+end
+if redis.call('TYPE', KEYS[2]).ok ~= 'hash' then
+	return 0
+end
+local rth = redis.call('HGET', KEYS[2], 'rth')
+if not rth or rth == '' then
+	return 0
+end
+redis.call('SET', P_CLAIM .. rth, ARGV[1], 'PX', ARGV[2])
+return 1
+`)
+
 // Results of the access token update script.
 const (
 	updateDone    = 1
@@ -647,7 +699,8 @@ func (m *Manager) claimAs(ctx context.Context, refreshToken, owner string) (*Ref
 // attempt whose claim expired, was taken over, or was cleared by a revocation
 // cannot disturb whoever holds it now. The refresh record is untouched, so the
 // token stays usable. The attempt cannot claim again afterwards, even with a
-// copy of its own claim command that arrives late.
+// copy of its own claim command that arrives late. A claim that a revocation
+// fenced (FenceFamily) is never an attempt's id, so it is not released either.
 func (m *Manager) ReleaseRefreshClaim(ctx context.Context, claim *RefreshClaim) {
 	m.releaseClaim(ctx, tokenHash(claim.Token), claim.Owner)
 }
@@ -837,6 +890,45 @@ func (m *Manager) RevokeFamily(ctx context.Context, familyID string) error {
 	return nil
 }
 
+// FenceFamily holds the grant's current refresh token for a revocation that may
+// not complete. It sets the token's claim to the revocation fence for
+// RefreshClaimTTL, replacing the claim of any refresh that is running on the token:
+// from then on no refresh can claim the token, and the one that was running can no
+// longer publish (its publish needs the claim to be its own), which is why the
+// fence is placed before the revocation is attempted and not after it failed. The
+// refresh that lost its claim is told it may retry (the token is intact); its
+// retry finds the token in flight until the fence ends on its own, and is refused
+// as dead if the grant is revoked in the meantime.
+//
+// A revocation that is confirmed deletes the fence along with the grant's tokens
+// (RevokeToken, RevokeTokenInFamily and RevokeFamily delete the claim of the
+// current refresh token). A grant that is only marked revoked (MarkFamilyRevoked)
+// keeps it until it ends: every path refuses a revoked grant before it looks at a
+// claim, so it holds nothing back that the marker does not.
+//
+// It reports whether a fence was placed. False with a nil error means there was
+// nothing to hold: the grant is revoked already, or its record names no refresh
+// token. An error says nothing about whether the fence is in place (the command may
+// have run and its reply been lost), so the caller must not try to undo it: it is
+// never released, only repeated, which is harmless (it writes the same value).
+func (m *Manager) FenceFamily(ctx context.Context, familyID string) (bool, error) {
+	if familyID == "" {
+		return false, errors.New("no family to fence")
+	}
+	keys := []string{RevokedFamilyPrefix + familyID, FamilyPrefix + familyID}
+	n, err := scriptInt(m.redis.Run(ctx, fenceFamilyScript, keys, revocationFence, ms(RefreshClaimTTL)))
+	if err != nil {
+		return false, fmt.Errorf("failed to fence the grant: %w", err)
+	}
+	switch n {
+	case fenceDone:
+		return true, nil
+	case fenceNothing, fenceRevoked:
+		return false, nil
+	}
+	return false, fmt.Errorf("unexpected fence result %d", n)
+}
+
 // RevokeAccessToken revokes the grant of an access token; see RevokeToken.
 func (m *Manager) RevokeAccessToken(ctx context.Context, accessToken string) error {
 	_, err := m.RevokeToken(ctx, accessToken)
@@ -875,8 +967,8 @@ type RotatedSuccessors struct {
 	AuthorizedResource string
 	// SuccessorClaimed is set while a refresh of the successor refresh token holds
 	// its claim: another request is rotating it, or a revocation that could not be
-	// completed keeps it (see the client mismatch handling of the token manager).
-	// The successors are then not handed out.
+	// completed keeps it fenced (FenceFamily; see the client mismatch handling of
+	// the token manager). The successors are then not handed out.
 	SuccessorClaimed bool
 }
 

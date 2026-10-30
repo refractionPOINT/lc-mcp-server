@@ -179,9 +179,11 @@ func TestGraceMismatch_AFailingRevocationFallsBackToTheFamilyMarker(t *testing.T
 	assert.True(t, IsDeadRefresh(err))
 }
 
-// The claim on the successor is a fallback for when the revocation fails: if the
-// successor is being refreshed already, so the claim cannot be taken, the
-// mismatch still revokes the grant, and the refresh in flight publishes nothing.
+// The fence on the successor is a fallback for when the revocation fails: if the
+// successor is being refreshed already, the fence takes the claim from that
+// refresh, and the mismatch still revokes the grant, so the refresh in flight
+// publishes nothing and is told the grant is revoked. (When the revocation fails
+// too, the refresh in flight is only fenced out: see revocation_fence_test.go.)
 func TestGraceMismatch_ARefreshOfTheSuccessorInFlightIsRevokedToo(t *testing.T) {
 	ctx := context.Background()
 	stateManager, mr := setupTestStateManager(t)

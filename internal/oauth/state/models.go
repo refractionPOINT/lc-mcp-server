@@ -167,7 +167,9 @@ const (
 	RevokedFamilyPrefix = "oauth:revoked:fam:"
 	// RefreshClaimPrefix + sha256(refresh token) holds the claim of the refresh
 	// in flight on that token: the value is the random id of the attempt that
-	// owns it, and the key expires on its own (RefreshClaimTTL).
+	// owns it (or the revocation fence, while a revocation that may not complete
+	// holds the token: see FenceFamily), and the key expires on its own
+	// (RefreshClaimTTL).
 	RefreshClaimPrefix = "oauth:refresh_claim:"
 	// FamilyPrefix + family id is the record of a grant, a Redis hash with the
 	// grant's current refresh token ("rt"), that token's sha256 ("rth", which
