@@ -41,7 +41,9 @@ func NewSTDIOServer(cfg *config.Config, logger *slog.Logger) (*STDIOServer, erro
 			"bucket", gcsConfig.BucketName,
 			"threshold", gcsConfig.TokenThreshold)
 	} else {
-		logger.Info("GCS disabled, large results will be returned inline")
+		// The single local user can read this machine's temp directory, so large
+		// results go there (see gcs.Manager.UploadToGCS).
+		logger.Info("GCS disabled (GCS_BUCKET_NAME not set), large results will be saved to a temporary file on this machine")
 	}
 
 	// Initialize metrics manager for GCP Monitoring

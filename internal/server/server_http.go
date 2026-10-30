@@ -39,7 +39,9 @@ func NewHTTPServer(cfg *config.Config, logger *slog.Logger) (*HTTPServerWrapper,
 			"bucket", gcsConfig.BucketName,
 			"threshold", gcsConfig.TokenThreshold)
 	} else {
-		logger.Info("GCS disabled, large results will be returned inline")
+		// Requests to this shared server never get a server-local temp file: the
+		// remote tenant could not read it (see gcs.Manager.UploadToGCS).
+		logger.Info("GCS disabled (GCS_BUCKET_NAME not set), large results will be returned inline")
 	}
 
 	// Initialize metrics manager for GCP Monitoring

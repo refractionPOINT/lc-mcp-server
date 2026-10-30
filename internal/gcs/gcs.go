@@ -14,6 +14,8 @@ import (
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/option"
+
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 )
 
 // Config holds GCS configuration
@@ -111,6 +113,11 @@ func EstimateTokenCount(data interface{}) (int, error) {
 	return len(jsonBytes) / 4, nil
 }
 
+// errNoLargeResultStorage is returned when a large result has nowhere to go that
+// the caller can read: GCS is not configured and the request does not run on the
+// caller's own machine. The caller returns the result inline instead.
+var errNoLargeResultStorage = errors.New("no storage is available for large results on this request")
+
 // UploadResult represents the result of an upload operation
 type UploadResult struct {
 	URL      string
@@ -152,10 +159,17 @@ func (m *Manager) uploadToTempFile(data interface{}, toolName string) (*UploadRe
 	}, nil
 }
 
-// UploadToGCS uploads data to GCS or saves to temp file and returns URL/path
+// UploadToGCS uploads data to GCS and returns a signed URL. With GCS disabled it
+// saves to a temp file and returns its path, but only for a request that runs on
+// the caller's own machine (the stdio server, see auth.WithLocalFilesystemAccess):
+// that is the one caller who can read a path on this host. A remote tenant of the
+// shared HTTP server cannot, so for them it returns errNoLargeResultStorage (and
+// writes nothing) and the result goes back inline.
 func (m *Manager) UploadToGCS(ctx context.Context, data interface{}, toolName string) (*UploadResult, error) {
-	// If GCS not enabled, use temp file
 	if !m.config.Enabled {
+		if !auth.HasLocalFilesystemAccess(ctx) {
+			return nil, errNoLargeResultStorage
+		}
 		return m.uploadToTempFile(data, toolName)
 	}
 
@@ -271,9 +285,15 @@ func (m *Manager) WrapResult(ctx context.Context, data interface{}, toolName str
 			// Do not fall back to a server-local temp file: the caller is a remote
 			// tenant who cannot read it. Report the failure so the caller returns
 			// the original result inline.
-			slog.Warn("Failed to upload to GCS, returning result inline",
-				"tool", toolName,
-				"error", err)
+			if errors.Is(err, errNoLargeResultStorage) {
+				slog.Info("No storage for large results on this request, returning result inline",
+					"tool", toolName,
+					"tokens", tokenCount)
+			} else {
+				slog.Warn("Failed to upload to GCS, returning result inline",
+					"tool", toolName,
+					"error", err)
+			}
 			return nil, fmt.Errorf("failed to upload large result: %w", err)
 		}
 
