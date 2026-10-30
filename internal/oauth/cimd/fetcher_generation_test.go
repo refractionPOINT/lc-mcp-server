@@ -3,6 +3,7 @@ package cimd
 import (
 	"context"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,7 +21,11 @@ type heldServer struct {
 	release chan struct{}
 	n       atomic.Int64
 	next    func(w http.ResponseWriter, r *http.Request, self string)
+	once    sync.Once
 }
+
+// unblock releases the held request; safe to call more than once.
+func (h *heldServer) unblock() { h.once.Do(func() { close(h.release) }) }
 
 func newHeldServer(next func(w http.ResponseWriter, r *http.Request, self string)) *heldServer {
 	return &heldServer{arrived: make(chan struct{}), release: make(chan struct{}), next: next}
@@ -51,6 +56,10 @@ func secondReplica(env *testEnv) *Fetcher {
 // request reached the server.
 func startSlow(t *testing.T, f *Fetcher, h *heldServer, id string) <-chan error {
 	t.Helper()
+	// If the test fails before it releases the held request, unblock it at
+	// cleanup (registered after newTestEnv's srv.Close, so it runs first),
+	// or srv.Close would wait on that handler forever and hide the failure.
+	t.Cleanup(h.unblock)
 	done := make(chan error, 1)
 	go func() {
 		_, err := f.Resolve(context.Background(), id)
@@ -79,7 +88,7 @@ func TestGeneration_SlowReplicaCannotRepublishAWithdrawnDocument(t *testing.T) {
 	_, err := replicaB.Resolve(context.Background(), id)
 	require.Equal(t, KindFetch, kindOf(t, err), "replica B sees the 410")
 
-	close(h.release)
+	h.unblock()
 	require.NoError(t, <-slow, "the caller that fetched still gets what it fetched")
 
 	assert.False(t, env.hasDoc(id), "the withdrawn document must not be republished")
@@ -110,7 +119,7 @@ func TestGeneration_SlowReplicaCannotOverwriteANewerDocument(t *testing.T) {
 	require.False(t, doc.HasRedirectURI(oldRedirectURI))
 	require.True(t, env.hasDoc(id))
 
-	close(h.release)
+	h.unblock()
 	require.NoError(t, <-slow)
 
 	cached, ok := env.fetcher.cachedDoc(context.Background(), cacheKey(id))
@@ -131,7 +140,7 @@ func TestGeneration_NoStoreSlowReplicaCannotRepublish(t *testing.T) {
 	slow := startSlow(t, env.fetcher, h, id)
 	_, err := replicaB.Resolve(context.Background(), id)
 	require.NoError(t, err)
-	close(h.release)
+	h.unblock()
 	require.NoError(t, <-slow)
 
 	assert.False(t, env.hasDoc(id), "the older document must not be cached after a no-store answer")
