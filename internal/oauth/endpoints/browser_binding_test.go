@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"context"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -469,4 +470,81 @@ func TestCallback_UnsupportedMFAFromAnotherBrowserIsRefusedToo(t *testing.T) {
 	s := startSignIn(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier))
 	assertRefused(t, callbackIn(h, s.fb))
 	assert.Empty(t, storedTxs(t, sm, mr))
+}
+
+// ===== MFA steps fail closed when the transaction is gone =====
+
+// expireTransactions removes every OAuth transaction, as their TTL would.
+func expireTransactions(t *testing.T, sm *state.Manager, mr *miniredis.Miniredis) {
+	t.Helper()
+	for txID := range storedTxs(t, sm, mr) {
+		_, err := sm.ConsumeOAuthState(context.Background(), txID)
+		require.NoError(t, err)
+	}
+	require.Empty(t, storedTxs(t, sm, mr))
+}
+
+// With the transaction expired there is no browser to compare the request to,
+// so the MFA challenge shows nothing about the account to anyone, with or
+// without a cookie, and the MFA session is dropped.
+func TestMFA_ChallengeAfterTheTransactionExpiredShowsNoIdentity(t *testing.T) {
+	for name, withCookie := range map[string]bool{"no cookie": false, "the owner's cookie": true} {
+		t.Run(name, func(t *testing.T) {
+			h, sm, mockFB, mr := testHandlers(t)
+			tmpl, err := template.ParseGlob("../../../templates/*.html")
+			require.NoError(t, err)
+			h.templates = tmpl
+			realisticFirebase(mockFB)
+			withMFA(mockFB)
+			owner := startSignIn(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier))
+			session := mfaSessionOf(t, callbackFor(h, owner))
+			expireTransactions(t, sm, mr)
+
+			var cookies []*http.Cookie
+			if withCookie {
+				cookies = owner.cookies
+			}
+			w := mfaChallengeIn(h, session, cookies...)
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.NotContains(t, w.Body.String(), "user@example.com", "the account's email is not shown")
+			assert.NotContains(t, w.Body.String(), `name="code"`, "no challenge form")
+			assert.Contains(t, w.Body.String(), "start the sign-in again")
+			got, _ := sm.GetMFASession(context.Background(), session)
+			assert.Nil(t, got, "the MFA session is cleaned up")
+		})
+	}
+}
+
+func TestMFA_ChallengeWithoutAnMFASessionShowsNoChallenge(t *testing.T) {
+	h, _, _, _ := testHandlers(t)
+	w := mfaChallengeIn(h, "no-such-session")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestMFA_VerifyAfterTheTransactionExpiredDoesNothing(t *testing.T) {
+	for name, withCookie := range map[string]bool{"no cookie": false, "the owner's cookie": true} {
+		t.Run(name, func(t *testing.T) {
+			h, sm, mockFB, mr := testHandlers(t)
+			realisticFirebase(mockFB)
+			finalized := withMFA(mockFB)
+			owner := startSignIn(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier))
+			session := mfaSessionOf(t, callbackFor(h, owner))
+			expireTransactions(t, sm, mr)
+
+			var cookies []*http.Cookie
+			if withCookie {
+				cookies = owner.cookies
+			}
+			w := mfaVerifyIn(h, session, cookies...)
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.Equal(t, "invalid_request", audDecode(t, w)["error"])
+			assert.NotContains(t, w.Body.String(), "redirect_url")
+			assert.Zero(t, finalized.Load(), "the provider is never contacted")
+			attempts, _ := sm.GetMFAAttemptCount(context.Background(), session)
+			assert.Zero(t, attempts, "no attempt is counted")
+			got, _ := sm.GetMFASession(context.Background(), session)
+			assert.Nil(t, got, "the MFA session is cleaned up")
+			assert.Zero(t, issuedCodes(mr))
+		})
+	}
 }
