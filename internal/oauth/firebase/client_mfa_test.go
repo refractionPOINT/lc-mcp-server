@@ -148,3 +148,21 @@ func TestFinalizeMFASignIn_ErrorMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestRefreshIDToken_DistinguishesDeadFromTransient(t *testing.T) {
+	cases := []struct {
+		status int
+		dead   bool
+	}{
+		{http.StatusBadRequest, true}, // TOKEN_EXPIRED, USER_DISABLED, INVALID_REFRESH_TOKEN, ...
+		{http.StatusInternalServerError, false},
+		{http.StatusServiceUnavailable, false},
+		{http.StatusTooManyRequests, false},
+	}
+	for _, tc := range cases {
+		c := newTestClient(tc.status, `{"error":{"code":400,"message":"TOKEN_EXPIRED"}}`, nil)
+		_, _, err := c.RefreshIDToken(context.Background(), "rt")
+		require.Error(t, err)
+		assert.Equal(t, tc.dead, errors.Is(err, ErrRefreshTokenRejected), "status %d", tc.status)
+	}
+}

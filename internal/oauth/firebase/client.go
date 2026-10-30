@@ -146,6 +146,11 @@ func (c *Client) SignInWithIdp(ctx context.Context, requestURI, queryString, ses
 	return &resp, nil
 }
 
+// ErrRefreshTokenRejected means Firebase refused the refresh token itself
+// (expired, revoked, or its user disabled/deleted): signing in again is the
+// only way forward. Other RefreshIDToken errors are transient.
+var ErrRefreshTokenRejected = errors.New("firebase rejected the refresh token")
+
 // RefreshIDToken refreshes an expired Firebase ID token
 func (c *Client) RefreshIDToken(ctx context.Context, refreshToken string) (idToken string, expiresAt int64, err error) {
 	// Build form data for token refresh
@@ -174,6 +179,12 @@ func (c *Client) RefreshIDToken(ctx context.Context, refreshToken string) (idTok
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Firebase answers a dead refresh token (expired, revoked, user
+		// disabled or deleted) with 400; anything else is a transient failure
+		// the caller may retry.
+		if resp.StatusCode == http.StatusBadRequest {
+			return "", 0, fmt.Errorf("%w: status %d: %s", ErrRefreshTokenRejected, resp.StatusCode, string(body))
+		}
 		return "", 0, fmt.Errorf("refresh failed with status %d: %s", resp.StatusCode, string(body))
 	}
 

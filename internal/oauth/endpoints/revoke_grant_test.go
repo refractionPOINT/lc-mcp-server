@@ -2,11 +2,14 @@ package endpoints
 
 import (
 	"context"
+	"fmt"
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/firebase"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -122,8 +125,10 @@ func TestRevokeEndpoint_ABackendFailureIsAServerError(t *testing.T) {
 	assert.Nil(t, at)
 }
 
-// Two refreshes of one token: one gets tokens, the other invalid_grant.
-func TestRefreshEndpoint_TheLoserOfConcurrentRefreshesGetsInvalidGrant(t *testing.T) {
+// Two refreshes of one token: one gets tokens, the other a retryable
+// server_error (if the winner had failed, the token would still be valid);
+// retrying after the winner rotated the token reports it as spent.
+func TestRefreshEndpoint_TheLoserOfConcurrentRefreshesIsToldToRetry(t *testing.T) {
 	h, sm, mockFB, _ := testHandlers(t)
 	realisticFirebase(mockFB)
 	_, refresh := signInAs(t, h)
@@ -141,8 +146,8 @@ func TestRefreshEndpoint_TheLoserOfConcurrentRefreshesGetsInvalidGrant(t *testin
 	<-inFlight
 
 	loser := audPostToken(t, h, refreshFormFor(refresh, victimClient))
-	assert.Equal(t, http.StatusBadRequest, loser.Code)
-	assert.Equal(t, ErrInvalidGrant, audDecode(t, loser)["error"])
+	assert.Equal(t, http.StatusServiceUnavailable, loser.Code)
+	assert.Equal(t, ErrServerError, audDecode(t, loser)["error"])
 
 	close(proceed)
 	winner := <-first
@@ -152,4 +157,56 @@ func TestRefreshEndpoint_TheLoserOfConcurrentRefreshesGetsInvalidGrant(t *testin
 	assert.NotNil(t, rt)
 	old, _ := sm.GetRefreshTokenData(context.Background(), refresh)
 	assert.Nil(t, old)
+
+	retry := audPostToken(t, h, refreshFormFor(refresh, victimClient))
+	assert.Equal(t, http.StatusBadRequest, retry.Code)
+	assert.Equal(t, ErrInvalidGrant, audDecode(t, retry)["error"], "the spent token is reported as such")
+}
+
+// A backend failure during refresh must not tell the client its refresh token
+// is dead (invalid_grant makes MCP clients drop it and sign the user out): it
+// gets a retryable server_error and the same refresh token works afterwards.
+func TestRefreshEndpoint_TransientFailuresAreRetryable(t *testing.T) {
+	h, sm, mockFB, _ := testHandlers(t)
+	realisticFirebase(mockFB)
+	_, refresh := signInAs(t, h)
+
+	var fail atomic.Bool
+	fail.Store(true)
+	mockFB.refreshIDTokenFunc = func(ctx context.Context, _ string) (string, int64, error) {
+		if fail.Load() {
+			return "", 0, fmt.Errorf("refresh failed with status 503: unavailable")
+		}
+		return "id", time.Now().Add(time.Hour).Unix(), nil
+	}
+
+	w := audPostToken(t, h, refreshFormFor(refresh, victimClient))
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, ErrServerError, audDecode(t, w)["error"])
+	rt, _ := sm.GetRefreshTokenData(context.Background(), refresh)
+	require.NotNil(t, rt, "the refresh token survives a transient failure")
+
+	fail.Store(false)
+	w = audPostToken(t, h, refreshFormFor(refresh, victimClient))
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+}
+
+func TestRefreshEndpoint_DeadGrantsAreInvalidGrant(t *testing.T) {
+	t.Run("identity provider rejects the refresh token", func(t *testing.T) {
+		h, _, mockFB, _ := testHandlers(t)
+		realisticFirebase(mockFB)
+		_, refresh := signInAs(t, h)
+		mockFB.refreshIDTokenFunc = func(ctx context.Context, _ string) (string, int64, error) {
+			return "", 0, fmt.Errorf("%w: status 400: TOKEN_EXPIRED", firebase.ErrRefreshTokenRejected)
+		}
+		w := audPostToken(t, h, refreshFormFor(refresh, victimClient))
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, ErrInvalidGrant, audDecode(t, w)["error"])
+	})
+	t.Run("unknown refresh token", func(t *testing.T) {
+		h, _, _, _ := testHandlers(t)
+		w := audPostToken(t, h, refreshFormFor("never-issued", victimClient))
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Equal(t, ErrInvalidGrant, audDecode(t, w)["error"])
+	})
 }

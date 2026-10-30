@@ -515,6 +515,14 @@ func (h *Handlers) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 		WriteOAuthError(w, NewOAuthError(ErrInvalidTarget, "resource is not covered by the authorized resource", http.StatusBadRequest))
 		return
 	}
+	if err != nil && !token.IsDeadRefresh(err) {
+		// A backend failure (Redis, Firebase or the JWT service): the refresh
+		// token is still valid. invalid_grant would make the client drop it and
+		// sign the user out; server_error lets it retry.
+		h.logger.Error("Refresh failed for a transient reason", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Temporary failure refreshing the token; retry shortly", http.StatusServiceUnavailable))
+		return
+	}
 	if err != nil {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidGrant, "Invalid or expired refresh token", http.StatusBadRequest))
 		return

@@ -109,6 +109,29 @@ var ErrRefreshRevoked = errors.New("refresh token was revoked")
 // Nothing was issued.
 var ErrRefreshSuperseded = errors.New("refresh was superseded by another request")
 
+// ErrRefreshTokenUnknown means the refresh token doesn't exist (never issued,
+// expired, or already rotated).
+var ErrRefreshTokenUnknown = errors.New("invalid or expired refresh token")
+
+// ErrRefreshTokenDead means the upstream identity provider refused the
+// grant behind the refresh token, so the user must sign in again.
+var ErrRefreshTokenDead = errors.New("the identity provider refused the refresh")
+
+// IsDeadRefresh reports whether a RefreshAccessToken error means the refresh
+// token can never succeed (the client must sign in again), as opposed to a
+// transient backend failure after which the same refresh token may be retried.
+// Losing a race to a concurrent refresh of the same token (ErrRefreshInFlight)
+// is transient: if the other refresh fails, the token is still valid, and if
+// it succeeded a retry reports the token as unknown.
+func IsDeadRefresh(err error) bool {
+	for _, dead := range []error{ErrRefreshTokenUnknown, ErrRefreshTokenDead, ErrRefreshRevoked, ErrRefreshSuperseded, ErrClientMismatch, ErrInvalidTarget} {
+		if errors.Is(err, dead) {
+			return true
+		}
+	}
+	return false
+}
+
 // MaxClientIDLen bounds a client_id we are willing to bind a token to.
 const MaxClientIDLen = 2048
 
@@ -457,7 +480,7 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 		return nil, ErrRefreshRevoked
 	case errors.Is(err, state.ErrRefreshTokenNotFound):
 		m.logger.Warn("Refresh token not found or already used")
-		return nil, fmt.Errorf("invalid or expired refresh token")
+		return nil, ErrRefreshTokenUnknown
 	case err != nil:
 		return nil, fmt.Errorf("failed to get refresh token data: %w", err)
 	}
@@ -524,6 +547,9 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 	// Refresh Firebase token first
 	newFirebaseIDToken, newFirebaseExpiresAt, err := m.firebaseClient.RefreshIDToken(ctx, firebaseRefreshToken)
 	if err != nil {
+		if errors.Is(err, firebase.ErrRefreshTokenRejected) {
+			return nil, fmt.Errorf("%w: %w", ErrRefreshTokenDead, err)
+		}
 		return nil, fmt.Errorf("failed to refresh Firebase token: %w", err)
 	}
 
