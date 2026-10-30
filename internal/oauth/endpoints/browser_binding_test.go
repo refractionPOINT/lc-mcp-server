@@ -421,9 +421,9 @@ func TestBrowserBinding_CookieAttributesOverHTTP(t *testing.T) {
 	assert.True(t, c.HttpOnly)
 	assert.False(t, c.Secure)
 	assert.Equal(t, http.SameSiteLaxMode, c.SameSite)
-	assert.Equal(t, "/oauth", c.Path)
+	assert.Equal(t, "/", c.Path, "needed at /authorize too, not only under /oauth")
 	for _, p := range []string{"/oauth/callback", "/oauth/mfa-challenge", "/oauth/mfa-verify"} {
-		assert.True(t, strings.HasPrefix(p, c.Path+"/"), "%s is covered", p)
+		assert.True(t, strings.HasPrefix(p, c.Path), "%s is covered", p)
 	}
 	assert.Equal(t, http.StatusFound, callbackFor(h, s).Code)
 }

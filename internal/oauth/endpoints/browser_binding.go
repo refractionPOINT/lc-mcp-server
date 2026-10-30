@@ -56,20 +56,16 @@ func (h *Handlers) browserBindCookieName() string {
 //     Strict would withhold. Lax still withholds it from cross-site
 //     sub-requests and POSTs.
 //   - HttpOnly: page scripts never see the secret.
-//   - Secure over https. Over https the name is __Host-prefixed, which requires
-//     Path=/ (it covers /oauth/callback and the MFA paths); over plain http (local
-//     development) the cookie is limited to /oauth, which covers the same paths.
+//   - Secure over https, where the name is __Host-prefixed. Path=/ in both cases:
+//     the cookie is needed at /authorize (to accept the selection
+//     acknowledgement) as well as at /oauth/callback and the MFA paths.
 //   - Max-Age is the transaction's lifetime and is renewed by every /authorize
 //     that reuses the cookie, so it outlives none of the transactions bound to it.
 func (h *Handlers) browserBindingCookie(secret string, maxAge int) *http.Cookie {
-	path := "/oauth"
-	if h.serverIsHTTPS() {
-		path = "/"
-	}
 	return &http.Cookie{
 		Name:     h.browserBindCookieName(),
 		Value:    secret,
-		Path:     path,
+		Path:     "/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		Secure:   h.serverIsHTTPS(),
