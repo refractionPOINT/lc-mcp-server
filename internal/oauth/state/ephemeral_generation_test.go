@@ -18,8 +18,8 @@ func TestPublishDocIfGeneration(t *testing.T) {
 	ok, err := m.PublishDocIfGeneration(ctx, gen, "", time.Minute, doc, "v1", time.Hour, known, 24*time.Hour)
 	require.NoError(t, err)
 	require.True(t, ok)
-	v, _ := m.GetEphemeral(ctx, gen)
-	assert.Equal(t, "1", v, "publishing bumps the generation")
+	g1, _ := m.GetEphemeral(ctx, gen)
+	assert.Len(t, g1, 32, "publishing sets a fresh random generation")
 	assert.Equal(t, time.Minute, mr.TTL(gen))
 	assert.Equal(t, time.Hour, mr.TTL(doc))
 	assert.Equal(t, 24*time.Hour, mr.TTL(known))
@@ -28,16 +28,35 @@ func TestPublishDocIfGeneration(t *testing.T) {
 	ok, err = m.PublishDocIfGeneration(ctx, gen, "", time.Minute, doc, "stale", time.Hour, known, time.Hour)
 	require.NoError(t, err)
 	assert.False(t, ok)
-	v, _ = m.GetEphemeral(ctx, doc)
+	v, _ := m.GetEphemeral(ctx, doc)
 	assert.Equal(t, "v1", v)
 	assert.Equal(t, 24*time.Hour, mr.TTL(known))
 
 	// Without a known key only the document is written.
-	ok, err = m.PublishDocIfGeneration(ctx, gen, "1", time.Minute, doc, "v2", time.Hour, "", 0)
+	ok, err = m.PublishDocIfGeneration(ctx, gen, g1, time.Minute, doc, "v2", time.Hour, "", 0)
 	require.NoError(t, err)
 	assert.True(t, ok)
 	v, _ = m.GetEphemeral(ctx, doc)
 	assert.Equal(t, "v2", v)
+}
+
+// Review repro: a generation that expires and is recreated must never match a
+// value a writer read before it expired, or that writer could republish what
+// was invalidated in between.
+func TestGenerationValuesNeverRepeatAfterExpiry(t *testing.T) {
+	m, mr := setupTestManager(t)
+	ctx := context.Background()
+	const gen, doc = "g", "d"
+	require.NoError(t, m.InvalidateDoc(ctx, gen, time.Minute, doc, "", true, time.Hour))
+	read, _ := m.GetEphemeral(ctx, gen) // a slow writer reads this, then stalls
+
+	mr.FastForward(time.Minute + time.Second)                                            // the generation expires
+	require.NoError(t, m.InvalidateDoc(ctx, gen, time.Minute, doc, "", true, time.Hour)) // another replica sees 410
+
+	ok, err := m.PublishDocIfGeneration(ctx, gen, read, time.Minute, doc, "withdrawn", time.Hour, "", 0)
+	require.NoError(t, err)
+	assert.False(t, ok, "the stalled writer must not publish")
+	assert.False(t, mr.Exists(doc))
 }
 
 func TestInvalidateDoc(t *testing.T) {
@@ -58,7 +77,7 @@ func TestInvalidateDoc(t *testing.T) {
 			assert.Empty(t, v, k)
 		}
 		v, _ := m.GetEphemeral(ctx, gen)
-		assert.Equal(t, "1", v)
+		assert.Len(t, v, 32)
 	})
 
 	t.Run("keep known", func(t *testing.T) {
