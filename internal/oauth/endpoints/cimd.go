@@ -227,17 +227,23 @@ func (h *Handlers) bindSelectionToBrowser(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		return err
 	}
+	// The page also gives the browser its browser-binding secret (or confirms
+	// the one it has): the acknowledgement /authorize later accepts is issued
+	// to that secret, so it cannot be paired with a different browser.
+	if _, err := h.ensureBrowserSecret(w, r); err != nil {
+		return err
+	}
 	params[selectionBindKey] = sha256Hex(secret)
 	if err := h.stateManager.UpdateSelectionSession(r.Context(), sessionID, params); err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     selectionBindCookie,
+		Name:     h.selectionBindCookieName(),
 		Value:    secret,
-		Path:     "/oauth/select-provider",
+		Path:     h.selectionCookiePath("/oauth/select-provider"),
 		MaxAge:   state.SelectionTTL,
 		HttpOnly: true,
-		Secure:   strings.HasPrefix(h.metadataProvider.GetServerURL(), "https://"),
+		Secure:   h.serverIsHTTPS(),
 		// Strict: the cookie is only sent when the request was initiated from
 		// this site, i.e. by a click on the selection page. With Lax, a page
 		// on another site could open the selection page in a popup (setting
@@ -259,9 +265,9 @@ func sameOriginRequest(r *http.Request) bool {
 // selectionBoundToBrowser reports whether this request comes from the browser
 // that was shown the selection page for the session. A session nobody was
 // shown the page for carries no binding and never passes, whatever the client.
-func selectionBoundToBrowser(r *http.Request, params map[string]string) bool {
+func (h *Handlers) selectionBoundToBrowser(r *http.Request, params map[string]string) bool {
 	want := params[selectionBindKey]
-	c, err := r.Cookie(selectionBindCookie)
+	c, err := r.Cookie(h.selectionBindCookieName())
 	if want == "" || err != nil || c.Value == "" {
 		return false
 	}
@@ -285,7 +291,7 @@ func (h *Handlers) CompleteProviderSelection(w http.ResponseWriter, r *http.Requ
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Sign-in must be started from the application that requested it; open its sign-in link again", http.StatusBadRequest))
 		return
 	}
-	if !selectionBoundToBrowser(r, params) {
+	if !h.selectionBoundToBrowser(r, params) {
 		// The session is consumed either way, so a leaked link is single-use.
 		h.logger.Warn("Provider selection from a browser that was not shown the selection page", "redirect_host", redirectHost(params["redirect_uri"]))
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Sign-in must be started from the application that requested it; open its sign-in link again", http.StatusBadRequest))
@@ -311,7 +317,16 @@ func (h *Handlers) RedirectToAuthorize(w http.ResponseWriter, r *http.Request, p
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to generate session", http.StatusInternalServerError))
 		return
 	}
-	value := sha256Hex(secret) + "|" + ackBinding(params["client_id"], params["redirect_uri"], params["state"], params["code_challenge"])
+	// The acknowledgement belongs to the browser that holds the browser-binding
+	// secret the selection page gave it; /authorize accepts it from that
+	// browser only. A browser without the secret has not been through the page.
+	browserSecret, ok := h.browserSecretOf(r)
+	if !ok {
+		h.logger.Warn("Provider selection from a browser without a browser binding", "redirect_host", redirectHost(params["redirect_uri"]))
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Sign-in must be started from the application that requested it; open its sign-in link again", http.StatusBadRequest))
+		return
+	}
+	value := sha256Hex(secret) + "|" + ackBinding(params["client_id"], params["redirect_uri"], params["state"], params["code_challenge"]) + "|" + sha256Hex(browserSecret)
 	if err := h.stateManager.SetEphemeral(r.Context(), state.SelectionAckPrefix+token, value, state.SelectionAckTTL); err != nil {
 		h.logger.Error("Failed to store selection acknowledgement", "error", err)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store session", http.StatusInternalServerError))
@@ -332,7 +347,7 @@ func (h *Handlers) RedirectToAuthorize(w http.ResponseWriter, r *http.Request, p
 // acknowledgement is single-use.
 func (h *Handlers) consumeSelectionAck(w http.ResponseWriter, r *http.Request, clientID, redirectURI, stateParam, challenge string) bool {
 	token := r.URL.Query().Get(selectionAckParam)
-	c, err := r.Cookie(selectionAckCookie)
+	c, err := r.Cookie(h.selectionAckCookieName())
 	if token == "" || err != nil || c.Value == "" {
 		return false
 	}
@@ -341,18 +356,54 @@ func (h *Handlers) consumeSelectionAck(w http.ResponseWriter, r *http.Request, c
 		return false
 	}
 	http.SetCookie(w, h.ackCookie("", -1))
-	want := sha256Hex(c.Value) + "|" + ackBinding(clientID, redirectURI, stateParam, challenge)
+	// The acknowledgement was issued to one browser: the one now presenting it
+	// must hold that browser's binding secret, which is also the secret the
+	// transaction is then bound to. A planted acknowledgement cookie of a known
+	// value cannot be paired with a browser that is not the one it was issued to.
+	browserSecret, ok := h.browserSecretOf(r)
+	if !ok {
+		return false
+	}
+	want := sha256Hex(c.Value) + "|" + ackBinding(clientID, redirectURI, stateParam, challenge) + "|" + sha256Hex(browserSecret)
 	return subtle.ConstantTimeCompare([]byte(stored), []byte(want)) == 1
+}
+
+// hostSelectionCookiePrefix is what the selection cookies are named with over
+// https: __Host- makes browsers refuse them unless they are Secure, Path=/ and
+// have no Domain, so a page on a sibling subdomain cannot plant a value it knows.
+const hostSelectionCookiePrefix = "__Host-"
+
+func (h *Handlers) selectionAckCookieName() string {
+	if h.serverIsHTTPS() {
+		return hostSelectionCookiePrefix + selectionAckCookie
+	}
+	return selectionAckCookie
+}
+
+func (h *Handlers) selectionBindCookieName() string {
+	if h.serverIsHTTPS() {
+		return hostSelectionCookiePrefix + selectionBindCookie
+	}
+	return selectionBindCookie
+}
+
+// selectionCookiePath is the path of a selection cookie: the __Host- prefix
+// forces "/" over https; plain-http local development keeps the narrow path.
+func (h *Handlers) selectionCookiePath(narrow string) string {
+	if h.serverIsHTTPS() {
+		return "/"
+	}
+	return narrow
 }
 
 func (h *Handlers) ackCookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
-		Name:     selectionAckCookie,
+		Name:     h.selectionAckCookieName(),
 		Value:    value,
-		Path:     "/authorize",
+		Path:     h.selectionCookiePath("/authorize"),
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   strings.HasPrefix(h.metadataProvider.GetServerURL(), "https://"),
+		Secure:   h.serverIsHTTPS(),
 		// Strict: sent on the /authorize redirect that the provider choice
 		// (same-site) started, not on anything a third party navigates to.
 		SameSite: http.SameSiteStrictMode,

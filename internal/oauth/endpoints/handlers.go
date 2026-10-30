@@ -817,15 +817,24 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, sessionID string) {
 	// Get MFA session to extract email
 	mfaSession, _ := h.stateManager.GetMFASession(r.Context(), sessionID)
+	if mfaSession == nil {
+		h.renderOAuthError(w, http.StatusBadRequest, mfaExpiredPage)
+		return
+	}
 
-	// The challenge belongs to a transaction, which belongs to one browser.
-	if mfaSession != nil && !h.mfaBrowserBound(r, "mfa-challenge", sessionID, mfaSession) {
+	// The challenge belongs to a transaction, which belongs to one browser. No
+	// identity information is rendered before this passes.
+	switch h.mfaBrowserBound(r, "mfa-challenge", sessionID, mfaSession) {
+	case mfaBindingExpired:
+		h.renderOAuthError(w, http.StatusBadRequest, mfaExpiredPage)
+		return
+	case mfaBindingMismatch:
 		h.renderOAuthError(w, http.StatusForbidden, browserMismatchPage)
 		return
 	}
 
 	email := "user"
-	if mfaSession != nil && mfaSession.Email != "" {
+	if mfaSession.Email != "" {
 		email = mfaSession.Email
 	}
 
@@ -856,34 +865,68 @@ func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, se
 	h.templates.ExecuteTemplate(w, "mfa_challenge.html", data)
 }
 
-// mfaBrowserBound reports whether the request comes from the browser the MFA
-// session's transaction was started in. When it does not, the transaction and
-// the MFA session are abandoned. A transaction that no longer exists passes:
-// there is nothing left to complete, and the caller reports it as expired.
-func (h *Handlers) mfaBrowserBound(r *http.Request, step, sessionID string, mfaSession *state.MFASession) bool {
+// mfaExpiredPage is shown in place of the MFA challenge when the sign-in it
+// belongs to no longer exists.
+var mfaExpiredPage = oauthErrorPage{
+	ErrorTitle:   "Sign-in expired",
+	ErrorMessage: "This sign-in expired or was already completed. Nothing was granted. Go back to the application you were signing in to and start the sign-in again from there.",
+	ErrorCode:    "session_expired",
+	RetryURL:     limaCharlieWebAppURL,
+	RetryLabel:   "Open LimaCharlie",
+}
+
+type mfaBindingResult int
+
+const (
+	mfaBindingOK mfaBindingResult = iota
+	// mfaBindingExpired: the MFA session's transaction is gone or cannot be read.
+	mfaBindingExpired
+	// mfaBindingMismatch: the transaction belongs to another browser.
+	mfaBindingMismatch
+)
+
+// mfaBrowserBound checks that the request comes from the browser the MFA
+// session's transaction was started in. It fails closed: a transaction that is
+// missing or unreadable (expired, consumed, store trouble) proves nothing about
+// the browser, so the MFA session is dropped and the step is refused before it
+// shows an identity, counts an attempt or reaches the provider. On a mismatch
+// the transaction is abandoned as well.
+func (h *Handlers) mfaBrowserBound(r *http.Request, step, sessionID string, mfaSession *state.MFASession) mfaBindingResult {
 	tx, err := h.stateManager.GetOAuthState(r.Context(), mfaSession.OAuthState)
 	if err != nil || tx == nil {
-		return true
+		h.logger.Warn("MFA step for a missing or unreadable transaction", "step", step, "error", err)
+		h.stateManager.ConsumeMFASession(context.WithoutCancel(r.Context()), sessionID)
+		return mfaBindingExpired
 	}
 	if h.transactionBoundToBrowser(r, tx) {
-		return true
+		return mfaBindingOK
 	}
 	h.abandonOnBrowserMismatch(r, step, mfaSession.OAuthState, tx)
 	h.stateManager.ConsumeMFASession(context.WithoutCancel(r.Context()), sessionID)
-	return false
+	return mfaBindingMismatch
 }
 
 func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessionID, code string) {
 	// Before anything is counted or sent to the provider: only the browser the
 	// transaction was started in may verify its MFA challenge, and a session id
 	// seen by anyone else cannot be used to burn its attempts.
-	if pre, _ := h.stateManager.GetMFASession(r.Context(), sessionID); pre != nil && !h.mfaBrowserBound(r, "mfa-verify", sessionID, pre) {
-		writeJSON(w, http.StatusForbidden, map[string]interface{}{
-			"success":           false,
-			"error":             "browser_mismatch",
-			"error_description": "This sign-in was not started in this browser, or it expired. Go back to the application you were signing in to and start the sign-in again from there.",
-		})
-		return
+	if pre, _ := h.stateManager.GetMFASession(r.Context(), sessionID); pre != nil {
+		switch h.mfaBrowserBound(r, "mfa-verify", sessionID, pre) {
+		case mfaBindingExpired:
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"success":           false,
+				"error":             "invalid_request",
+				"error_description": "Session expired or invalid. Please restart authentication.",
+			})
+			return
+		case mfaBindingMismatch:
+			writeJSON(w, http.StatusForbidden, map[string]interface{}{
+				"success":           false,
+				"error":             "browser_mismatch",
+				"error_description": "This sign-in was not started in this browser, or it expired. Go back to the application you were signing in to and start the sign-in again from there.",
+			})
+			return
+		}
 	}
 
 	// SECURITY FIX: Check and increment attempts BEFORE processing MFA verification

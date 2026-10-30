@@ -177,11 +177,11 @@ func TestAuthorize_ProviderSelectionCarriesCanonicalResource(t *testing.T) {
 	assert.Equal(t, audProfile, params["resource"])
 
 	// The selection page sends these on to /authorize with the provider.
-	picked := completeSelection(t, handlers, session, "google")
+	picked, held := completeSelection(t, handlers, session, "google")
 	require.Equal(t, http.StatusFound, picked.Code)
 	back, err := url.Parse(picked.Header().Get("Location"))
 	require.NoError(t, err)
-	w2 := authorizeRequest(handlers, back.Query(), picked.Result().Cookies()...)
+	w2 := authorizeRequest(handlers, back.Query(), held...)
 	require.Equal(t, http.StatusFound, w2.Code)
 	_, stored := onlyTx(t, sm, mr)
 	assert.Equal(t, audProfile, stored.Resource)

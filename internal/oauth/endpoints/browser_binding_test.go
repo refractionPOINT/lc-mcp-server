@@ -2,6 +2,7 @@ package endpoints
 
 import (
 	"context"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -134,7 +135,7 @@ func TestCallback_ProviderURLSentToAVictimDoesNotIssueACode(t *testing.T) {
 		"a victim browser with no binding cookie":             nil,
 		"a victim browser with a binding cookie of its own":   {victimCookie},
 		"a victim browser with an unrelated secret":           {{Name: h.browserBindCookieName(), Value: "x"}},
-		"a victim browser with the selection cookies only":    {{Name: selectionBindCookie, Value: "x"}, {Name: selectionAckCookie, Value: "x"}},
+		"a victim browser with the selection cookies only":    {{Name: h.selectionBindCookieName(), Value: "x"}, {Name: h.selectionAckCookieName(), Value: "x"}},
 		"the attacker's secret under the name used over http": {{Name: browserBindCookie, Value: bindCookieOf(t, h, attacker.cookies).Value}},
 		"an empty binding cookie":                             {{Name: h.browserBindCookieName(), Value: ""}},
 	} {
@@ -323,10 +324,10 @@ func TestBrowserBinding_ConcurrentSignInsInOneBrowserBothWork(t *testing.T) {
 	provider := q.Get("provider")
 	q.Del("provider")
 	loc, _ := url.Parse(authorizeRequest(h, q).Header().Get("Location"))
-	picked := completeSelection(t, h, loc.Query().Get("session"), provider)
+	picked, held := completeSelection(t, h, loc.Query().Get("session"), provider, secret)
 	require.Equal(t, http.StatusFound, picked.Code, picked.Body.String())
 	back, _ := url.Parse(picked.Header().Get("Location"))
-	w := authorizeRequest(h, back.Query(), append(picked.Result().Cookies(), secret)...)
+	w := authorizeRequest(h, back.Query(), held...)
 	secondCookie := bindCookieOf(t, h, w.Result().Cookies())
 	assert.Equal(t, secret.Value, secondCookie.Value, "the browser's secret is reused, not replaced")
 	second := signIn{fb: firebaseStateOf(t, w), cookies: []*http.Cookie{secondCookie}}
@@ -377,9 +378,9 @@ func TestBrowserBinding_ForeignCookieValueIsNotAdopted(t *testing.T) {
 	provider := q.Get("provider")
 	q.Del("provider")
 	loc, _ := url.Parse(authorizeRequest(h, q).Header().Get("Location"))
-	picked := completeSelection(t, h, loc.Query().Get("session"), provider)
+	picked, held := completeSelection(t, h, loc.Query().Get("session"), provider, planted)
 	back, _ := url.Parse(picked.Header().Get("Location"))
-	w := authorizeRequest(h, back.Query(), append(picked.Result().Cookies(), planted)...)
+	w := authorizeRequest(h, back.Query(), held...)
 	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
 
 	issued := bindCookieOf(t, h, w.Result().Cookies())
@@ -469,4 +470,81 @@ func TestCallback_UnsupportedMFAFromAnotherBrowserIsRefusedToo(t *testing.T) {
 	s := startSignIn(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier))
 	assertRefused(t, callbackIn(h, s.fb))
 	assert.Empty(t, storedTxs(t, sm, mr))
+}
+
+// ===== MFA steps fail closed when the transaction is gone =====
+
+// expireTransactions removes every OAuth transaction, as their TTL would.
+func expireTransactions(t *testing.T, sm *state.Manager, mr *miniredis.Miniredis) {
+	t.Helper()
+	for txID := range storedTxs(t, sm, mr) {
+		_, err := sm.ConsumeOAuthState(context.Background(), txID)
+		require.NoError(t, err)
+	}
+	require.Empty(t, storedTxs(t, sm, mr))
+}
+
+// With the transaction expired there is no browser to compare the request to,
+// so the MFA challenge shows nothing about the account to anyone, with or
+// without a cookie, and the MFA session is dropped.
+func TestMFA_ChallengeAfterTheTransactionExpiredShowsNoIdentity(t *testing.T) {
+	for name, withCookie := range map[string]bool{"no cookie": false, "the owner's cookie": true} {
+		t.Run(name, func(t *testing.T) {
+			h, sm, mockFB, mr := testHandlers(t)
+			tmpl, err := template.ParseGlob("../../../templates/*.html")
+			require.NoError(t, err)
+			h.templates = tmpl
+			realisticFirebase(mockFB)
+			withMFA(mockFB)
+			owner := startSignIn(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier))
+			session := mfaSessionOf(t, callbackFor(h, owner))
+			expireTransactions(t, sm, mr)
+
+			var cookies []*http.Cookie
+			if withCookie {
+				cookies = owner.cookies
+			}
+			w := mfaChallengeIn(h, session, cookies...)
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.NotContains(t, w.Body.String(), "user@example.com", "the account's email is not shown")
+			assert.NotContains(t, w.Body.String(), `name="code"`, "no challenge form")
+			assert.Contains(t, w.Body.String(), "start the sign-in again")
+			got, _ := sm.GetMFASession(context.Background(), session)
+			assert.Nil(t, got, "the MFA session is cleaned up")
+		})
+	}
+}
+
+func TestMFA_ChallengeWithoutAnMFASessionShowsNoChallenge(t *testing.T) {
+	h, _, _, _ := testHandlers(t)
+	w := mfaChallengeIn(h, "no-such-session")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestMFA_VerifyAfterTheTransactionExpiredDoesNothing(t *testing.T) {
+	for name, withCookie := range map[string]bool{"no cookie": false, "the owner's cookie": true} {
+		t.Run(name, func(t *testing.T) {
+			h, sm, mockFB, mr := testHandlers(t)
+			realisticFirebase(mockFB)
+			finalized := withMFA(mockFB)
+			owner := startSignIn(t, h, authQuery(victimClient, victimRedirect, "s", victimVerifier))
+			session := mfaSessionOf(t, callbackFor(h, owner))
+			expireTransactions(t, sm, mr)
+
+			var cookies []*http.Cookie
+			if withCookie {
+				cookies = owner.cookies
+			}
+			w := mfaVerifyIn(h, session, cookies...)
+			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+			assert.Equal(t, "invalid_request", audDecode(t, w)["error"])
+			assert.NotContains(t, w.Body.String(), "redirect_url")
+			assert.Zero(t, finalized.Load(), "the provider is never contacted")
+			attempts, _ := sm.GetMFAAttemptCount(context.Background(), session)
+			assert.Zero(t, attempts, "no attempt is counted")
+			got, _ := sm.GetMFASession(context.Background(), session)
+			assert.Nil(t, got, "the MFA session is cleaned up")
+			assert.Zero(t, issuedCodes(mr))
+		})
+	}
 }
