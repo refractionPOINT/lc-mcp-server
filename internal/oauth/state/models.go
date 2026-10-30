@@ -177,8 +177,10 @@ const (
 	FamilyPrefix = "oauth:family:"
 	// TokenFamilyPrefix + sha256(token) maps a refresh or access token to the
 	// grant it belongs to. It outlives the token's own record (it lasts as long
-	// as the token could have), so a token that was already rotated away still
-	// leads revocation to the grant, and with it to the tokens that replaced it.
+	// as the token could have, and at least RotationRecordTTL after a rotation),
+	// so a token that was already rotated away, including one still accepted by
+	// the grace window, leads revocation to the grant and the tokens that
+	// replaced it.
 	TokenFamilyPrefix = "oauth:tokfam:"
 	// AttemptOverPrefix + attempt id is left when a refresh attempt gives its claim
 	// up. A copy of that attempt's claim command that arrives late (a command the
@@ -216,7 +218,8 @@ const (
 	// readers: a publish repeated by the Redis client library after a lost reply
 	// (seconds), and the refresh grace window, in which the client that never
 	// got the reply of a committed rotation presents the same refresh token again
-	// and is handed the same successors (RotationSuccessors).
+	// and is handed the same successors (RotationSuccessors). The record also
+	// names the grant, so revocation can still find it from the rotated token.
 	RotationRecordTTL = 2 * time.Minute
 )
 
