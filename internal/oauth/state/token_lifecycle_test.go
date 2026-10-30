@@ -417,6 +417,71 @@ func TestReleaseRefreshClaim_IsOwnershipChecked(t *testing.T) {
 	})
 }
 
+// An attempt that has given its claim up is over for good. A copy of its claim
+// command that arrives late (the network delayed it past the client's retry)
+// must not take the claim back: that would block the token for the length of the
+// claim, and let a late copy of the attempt's publish through.
+func TestClaimRefreshToken_ACopyOfAnEndedAttemptCannotTakeTheClaimBack(t *testing.T) {
+	m, mr := setupTestManager(t)
+	ctx := context.Background()
+	issueGrant(t, m, "fam", "at", "rt")
+
+	a, err := m.ClaimRefreshToken(ctx, "rt")
+	require.NoError(t, err)
+	m.ReleaseRefreshClaim(ctx, a)
+
+	_, err = m.claimAs(ctx, "rt", a.Owner) // the late copy
+	assert.ErrorIs(t, err, ErrRefreshInFlight)
+	assert.False(t, mr.Exists(RefreshClaimPrefix+tokenHash("rt")), "the late copy took nothing")
+	assert.InDelta(t, AttemptOverTTL.Seconds(), mr.TTL(AttemptOverPrefix+a.Owner).Seconds(), 2)
+
+	b, err := m.ClaimRefreshToken(ctx, "rt")
+	require.NoError(t, err, "the token is free for the next attempt")
+	assert.NotEqual(t, a.Owner, b.Owner)
+}
+
+func TestPublishRotation_ALateCopyOfAnEndedAttemptPublishesNothing(t *testing.T) {
+	m, mr := setupTestManager(t)
+	ctx := context.Background()
+	issueGrant(t, m, "fam", "at", "rt")
+
+	a, err := m.ClaimRefreshToken(ctx, "rt")
+	require.NoError(t, err)
+	late, err := m.preparePublish(a, newAccess("at-1", "fam"), newRefresh("rt-1", "at-1", "fam"))
+	require.NoError(t, err)
+	m.ReleaseRefreshClaim(ctx, a) // the attempt failed and gave up
+
+	_, err = m.claimAs(ctx, "rt", a.Owner)
+	require.Error(t, err)
+	before := snapshot(mr)
+	assert.ErrorIs(t, m.publish(ctx, late), ErrClaimLost, "the copy of the publish finds no claim to use")
+	assert.Equal(t, before, snapshot(mr))
+	old, _ := m.GetRefreshTokenData(ctx, "rt")
+	assert.NotNil(t, old, "the token was not consumed by an attempt the client never heard of")
+}
+
+// A copy of the first issue that arrives after the grant has moved on must not
+// bring the first generation back.
+func TestIssueTokens_ALateCopyDoesNotBringTheFirstTokensBack(t *testing.T) {
+	m, mr := setupTestManager(t)
+	ctx := context.Background()
+	call, err := m.prepareIssue(newAccess("at", "fam"), newRefresh("rt", "at", "fam"))
+	require.NoError(t, err)
+	require.NoError(t, m.issue(ctx, call))
+	require.NoError(t, m.issue(ctx, call), "a prompt repeat is the client library's retry")
+
+	claim, err := m.ClaimRefreshToken(ctx, "rt")
+	require.NoError(t, err)
+	require.NoError(t, m.PublishRotation(ctx, claim, newAccess("at-1", "fam"), newRefresh("rt-1", "at-1", "fam")))
+	before := snapshot(mr)
+
+	assert.ErrorIs(t, m.issue(ctx, call), ErrAlreadyExists, "the late copy")
+	assert.Equal(t, before, snapshot(mr))
+	assert.False(t, exists(mr, RefreshPrefix+"rt"), "the first refresh token is not back")
+	assert.False(t, exists(mr, TokenPrefix+"at"))
+	assert.Equal(t, "rt-1", mr.HGet(FamilyPrefix+"fam", "rt"))
+}
+
 func TestClaimRefreshToken_ExactlyOneWinner(t *testing.T) {
 	m, _ := setupTestManager(t)
 	ctx := context.Background()

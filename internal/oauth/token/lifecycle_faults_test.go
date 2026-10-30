@@ -80,12 +80,13 @@ func isPublish(r faultproxy.Request) bool {
 	return r.IsScript() && r.HasKeyPrefix(state.TokenPrefix) && r.HasKeyPrefix(state.RefreshPrefix)
 }
 
-// isRelease recognises the command that gives a claim up.
+// isRelease recognises the command that gives a claim up: it touches the claim
+// and nothing else of the token.
 func isRelease(r faultproxy.Request) bool {
 	if r.Name() == "DEL" && len(r.Args) == 2 && strings.HasPrefix(r.Args[1], state.RefreshClaimPrefix) {
 		return true
 	}
-	return r.IsScript() && len(r.Keys()) == 1 && r.HasKeyPrefix(state.RefreshClaimPrefix)
+	return r.IsScript() && r.HasKeyPrefix(state.RefreshClaimPrefix) && !r.HasKeyPrefix(state.RefreshPrefix) && !r.HasKeyPrefix(state.TokenPrefix)
 }
 
 type refreshResult struct {
@@ -256,6 +257,45 @@ func TestFault_ALateCleanupOfAnEarlierAttemptCannotDisturbALaterOne(t *testing.T
 		assert.False(t, usable(t, env.direct, res.resp.AccessToken), "attempt B published after the revocation")
 	}
 	assert.Empty(t, liveTokenKeys(env.mr), "the revocation left a live credential behind")
+}
+
+// A copy of an abandoned attempt's claim that the network delivers late, after
+// the attempt gave up, must not take the token again.
+func TestFault_ALateCopyOfAnAbandonedClaimDoesNotBlockTheToken(t *testing.T) {
+	env := newFaultEnv(t, 0)
+	ctx := context.Background()
+	issued := issueFor(t, env.direct, clientA)
+
+	var mu sync.Mutex
+	var claimCmd *faultproxy.Request
+	env.proxy.OnRequest(func(r faultproxy.Request) bool {
+		if isClaim(r) {
+			mu.Lock()
+			if claimCmd == nil {
+				c := r
+				claimCmd = &c
+			}
+			mu.Unlock()
+		}
+		return false
+	})
+	env.fb.refreshIDTokenFunc = func(context.Context, string) (string, int64, error) {
+		return "", 0, errors.New("firebase unavailable")
+	}
+	_, err := env.via.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+	require.Error(t, err)
+	mu.Lock()
+	captured := claimCmd
+	mu.Unlock()
+	require.NotNil(t, captured)
+
+	_, err = env.proxy.Send(captured.Raw) // the delayed copy lands now
+	require.NoError(t, err)
+
+	env.fb.refreshIDTokenFunc = func(context.Context, string) (string, int64, error) { return validFirebaseResult() }
+	got, err := env.via.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+	require.NoError(t, err, "the abandoned attempt's late claim must not hold the token")
+	assert.True(t, usable(t, env.direct, got.AccessToken))
 }
 
 // ===== A claim that ran out =====

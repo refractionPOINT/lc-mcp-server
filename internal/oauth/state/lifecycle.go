@@ -24,6 +24,7 @@ import (
 //	oauth:revoked:tok:<sha256>    set when a token is revoked
 //	oauth:refresh_claim:<sha256>  the refresh in flight on a refresh token,
 //	                              valued with the id of the attempt that owns it
+//	oauth:attempt_over:<id>       set when an attempt gives its claim up
 //	oauth:rotation:<sha256>       the outcome of a refresh token's rotation
 //
 // The refresh record stays in place for the whole refresh: a claim is a
@@ -39,7 +40,9 @@ import (
 //
 // The Redis client retries a command whose reply was lost, so a script can run
 // twice with the same arguments. claim and publish recognise the repeat (same
-// attempt id) and answer as they did the first time; revoke is idempotent.
+// attempt id) and answer as they did the first time; revoke is idempotent. A
+// copy that arrives after its attempt is over (the attempt gave its claim up)
+// is refused: an attempt id is never valid again once the attempt has ended.
 //
 // The scripts name some keys themselves (a family's current tokens) instead of
 // receiving them in KEYS, so they need a standalone or primary/replica Redis.
@@ -119,12 +122,14 @@ const (
 
 // claimScript takes the claim of a refresh token for one attempt.
 //
-//	KEYS: 1 refresh record, 2 claim, 3 token tombstone, 4 token->family index
+//	KEYS: 1 refresh record, 2 claim, 3 token tombstone, 4 token->family index,
+//	      5 attempt-over marker of the attempt
 //	ARGV: 1 attempt id, 2 claim ttl (ms), 3 fresh family id (used only for a
 //	      token that has no family), 4 ttl (ms) for a record without expiry
 //
 // Returns {status, record, family}. The record is not touched. A repeat of the
-// attempt that already holds the claim succeeds again. A token without a family
+// attempt that already holds the claim succeeds again; an attempt that gave its
+// claim up cannot take it again. A token without a family
 // (issued before families existed) gets one here, by writing its index with
 // SET NX, so two first uses agree on it and revocation can find it from then on.
 var claimScript = redis.NewScript(luaPrelude + `
@@ -143,6 +148,9 @@ end
 if fam and redis.call('EXISTS', P_FAMILY_REVOKED .. fam) == 1 then
 	return {-1, '', fam}
 end
+if redis.call('EXISTS', KEYS[5]) == 1 then
+	return {-2, '', fam or ''}
+end
 if not redis.call('SET', KEYS[2], ARGV[1], 'NX', 'PX', ARGV[2]) then
 	if redis.call('GET', KEYS[2]) ~= ARGV[1] then
 		return {-2, '', fam or ''}
@@ -159,10 +167,12 @@ end
 return {1, rec, fam}
 `)
 
-// releaseScript drops a claim, only if the attempt that asks owns it.
+// releaseScript ends an attempt: it drops the claim, only if the attempt that
+// asks still owns it, and remembers that the attempt is over.
 //
-//	KEYS: 1 claim; ARGV: 1 attempt id
+//	KEYS: 1 claim, 2 attempt-over marker; ARGV: 1 attempt id, 2 marker ttl (ms)
 var releaseScript = redis.NewScript(`
+redis.call('SET', KEYS[2], '1', 'PX', ARGV[2])
 if redis.call('GET', KEYS[1]) == ARGV[1] then
 	return redis.call('DEL', KEYS[1])
 end
@@ -256,16 +266,20 @@ const (
 //	      token, 9 family record ttl (ms)
 //
 // Create-only, and safe to repeat: a record that already holds exactly the
-// value being stored is what an earlier run of this call left.
+// value being stored is what an earlier run of this call left. Once the grant
+// has moved on (its family record names another refresh token) a copy of the
+// call that arrives late is refused, so it cannot bring the first tokens back.
 var issueScript = redis.NewScript(luaPrelude + `
 if redis.call('EXISTS', KEYS[3]) == 1 then
 	return -1
 end
+ensure_hash(KEYS[4])
+local cur = redis.call('HGET', KEYS[4], 'rt')
+if cur and cur ~= ARGV[7] then return 0 end
 local a = redis.call('GET', KEYS[1])
 if a and a ~= ARGV[1] then return 0 end
 local r = redis.call('GET', KEYS[2])
 if r and r ~= ARGV[3] then return 0 end
-ensure_hash(KEYS[4])
 redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
 redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[4])
 redis.call('SET', KEYS[5], ARGV[5], 'PX', ARGV[2])
@@ -534,6 +548,7 @@ func (m *Manager) claimAs(ctx context.Context, refreshToken, owner string) (*Ref
 		RefreshClaimPrefix + h,
 		RevokedTokenPrefix + h,
 		TokenFamilyPrefix + h,
+		AttemptOverPrefix + owner,
 	}
 	res, err := m.redis.Run(ctx, claimScript, keys, owner, ms(RefreshClaimTTL), fresh, ms(RefreshTTL*time.Second))
 	if err != nil {
@@ -579,17 +594,19 @@ func (m *Manager) claimAs(ctx context.Context, refreshToken, owner string) (*Ref
 	return &RefreshClaim{Token: refreshToken, Owner: owner, FamilyID: fam, Data: data}, nil
 }
 
-// ReleaseRefreshClaim gives a claim up without publishing. It deletes the claim
-// key only while the key still holds this attempt's id: an attempt whose claim
-// expired, was taken over, or was cleared by a revocation cannot disturb
-// whoever holds it now. The refresh record is untouched, so the token stays
-// usable.
+// ReleaseRefreshClaim gives a claim up without publishing, and ends the attempt.
+// It deletes the claim key only while the key still holds this attempt's id: an
+// attempt whose claim expired, was taken over, or was cleared by a revocation
+// cannot disturb whoever holds it now. The refresh record is untouched, so the
+// token stays usable. The attempt cannot claim again afterwards, even with a
+// copy of its own claim command that arrives late.
 func (m *Manager) ReleaseRefreshClaim(ctx context.Context, claim *RefreshClaim) {
 	m.releaseClaim(ctx, tokenHash(claim.Token), claim.Owner)
 }
 
 func (m *Manager) releaseClaim(ctx context.Context, tokenHash, owner string) {
-	if _, err := m.redis.Run(ctx, releaseScript, []string{RefreshClaimPrefix + tokenHash}, owner); err != nil {
+	keys := []string{RefreshClaimPrefix + tokenHash, AttemptOverPrefix + owner}
+	if _, err := m.redis.Run(ctx, releaseScript, keys, owner, ms(AttemptOverTTL)); err != nil {
 		m.logger.Warn("Failed to release refresh claim", "error", err)
 	}
 }

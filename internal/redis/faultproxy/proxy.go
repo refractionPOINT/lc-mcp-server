@@ -124,6 +124,7 @@ type Proxy struct {
 	onReply   func(Request, Reply) Verdict
 	conns     map[net.Conn]struct{}
 	closed    bool
+	done      chan struct{} // closed by Close: ends every wait for a Hold
 	wg        sync.WaitGroup
 }
 
@@ -134,7 +135,7 @@ func New(t testing.TB, target string) *Proxy {
 	if err != nil {
 		t.Fatalf("faultproxy: listen: %v", err)
 	}
-	p := &Proxy{t: t, ln: ln, target: target, conns: map[net.Conn]struct{}{}}
+	p := &Proxy{t: t, ln: ln, target: target, conns: map[net.Conn]struct{}{}, done: make(chan struct{})}
 	p.wg.Add(1)
 	go p.accept()
 	t.Cleanup(p.Close)
@@ -194,6 +195,7 @@ func (p *Proxy) Close() {
 		return
 	}
 	p.closed = true
+	close(p.done)
 	for c := range p.conns {
 		c.Close()
 	}
@@ -285,6 +287,8 @@ func (p *Proxy) serve(client net.Conn) {
 			close(verdict.hold.executed)
 			select {
 			case <-verdict.hold.release:
+			case <-p.done:
+				return
 			case <-time.After(30 * time.Second):
 			}
 		}

@@ -180,6 +180,12 @@ const (
 	// as the token could have), so a token that was already rotated away still
 	// leads revocation to the grant, and with it to the tokens that replaced it.
 	TokenFamilyPrefix = "oauth:tokfam:"
+	// AttemptOverPrefix + attempt id is left when a refresh attempt gives its claim
+	// up. A copy of that attempt's claim command that arrives late (a command the
+	// network delayed past the client's retry) must not take the claim back, or
+	// it would block the token, or let a late copy of the attempt's publish
+	// through.
+	AttemptOverPrefix = "oauth:attempt_over:"
 	// RotationPrefix + sha256(refresh token) records the outcome of that token's
 	// rotation: the owner of the claim and the successors it published. A
 	// publish that runs twice (a lost reply, retried by the client library)
@@ -201,6 +207,9 @@ const (
 	// revoked: a refresh token (RefreshTTL) or an access token with its grace
 	// period.
 	RevokedFamilyTTL = (RefreshTTL + TokenTTL + TokenGracePeriod) * time.Second
+	// AttemptOverTTL is how long a finished attempt is remembered: longer than a
+	// packet can be delayed and retransmitted by TCP.
+	AttemptOverTTL = 15 * time.Minute
 	// RotationRecordTTL is how long a rotation's outcome is kept for a retried
 	// publish to find; it only has to outlast the client library's retries.
 	RotationRecordTTL = 5 * time.Minute

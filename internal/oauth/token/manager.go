@@ -605,6 +605,12 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 // It never logs any part of the token: a prefix of a bearer token is part of
 // a credential.
 func (m *Manager) RevokeToken(ctx context.Context, token string, tokenTypeHint string) error {
+	// The hint comes from an unauthenticated request and is only logged: log it
+	// only when it is one of the two defined values.
+	if tokenTypeHint != "access_token" && tokenTypeHint != "refresh_token" && tokenTypeHint != "" {
+		tokenTypeHint = "other"
+	}
+
 	outcome, err := m.stateManager.RevokeToken(ctx, token)
 	if err != nil {
 		m.logger.Error("Failed to revoke token", "error", err, "token_type_hint", tokenTypeHint)
