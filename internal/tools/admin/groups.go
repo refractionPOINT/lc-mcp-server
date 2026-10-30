@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
@@ -546,10 +547,13 @@ func RegisterRemoveOrgFromGroup() {
 			if !ok || oid == "" {
 				return tools.ErrorResult("oid parameter is required"), nil
 			}
-			// The target org comes from an argument, so the transport's
-			// ai_agent.operate check (on the effective org) doesn't cover it.
-			if err := tools.RequireAIAgentAccessToOrg(ctx, oid); err != nil {
-				return tools.ErrorResultf("permission check for organization %s failed: %v", oid, err), nil
+			// Unlike add_org_to_group, no ai_agent.operate check on this org:
+			// removing it only takes access away, and the API asks nothing of the
+			// caller here beyond owning the group (it checks no permission on the
+			// removed org). Requiring the org's consent would stop an owner who has
+			// lost access to an org, or whose org blocks AI agents, from removing it.
+			if err := auth.ValidateOID(oid); err != nil {
+				return tools.ErrorResultf("invalid organization ID: %v", err), nil
 			}
 
 			client, err := tools.GetClient(ctx)

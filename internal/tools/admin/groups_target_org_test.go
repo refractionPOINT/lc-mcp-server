@@ -15,8 +15,10 @@ import (
 )
 
 // add_org_to_group / remove_org_from_group act on an organization named in an
-// argument. That org must pass the same ai_agent.operate check as an
-// org-scoped call, before any API call is made.
+// argument. The org is validated before any API call is made; adding it, which
+// gives the group access to it, must also pass the same ai_agent.operate check as
+// an org-scoped call. Removing it needs no check (see
+// TestRemoveOrgFromGroupDoesNotNeedAIAgentOperateOnTheRemovedOrg).
 func TestGroupToolsCheckTheTargetOrg(t *testing.T) {
 	RegisterAddOrgToGroup()
 	RegisterRemoveOrgFromGroup()
@@ -49,14 +51,16 @@ func TestGroupToolsCheckTheTargetOrg(t *testing.T) {
 				assert.Contains(t, text(res), "invalid organization ID")
 			}
 		})
-
-		t.Run(name+"/permission check fails closed", func(t *testing.T) {
-			// With enforcement on, a check that can't complete (the fake key
-			// can't build an API client) denies the call.
-			res, err := reg.Invoke(userCtx(true), map[string]any{"gid": "g1", "oid": "11111111-2222-3333-4444-555555555555"})
-			require.NoError(t, err)
-			require.True(t, res.IsError)
-			assert.Contains(t, text(res), "permission check for organization")
-		})
 	}
+
+	t.Run("add_org_to_group/permission check fails closed", func(t *testing.T) {
+		reg, ok := tools.GetTool("add_org_to_group")
+		require.True(t, ok)
+		// With enforcement on, a check that can't complete (the fake key
+		// can't build an API client) denies the call.
+		res, err := reg.Invoke(userCtx(true), map[string]any{"gid": "g1", "oid": "11111111-2222-3333-4444-555555555555"})
+		require.NoError(t, err)
+		require.True(t, res.IsError)
+		assert.Contains(t, text(res), "permission check for organization")
+	})
 }
