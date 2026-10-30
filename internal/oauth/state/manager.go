@@ -46,9 +46,14 @@ func (m *Manager) GenerateState() (string, error) {
 // ErrAlreadyExists is returned when a create-only record already exists.
 var ErrAlreadyExists = errors.New("record already exists")
 
-// createOnly stores value under key only if the key is free (SET NX).
+// createOnly stores value under key only if the key is free. A key that already
+// holds exactly this value is what an earlier run of the same call left (the
+// Redis client sends a command again when its reply was lost), so that is
+// success, not a conflict: values carry random ids, so another writer cannot
+// produce the same one. Anything else under the key is ErrAlreadyExists and is
+// never overwritten.
 func (m *Manager) createOnly(ctx context.Context, key, value string, ttlSeconds int) error {
-	ok, err := m.redis.SetNX(ctx, key, value, time.Duration(ttlSeconds)*time.Second)
+	ok, err := m.redis.CreateOnly(ctx, key, value, time.Duration(ttlSeconds)*time.Second)
 	if err != nil {
 		return err
 	}
@@ -532,12 +537,8 @@ func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientReg
 
 	// No expiration for client registrations. Create-only: a registration (and
 	// so the redirect URIs it vouches for) is never replaced under its id.
-	ok, err := m.redis.SetNX(ctx, key, string(data), 0)
-	if err != nil {
+	if err := m.createOnly(ctx, key, string(data), 0); err != nil {
 		return fmt.Errorf("failed to store client registration: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("failed to store client registration: %w", ErrAlreadyExists)
 	}
 
 	m.logger.Info("Stored client registration")

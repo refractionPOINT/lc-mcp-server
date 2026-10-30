@@ -634,6 +634,70 @@ func TestSetNX(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestCreateOnly(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	ctx := context.Background()
+
+	ok, err := client.CreateOnly(ctx, "k", "first", time.Minute)
+	require.NoError(t, err)
+	assert.True(t, ok, "a free key is created")
+	assert.Equal(t, time.Minute, mr.TTL("k"))
+
+	t.Run("the same value again is what a repeated command finds", func(t *testing.T) {
+		mr.FastForward(20 * time.Second)
+		ok, err := client.CreateOnly(ctx, "k", "first", time.Minute)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, 40*time.Second, mr.TTL("k"), "the repeat does not renew the expiry")
+	})
+
+	t.Run("another value is never written", func(t *testing.T) {
+		ok, err := client.CreateOnly(ctx, "k", "second", time.Minute)
+		require.NoError(t, err)
+		assert.False(t, ok)
+		v, _ := client.Get(ctx, "k")
+		assert.Equal(t, "first", v)
+	})
+
+	t.Run("a value that only starts or ends the same is another value", func(t *testing.T) {
+		for _, other := range []string{"fir", "first!", "", "FIRST"} {
+			ok, err := client.CreateOnly(ctx, "k", other, time.Minute)
+			require.NoError(t, err)
+			assert.False(t, ok, "%q", other)
+		}
+	})
+
+	t.Run("zero means no expiry", func(t *testing.T) {
+		ok, err := client.CreateOnly(ctx, "forever", "v", 0)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Zero(t, mr.TTL("forever"))
+		ok, err = client.CreateOnly(ctx, "forever", "v", 0)
+		require.NoError(t, err)
+		assert.True(t, ok)
+	})
+
+	t.Run("a sub-millisecond expiry still expires", func(t *testing.T) {
+		ok, err := client.CreateOnly(ctx, "blink", "v", time.Microsecond)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.NotZero(t, mr.TTL("blink"))
+	})
+
+	t.Run("a key of another type is a conflict, not an error", func(t *testing.T) {
+		mr.HSet("hash", "f", "v")
+		ok, err := client.CreateOnly(ctx, "hash", "v", time.Minute)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("a negative expiry is refused", func(t *testing.T) {
+		_, err := client.CreateOnly(ctx, "neg", "v", -time.Second)
+		assert.Error(t, err)
+		assert.False(t, mr.Exists("neg"))
+	})
+}
+
 func TestSetXXKeepTTL(t *testing.T) {
 	client, mr := setupTestRedis(t)
 	ctx := context.Background()
