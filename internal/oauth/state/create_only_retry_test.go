@@ -2,7 +2,6 @@ package state
 
 import (
 	"context"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,8 +31,8 @@ func proxiedManager(t *testing.T) (*Manager, *faultproxy.Proxy, *miniredis.Minir
 	rc, err := redis.New(&redis.Config{URL: "redis://" + proxy.Addr()}, testLogger())
 	require.NoError(t, err)
 
-	os.Setenv("REDIS_ENCRYPTION_KEY", generateEncryptionKey(t))
-	defer os.Unsetenv("REDIS_ENCRYPTION_KEY")
+	// t.Setenv restores any previous value when the test ends.
+	t.Setenv("REDIS_ENCRYPTION_KEY", generateEncryptionKey(t))
 	enc, err := crypto.NewTokenEncryption(testLogger())
 	require.NoError(t, err)
 	return NewManager(rc, enc, testLogger()), proxy, mr

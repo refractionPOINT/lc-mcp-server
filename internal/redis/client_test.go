@@ -635,15 +635,21 @@ func TestSetNX(t *testing.T) {
 }
 
 func TestCreateOnly(t *testing.T) {
-	client, mr := setupTestRedis(t)
 	ctx := context.Background()
-
-	ok, err := client.CreateOnly(ctx, "k", "first", time.Minute)
-	require.NoError(t, err)
-	assert.True(t, ok, "a free key is created")
-	assert.Equal(t, time.Minute, mr.TTL("k"))
+	// Each subtest gets its own Redis (and clock) with "k" freshly created as
+	// "first", so they don't depend on each other's order.
+	created := func(t *testing.T) (*Client, *miniredis.Miniredis) {
+		t.Helper()
+		client, mr := setupTestRedis(t)
+		ok, err := client.CreateOnly(ctx, "k", "first", time.Minute)
+		require.NoError(t, err)
+		require.True(t, ok, "a free key is created")
+		require.Equal(t, time.Minute, mr.TTL("k"))
+		return client, mr
+	}
 
 	t.Run("the same value again is what a repeated command finds", func(t *testing.T) {
+		client, mr := created(t)
 		mr.FastForward(20 * time.Second)
 		ok, err := client.CreateOnly(ctx, "k", "first", time.Minute)
 		require.NoError(t, err)
@@ -652,6 +658,7 @@ func TestCreateOnly(t *testing.T) {
 	})
 
 	t.Run("another value is never written", func(t *testing.T) {
+		client, _ := created(t)
 		ok, err := client.CreateOnly(ctx, "k", "second", time.Minute)
 		require.NoError(t, err)
 		assert.False(t, ok)
@@ -660,14 +667,18 @@ func TestCreateOnly(t *testing.T) {
 	})
 
 	t.Run("a value that only starts or ends the same is another value", func(t *testing.T) {
+		client, _ := created(t)
 		for _, other := range []string{"fir", "first!", "", "FIRST"} {
 			ok, err := client.CreateOnly(ctx, "k", other, time.Minute)
 			require.NoError(t, err)
 			assert.False(t, ok, "%q", other)
 		}
+		v, _ := client.Get(ctx, "k")
+		assert.Equal(t, "first", v)
 	})
 
 	t.Run("zero means no expiry", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
 		ok, err := client.CreateOnly(ctx, "forever", "v", 0)
 		require.NoError(t, err)
 		assert.True(t, ok)
@@ -678,6 +689,7 @@ func TestCreateOnly(t *testing.T) {
 	})
 
 	t.Run("a sub-millisecond expiry still expires", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
 		ok, err := client.CreateOnly(ctx, "blink", "v", time.Microsecond)
 		require.NoError(t, err)
 		assert.True(t, ok)
@@ -685,6 +697,7 @@ func TestCreateOnly(t *testing.T) {
 	})
 
 	t.Run("a key of another type is a conflict, not an error", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
 		mr.HSet("hash", "f", "v")
 		ok, err := client.CreateOnly(ctx, "hash", "v", time.Minute)
 		require.NoError(t, err)
@@ -692,6 +705,7 @@ func TestCreateOnly(t *testing.T) {
 	})
 
 	t.Run("a negative expiry is refused", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
 		_, err := client.CreateOnly(ctx, "neg", "v", -time.Second)
 		assert.Error(t, err)
 		assert.False(t, mr.Exists("neg"))
