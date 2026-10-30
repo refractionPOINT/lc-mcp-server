@@ -839,25 +839,29 @@ func TestCache_EntryIsInvalidatedByDefinitiveAnswers(t *testing.T) {
 	cases := map[string]struct {
 		serve       func(w http.ResponseWriter, r *http.Request, self string)
 		wantInvalid bool
+		// keepKnown: a valid answer that just isn't cacheable replaces the
+		// cached document but keeps the known marker (it authorizes nothing and
+		// only selects the fetch budget).
+		keepKnown bool
 	}{
-		"http 404": {func(w http.ResponseWriter, r *http.Request, _ string) { http.NotFound(w, r) }, true},
-		"http 410": {func(w http.ResponseWriter, _ *http.Request, _ string) { w.WriteHeader(http.StatusGone) }, true},
+		"http 404": {func(w http.ResponseWriter, r *http.Request, _ string) { http.NotFound(w, r) }, true, false},
+		"http 410": {func(w http.ResponseWriter, _ *http.Request, _ string) { w.WriteHeader(http.StatusGone) }, true, false},
 		"invalid document": {func(w http.ResponseWriter, _ *http.Request, self string) {
 			writeDoc(w, self, func(m map[string]any) { delete(m, "client_name") })
-		}, true},
+		}, true, false},
 		"now a confidential client": {func(w http.ResponseWriter, _ *http.Request, self string) {
 			writeDoc(w, self, func(m map[string]any) { m["token_endpoint_auth_method"] = "client_secret_basic" })
-		}, true},
+		}, true, false},
 		"no-store replacement": {func(w http.ResponseWriter, _ *http.Request, self string) {
 			w.Header().Set("Cache-Control", "no-store")
 			writeDoc(w, self, func(m map[string]any) { m["client_name"] = "Replaced" })
-		}, true},
+		}, true, true},
 		"no-cache replacement": {func(w http.ResponseWriter, _ *http.Request, self string) {
 			w.Header().Set("Cache-Control", "no-cache")
 			writeDoc(w, self, nil)
-		}, true},
+		}, true, true},
 		// A transient failure says nothing about the document.
-		"http 500": {func(w http.ResponseWriter, _ *http.Request, _ string) { w.WriteHeader(500) }, false},
+		"http 500": {func(w http.ResponseWriter, _ *http.Request, _ string) { w.WriteHeader(500) }, false, false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -887,7 +891,7 @@ func TestCache_EntryIsInvalidatedByDefinitiveAnswers(t *testing.T) {
 			require.EqualValues(t, 2, env.hits.Load(), "the refresh must have reached the network")
 
 			assert.Equal(t, !tc.wantInvalid, env.hasDoc(id))
-			assert.Equal(t, !tc.wantInvalid, env.hasKnown(id))
+			assert.Equal(t, !tc.wantInvalid || tc.keepKnown, env.hasKnown(id))
 		})
 	}
 }
