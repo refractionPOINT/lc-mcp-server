@@ -2,8 +2,8 @@ package http
 
 import (
 	"context"
+	"maps"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -25,6 +25,15 @@ func (s *Server) setupRoutes() {
 
 	// OAuth discovery endpoints (RFC 8414, RFC 9728)
 	s.mux.HandleFunc("/.well-known/oauth-protected-resource", s.handleProtectedResourceMetadata)
+	// RFC 9728 path-inserted form for a resource with a path component
+	// (/.well-known/oauth-protected-resource/mcp, .../mcp/<profile>), which
+	// clients since the 2025-06-18 spec try before the root form. Every MCP
+	// path shares one protected resource, so they all get the same document.
+	s.mux.HandleFunc("/.well-known/oauth-protected-resource/", s.handlePathInsertedProtectedResourceMetadata)
+	// Some clients append the well-known suffix to the MCP URL instead.
+	s.mux.HandleFunc("/mcp/.well-known/oauth-protected-resource", func(w http.ResponseWriter, r *http.Request) {
+		s.writeProtectedResourceMetadataFor(w, "/mcp")
+	})
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server", s.handleAuthorizationServerMetadata)
 	// Claude Code also looks for the /mcp variant
 	s.mux.HandleFunc("/.well-known/oauth-authorization-server/mcp", s.handleAuthorizationServerMetadata)
@@ -160,6 +169,54 @@ func (s *Server) handleProtectedResourceMetadata(w http.ResponseWriter, r *http.
 	s.oauthHandlers.HandleProtectedResourceMetadata(w, r)
 }
 
+// handlePathInsertedProtectedResourceMetadata serves the protected resource
+// metadata for /.well-known/oauth-protected-resource/<mcp path>, and 404s any
+// suffix that is not an MCP endpoint of this server.
+func (s *Server) handlePathInsertedProtectedResourceMetadata(w http.ResponseWriter, r *http.Request) {
+	suffix := strings.TrimPrefix(r.URL.Path, "/.well-known/oauth-protected-resource")
+	if !s.isMCPEndpointPath(suffix) {
+		http.NotFound(w, r)
+		return
+	}
+	s.writeProtectedResourceMetadataFor(w, suffix)
+}
+
+// writeProtectedResourceMetadataFor serves the protected resource metadata for
+// the MCP endpoint at path. RFC 9728 section 3.3 requires "resource" to be
+// exactly the resource the well-known URL was derived from, and strict clients
+// discard a document that names another one, so it is set per path.
+func (s *Server) writeProtectedResourceMetadataFor(w http.ResponseWriter, path string) {
+	if s.metadataProvider == nil {
+		s.writeJSON(w, http.StatusNotFound, map[string]string{"error": "OAuth is not enabled on this server"})
+		return
+	}
+	doc := maps.Clone(s.metadataProvider.GetProtectedResourceMetadata())
+	doc["resource"] = s.metadataProvider.GetServerURL() + path
+	s.writeJSON(w, http.StatusOK, doc)
+}
+
+// isMCPEndpointPath reports whether path is one of the routes served by
+// handleMCPRequest: /mcp, /mcp/v1, /mcp/<profile> or /mcp/v1/<profile>.
+func (s *Server) isMCPEndpointPath(path string) bool {
+	rest, ok := strings.CutPrefix(path, "/mcp")
+	if !ok {
+		return false
+	}
+	rest = strings.TrimPrefix(rest, "/"+APIVersionV1)
+	if rest == "" {
+		return true
+	}
+	profile, ok := strings.CutPrefix(rest, "/")
+	if !ok || profile == "" {
+		return false
+	}
+	if profile == "all" {
+		return true
+	}
+	_, known := tools.ProfileDefinitions[profile]
+	return known
+}
+
 func (s *Server) handleAuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) {
 	s.oauthHandlers.HandleAuthorizationServerMetadata(w, r)
 }
@@ -248,27 +305,9 @@ func (s *Server) handleProviderSelectionWithProvider(w http.ResponseWriter, r *h
 		return
 	}
 
-	// Get stored OAuth parameters from session
-	params, err := s.stateManager.ConsumeSelectionSession(r.Context(), sessionID)
-	if err != nil || params == nil {
-		s.writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error":             "invalid_request",
-			"error_description": "Session expired or invalid",
-		})
-		return
-	}
-
-	// Add provider to parameters
-	params["provider"] = provider
-
-	// Build authorize URL with all parameters using proper URL encoding
-	q := url.Values{}
-	for k, v := range params {
-		q.Set(k, v)
-	}
-
-	authorizeURL := "/authorize?" + q.Encode()
-	http.Redirect(w, r, authorizeURL, http.StatusFound)
+	// Consume the session and go back to /authorize with the provider set
+	// (CIMD clients only from the browser that was shown the selection page).
+	s.oauthHandlers.CompleteProviderSelection(w, r, sessionID, provider)
 }
 
 func (s *Server) handleMFAChallenge(w http.ResponseWriter, r *http.Request) {

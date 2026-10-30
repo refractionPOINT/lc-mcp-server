@@ -2,7 +2,9 @@ package endpoints
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // OAuthError represents an OAuth 2.0 error response
@@ -25,6 +27,7 @@ const (
 	ErrInvalidClient           = "invalid_client"
 	ErrInvalidGrant            = "invalid_grant"
 	ErrUnsupportedGrantType    = "unsupported_grant_type"
+	ErrInvalidTarget           = "invalid_target" // RFC 8707 section 2
 )
 
 // NewOAuthError creates a new OAuth error
@@ -43,15 +46,61 @@ func WriteOAuthError(w http.ResponseWriter, err *OAuthError) {
 	json.NewEncoder(w).Encode(err)
 }
 
-// WriteOAuthErrorRedirect writes an OAuth error as a redirect
-func WriteOAuthErrorRedirect(w http.ResponseWriter, r *http.Request, redirectURI, state, errorCode, errorDescription string) {
-	// Build error redirect URL
-	redirectURL := redirectURI + "?error=" + errorCode
-	if errorDescription != "" {
-		redirectURL += "&error_description=" + errorDescription
+// buildAuthorizationResponseURL appends params to the client's redirect URI as
+// query parameters. Any query already present on the redirect URI is preserved;
+// params override same-named entries so a registered URI cannot shadow the
+// protocol parameters. Values are percent-encoded.
+func buildAuthorizationResponseURL(redirectURI string, params url.Values) (string, error) {
+	u, err := url.Parse(redirectURI)
+	if err != nil {
+		return "", fmt.Errorf("invalid redirect URI: %w", err)
 	}
+	if u.Scheme == "" {
+		return "", fmt.Errorf("invalid redirect URI: missing scheme")
+	}
+	q := u.Query()
+	for k, vs := range params {
+		q[k] = vs
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// authorizationResponseParams returns the parameters common to every
+// authorization response: state (when the client sent one) and the RFC 9207
+// "iss" parameter. iss must equal the "issuer" in the authorization server
+// metadata, byte for byte, because clients compare with simple string equality.
+func authorizationResponseParams(issuer, state string) url.Values {
+	params := url.Values{}
 	if state != "" {
-		redirectURL += "&state=" + state
+		params.Set("state", state)
+	}
+	params.Set("iss", issuer)
+	return params
+}
+
+// AuthorizationSuccessURL builds the redirect back to the client carrying the
+// authorization code, state and the RFC 9207 iss parameter.
+func AuthorizationSuccessURL(issuer, redirectURI, state, code string) (string, error) {
+	params := authorizationResponseParams(issuer, state)
+	params.Set("code", code)
+	return buildAuthorizationResponseURL(redirectURI, params)
+}
+
+// WriteOAuthErrorRedirect writes an OAuth error as a redirect to the client,
+// including the RFC 9207 iss parameter. If the redirect URI cannot be used it
+// fails closed with a local JSON server_error instead of redirecting.
+func WriteOAuthErrorRedirect(w http.ResponseWriter, r *http.Request, issuer, redirectURI, state, errorCode, errorDescription string) {
+	params := authorizationResponseParams(issuer, state)
+	params.Set("error", errorCode)
+	if errorDescription != "" {
+		params.Set("error_description", errorDescription)
+	}
+
+	redirectURL, err := buildAuthorizationResponseURL(redirectURI, params)
+	if err != nil {
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to build authorization response", http.StatusInternalServerError))
+		return
 	}
 
 	http.Redirect(w, r, redirectURL, http.StatusFound)

@@ -72,10 +72,19 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 		// Issuer identifier for this authorization server
 		"issuer": p.serverURL,
 
+		// RFC 9207: authorization responses (success and error) carry an "iss"
+		// parameter equal to the issuer above. Clients that see this flag reject
+		// responses without a matching iss.
+		"authorization_response_iss_parameter_supported": true,
+
 		// OAuth 2.0 endpoints
 		"authorization_endpoint": p.serverURL + "/authorize",
 		"token_endpoint":         p.serverURL + "/token",
-		"registration_endpoint":  p.serverURL + "/register",
+		"registration_endpoint":  p.serverURL + "/register", // deprecated in favour of CIMD
+
+		// OAuth Client ID Metadata Documents: an https URL client_id is resolved
+		// by fetching the document it points to.
+		"client_id_metadata_document_supported": true,
 
 		// Optional endpoints
 		"revocation_endpoint":    p.serverURL + "/revoke",
@@ -104,8 +113,9 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 		// We support public clients (no client authentication)
 		"token_endpoint_auth_methods_supported": []string{"none"},
 
-		// Response modes
-		"response_modes_supported": []string{"query", "fragment"},
+		// Response modes: authorization responses are only ever delivered in
+		// the query string, so that is the only mode advertised.
+		"response_modes_supported": []string{"query"},
 
 		// OAuth 2.0 features
 		"require_request_uri_registration":      false,
@@ -129,8 +139,17 @@ func (p *Provider) GetAuthorizationServerMetadata() map[string]interface{} {
 // GenerateWWWAuthenticateHeader generates a WWW-Authenticate header for OAuth challenges
 // Used in 401 and 403 responses to guide clients through OAuth flow
 func (p *Provider) GenerateWWWAuthenticateHeader(error, errorDescription, scope string, statusCode int) string {
+	return p.GenerateWWWAuthenticateHeaderForResource("", error, errorDescription, scope, statusCode)
+}
+
+// GenerateWWWAuthenticateHeaderForResource is GenerateWWWAuthenticateHeader
+// for a protected resource with a path component (for example "/mcp/v1"):
+// resource_metadata then points at the RFC 9728 path-inserted metadata URL,
+// whose "resource" names exactly that path. An empty resourcePath points at
+// the root metadata document.
+func (p *Provider) GenerateWWWAuthenticateHeaderForResource(resourcePath, error, errorDescription, scope string, statusCode int) string {
 	// Base challenge with metadata URL
-	metadataURL := p.serverURL + "/.well-known/oauth-protected-resource"
+	metadataURL := p.serverURL + "/.well-known/oauth-protected-resource" + resourcePath
 	parts := []string{fmt.Sprintf(`Bearer resource_metadata="%s"`, metadataURL)}
 
 	// Add scope if provided

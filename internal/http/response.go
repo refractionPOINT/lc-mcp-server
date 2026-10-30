@@ -28,27 +28,3 @@ func (rw *ResponseWriter) WriteJSON(status int, data interface{}) {
 		rw.logger.Error("Failed to encode JSON response", "error", err)
 	}
 }
-
-// WriteJSONRPCSuccess writes a successful JSON-RPC 2.0 response
-func (rw *ResponseWriter) WriteJSONRPCSuccess(id interface{}, result interface{}) {
-	response := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"result":  result,
-	}
-	rw.WriteJSON(http.StatusOK, response)
-}
-
-// WriteJSONRPCError writes a JSON-RPC 2.0 error response
-func (rw *ResponseWriter) WriteJSONRPCError(id interface{}, code int, message string, data string) {
-	response := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"error": map[string]interface{}{
-			"code":    code,
-			"message": message,
-			"data":    data,
-		},
-	}
-	rw.WriteJSON(http.StatusOK, response)
-}

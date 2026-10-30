@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,7 +36,7 @@ func (s *Server) requestHasCredentials(r *http.Request) bool {
 //
 // oauthError is an RFC 6750 error code ("invalid_token") or "" when no
 // credential was presented at all.
-func (s *Server) writeAuthChallenge(w http.ResponseWriter, id interface{}, oauthError, description string) {
+func (s *Server) writeAuthChallenge(w http.ResponseWriter, r *http.Request, id json.RawMessage, oauthError, description string) {
 	var challenge string
 	if s.metadataProvider != nil {
 		// RFC 6750 3.1: a request with no credential gets no error attributes.
@@ -43,7 +44,14 @@ func (s *Server) writeAuthChallenge(w http.ResponseWriter, id interface{}, oauth
 		if oauthError != "" {
 			headerDescription = description
 		}
-		challenge = s.metadataProvider.GenerateWWWAuthenticateHeader(oauthError, headerDescription, "", http.StatusUnauthorized)
+		// Point at the metadata document for the exact MCP path the client
+		// used, so its "resource" matches the URL the client is talking to
+		// (RFC 9728 section 3.3). The bare root path keeps the root document.
+		resourcePath := ""
+		if r != nil && r.URL.Path != "/" && s.isMCPEndpointPath(r.URL.Path) {
+			resourcePath = r.URL.Path
+		}
+		challenge = s.metadataProvider.GenerateWWWAuthenticateHeaderForResource(resourcePath, oauthError, headerDescription, "", http.StatusUnauthorized)
 	} else {
 		// OAuth is not configured (API key or server credential deployments):
 		// there is no metadata to point to, but the header is still mandatory.
@@ -53,13 +61,5 @@ func (s *Server) writeAuthChallenge(w http.ResponseWriter, id interface{}, oauth
 		}
 	}
 	w.Header().Set("WWW-Authenticate", challenge)
-	NewResponseWriter(w, s.logger).WriteJSON(http.StatusUnauthorized, map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"error": map[string]interface{}{
-			"code":    -32000,
-			"message": "Unauthorized",
-			"data":    description,
-		},
-	})
+	s.writeRPCError(w, id, newRPCError(http.StatusUnauthorized, rpcServerError, "Unauthorized", description))
 }
