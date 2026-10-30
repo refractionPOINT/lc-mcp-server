@@ -16,24 +16,28 @@ import (
 // bumps the generation, so any result computed before it can no longer be
 // published. Both steps are single Lua scripts, hence atomic.
 //
-// Generations are random values, not counters: a counter that expired and was
-// recreated would restart at the same numbers, so a writer holding the old
-// value could match the new key and publish what was invalidated after it
-// read. A fresh random value never repeats.
+// Generations never go back to a value already used:
+//   - They are not counters: a counter that expired and was recreated would
+//     restart at the same numbers, so a writer holding an old value could match.
+//   - They are not installed verbatim either: go-redis retries a command whose
+//     reply was lost, so a replayed "set generation to G1" could land after a
+//     later step set G2 and bring G1 back. Instead every step derives the next
+//     generation from the CURRENT one (sha1 of current value + a per-call
+//     nonce), so a replayed step only advances it further.
 
 // publishIfGeneration: KEYS[1] is the generation key, KEYS[2..] the keys to
 // write. ARGV[1] is the generation the caller read ("" for absent), ARGV[2] the
-// generation key's TTL in ms, ARGV[3] the new generation, then one (value, ttl
-// ms) pair per written key. On a match it replaces the generation (so an older
-// in-flight writer can't overwrite what was just published) and writes; it
-// returns 1, else 0.
+// generation key's TTL in ms, ARGV[3] a nonce, then one (value, ttl ms) pair
+// per written key. On a match it advances the generation (so an older in-flight
+// writer can't overwrite what was just published) and writes; it returns 1,
+// else 0.
 var publishIfGeneration = redis.NewScript(`
 	local cur = redis.call('GET', KEYS[1])
 	if cur == false then cur = '' end
 	if cur ~= ARGV[1] then
 		return 0
 	end
-	redis.call('SET', KEYS[1], ARGV[3], 'PX', ARGV[2])
+	redis.call('SET', KEYS[1], redis.sha1hex(cur .. ':' .. ARGV[3]), 'PX', ARGV[2])
 	for i = 2, #KEYS do
 		redis.call('SET', KEYS[i], ARGV[2 * i], 'PX', ARGV[2 * i + 1])
 	end
@@ -42,9 +46,12 @@ var publishIfGeneration = redis.NewScript(`
 
 // bumpGeneration: KEYS[1] is the generation key, KEYS[2..1+ARGV[2]] are deleted
 // and any further keys only get their expiry reset to ARGV[3] ms if they
-// exist. ARGV[1] is the generation key's TTL in ms, ARGV[4] the new generation.
+// exist. ARGV[1] is the generation key's TTL in ms, ARGV[4] a nonce; the
+// generation advances from its current value.
 var bumpGeneration = redis.NewScript(`
-	redis.call('SET', KEYS[1], ARGV[4], 'PX', ARGV[1])
+	local cur = redis.call('GET', KEYS[1])
+	if cur == false then cur = '' end
+	redis.call('SET', KEYS[1], redis.sha1hex(cur .. ':' .. ARGV[4]), 'PX', ARGV[1])
 	local ndel = tonumber(ARGV[2])
 	for i = 2, #KEYS do
 		if i <= 1 + ndel then
@@ -96,7 +103,7 @@ func (c *Client) BumpGeneration(ctx context.Context, genKey string, genTTL time.
 	return bumpGeneration.Run(ctx, c.client, keys, genTTL.Milliseconds(), len(del), touchTTL.Milliseconds(), next).Err()
 }
 
-// newGeneration returns a fresh, never-repeating generation value.
+// newGeneration returns a fresh per-call nonce mixed into the next generation.
 func newGeneration() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
