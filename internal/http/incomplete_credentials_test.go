@@ -346,3 +346,157 @@ func TestToolsListStaysOpenWithIncompleteHeaders(t *testing.T) {
 	schema = listedTool(t, resp, protoOrgTool)["inputSchema"].(map[string]any)
 	assert.NotContains(t, schema["properties"], "oid")
 }
+
+// A credential header that is present with an empty value is judged by being
+// sent, not by its value: it is a request aimed at some identity that did not
+// name it, so it never runs as the server.
+var emptyCredentialSets = []headerSet{
+	{"Authorization": ""},
+	{"X-LC-UID": ""},
+	{"X-LC-OID": ""},
+	{"X-LC-API-KEY": ""},
+	{"X-LC-UID": "", "X-LC-OID": "", "X-LC-API-KEY": ""},
+	{"X-LC-UID": testUID, "X-LC-API-KEY": ""},
+	{"X-LC-OID": testOID, "X-LC-API-KEY": ""},
+	{"X-LC-UID": "", "X-LC-API-KEY": testAPIKey},
+	{"X-LC-OID": "", "X-LC-API-KEY": testAPIKey},
+	{"Authorization": "", "X-LC-OID": testOID},
+	{"Authorization": "", "X-LC-UID": testUID},
+}
+
+func TestEmptyCredentialHeadersNeverFallBackToServerCredentials(t *testing.T) {
+	for _, server := range []struct {
+		name  string
+		creds func() *auth.AuthContext
+	}{
+		{"server org credentials", serverOrgCreds},
+		{"server user credentials", serverUserCreds},
+		{"no server credentials", func() *auth.AuthContext { return nil }},
+	} {
+		for _, set := range emptyCredentialSets {
+			t.Run(server.name+"/"+set.names()+"/"+set.values(), func(t *testing.T) {
+				s := newProtocolTestServer(t)
+				s.serverAuthCtx = server.creds()
+
+				resolved, failure := resolveWith(t, s, set)
+				require.NotNil(t, failure, "a present-but-empty credential header must be rejected")
+				assert.Nil(t, resolved)
+				assert.True(t, failure.challenge, "answered with the 401 challenge")
+
+				req, err := http.NewRequest(http.MethodPost, "/mcp", nil)
+				require.NoError(t, err)
+				for k, v := range set {
+					req.Header.Set(k, v)
+				}
+				assert.False(t, s.requestHasCredentials(req), "the session-opening gate agrees")
+			})
+		}
+	}
+}
+
+func (h headerSet) values() string {
+	var n []string
+	for _, k := range strings.Split(h.names(), "+") {
+		if h[k] == "" {
+			n = append(n, k+"=empty")
+		}
+	}
+	return strings.Join(n, ",")
+}
+
+func TestEmptyCredentialHeadersOverHTTPNeverRunAsTheServer(t *testing.T) {
+	for _, modern := range []bool{false, true} {
+		for _, set := range emptyCredentialSets {
+			name := "legacy/"
+			if modern {
+				name = "modern/"
+			}
+			t.Run(name+set.names()+"/"+set.values(), func(t *testing.T) {
+				s := newProtocolTestServer(t)
+				ran := registerProbeTool(t)
+				s.serverAuthCtx = serverOrgCreds()
+
+				headers := map[string]string{"X-MCP-Tools": probeTool}
+				var body map[string]any
+				if modern {
+					var h map[string]string
+					body, h = modernRequest(1, "tools/call", map[string]any{"name": probeTool, "arguments": map[string]any{}})
+					delete(h, "X-LC-OID")
+					delete(h, "X-LC-API-KEY")
+					for k, v := range h {
+						headers[k] = v
+					}
+				} else {
+					body = map[string]any{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": map[string]any{"name": probeTool, "arguments": map[string]any{}}}
+				}
+				for k, v := range set {
+					headers[k] = v
+				}
+				resp := postJSON(t, s, "/mcp", body, headers)
+
+				require.Equal(t, http.StatusUnauthorized, resp.Status, "%s", resp.Raw)
+				assert.NotEmpty(t, resp.Header.Get("WWW-Authenticate"))
+				assert.Empty(t, *ran, "the tool must not run as the server")
+			})
+		}
+	}
+}
+
+func TestEmptyCredentialHeadersRefuseSessionOpening(t *testing.T) {
+	for _, set := range emptyCredentialSets {
+		t.Run(set.names()+"/"+set.values(), func(t *testing.T) {
+			s, _ := createOAuthTestServer(t)
+			s.serverAuthCtx = serverOrgCreds()
+
+			init := postMCP(t, s, "/mcp", "initialize", set)
+			assert.Equal(t, http.StatusUnauthorized, init.Code)
+
+			body, headers := modernRequest(1, "server/discover", nil)
+			delete(headers, "X-LC-OID")
+			delete(headers, "X-LC-API-KEY")
+			for k, v := range set {
+				headers[k] = v
+			}
+			resp := postJSON(t, s, "/mcp", body, headers)
+			assert.Equal(t, http.StatusUnauthorized, resp.Status)
+		})
+	}
+}
+
+// tools/list never rejects a caller; an empty credential header does not
+// resolve, so the modern listing keeps the oid parameter rather than claiming
+// the server's pinned org.
+func TestToolsListStaysOpenWithEmptyCredentialHeaders(t *testing.T) {
+	for _, header := range []string{"Authorization", "X-LC-UID", "X-LC-OID", "X-LC-API-KEY"} {
+		t.Run(header, func(t *testing.T) {
+			s := newProtocolTestServer(t)
+			registerOrgScopedTool(t)
+			s.serverAuthCtx = serverOrgCreds()
+
+			body, headers := modernRequest(1, "tools/list", nil)
+			delete(headers, "X-LC-OID")
+			delete(headers, "X-LC-API-KEY")
+			headers[header] = ""
+			headers["X-MCP-Tools"] = protoOrgTool
+			resp := postJSON(t, s, "/mcp", body, headers)
+			require.Equal(t, http.StatusOK, resp.Status, "%s", resp.Raw)
+			schema := listedTool(t, resp, protoOrgTool)["inputSchema"].(map[string]any)
+			assert.Contains(t, schema["properties"], "oid")
+
+			// Legacy era: the listing is the one the server always had.
+			legacy := postMCP(t, s, "/mcp", "tools/list", map[string]string{header: "", "X-MCP-Tools": protoOrgTool})
+			assert.Equal(t, http.StatusOK, legacy.Code)
+		})
+	}
+}
+
+func TestEmptyAuthorizationDoesNotMaskACompleteHeaderSet(t *testing.T) {
+	// A complete, non-empty header set is a credential of its own: an extra
+	// empty Authorization neither falls back to the server nor blocks it.
+	s := newProtocolTestServer(t)
+	s.serverAuthCtx = serverOrgCreds()
+	resolved, failure := resolveWith(t, s, map[string]string{"Authorization": "", "X-LC-OID": testOID, "X-LC-API-KEY": testAPIKey})
+	require.Nil(t, failure)
+	assert.Equal(t, testOID, resolved.authCtx.OID)
+	assert.Equal(t, testAPIKey, resolved.authCtx.APIKey)
+}

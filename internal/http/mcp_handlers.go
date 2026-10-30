@@ -441,9 +441,11 @@ func (f *authFailure) write(s *Server, w http.ResponseWriter, r *http.Request, i
 //  2. X-LC-UID + X-LC-API-KEY → user API key (X-LC-OID sets its default org)
 //  3. X-LC-OID + X-LC-API-KEY → organization API key
 //  4. server-wide credentials from the environment, only when the request
-//     carries no credential header at all
-//  5. none of the above → unauthorized (including an incomplete header set,
-//     which never falls back to the server-wide credentials)
+//     carries no credential header at all (a header sent with an empty value
+//     counts as carried)
+//  5. none of the above → unauthorized (including an incomplete header set or
+//     an empty credential header, which never fall back to the server-wide
+//     credentials)
 //
 // Only an MCP OAuth access token is OAuth-scoped: its granted scopes travel on
 // the returned AuthContext. API keys, LimaCharlie JWT passthrough and the
@@ -568,10 +570,12 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 	// A request that presented credential headers, but not a complete set, was
 	// aimed at some identity and must not silently run as the server's own: a
 	// lone X-LC-API-KEY, X-LC-UID or X-LC-OID would otherwise execute with the
-	// server-wide credentials, in the server's org. Reject it like a request
-	// with no credentials at all.
-	if lcUID != "" || lcOID != "" || lcAPIKey != "" {
-		return nil, &authFailure{challenge: true, detail: incompleteCredentialsDetail(lcUID, lcOID, lcAPIKey)}
+	// server-wide credentials, in the server's org. The same goes for a header
+	// that is present but empty (an empty Authorization, X-LC-UID, ...), which
+	// is judged by being sent, not by its value. Reject it like a request with
+	// no credentials at all.
+	if present := credentialHeadersOf(r); present.any() {
+		return nil, &authFailure{challenge: true, detail: incompleteCredentialsDetail(present)}
 	}
 
 	if s.serverAuthCtx != nil && s.serverAuthCtx.HasCredentials() {

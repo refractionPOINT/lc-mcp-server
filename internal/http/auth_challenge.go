@@ -17,12 +17,40 @@ import (
 // right for a dead token and wrong for a transient backend error.
 var errInvalidCredentials = errors.New("invalid credentials")
 
+// credentialHeaders records which credential headers a request carries.
+//
+// Presence is decided by the header being sent at all, whatever its value: an
+// explicitly empty header is a request aimed at some identity that failed to
+// name it, and it must never be read as "no credential" and handed the
+// server-wide credentials.
+type credentialHeaders struct {
+	authorization, uid, oid, apiKey bool
+}
+
+func credentialHeadersOf(r *http.Request) credentialHeaders {
+	has := func(name string) bool {
+		_, ok := r.Header[http.CanonicalHeaderKey(name)]
+		return ok
+	}
+	return credentialHeaders{
+		authorization: has("Authorization"),
+		uid:           has("X-LC-UID"),
+		oid:           has("X-LC-OID"),
+		apiKey:        has("X-LC-API-KEY"),
+	}
+}
+
+// any reports whether the request presented any credential header.
+func (c credentialHeaders) any() bool {
+	return c.authorization || c.uid || c.oid || c.apiKey
+}
+
 // requestHasCredentials reports whether a request carries a credential the
 // MCP endpoint accepts, or carries none and the server has its own credentials
 // to fall back on. It does not validate them. It agrees with resolveRequestAuth:
-// a request that presents credential headers short of a complete set has no
-// credentials, whether or not the server has its own, because it never falls
-// back to them.
+// a request that presents credential headers short of a complete, non-empty set
+// has no credentials, whether or not the server has its own, because it never
+// falls back to them.
 func (s *Server) requestHasCredentials(r *http.Request) bool {
 	lcUID, lcOID, lcAPIKey := r.Header.Get("X-LC-UID"), r.Header.Get("X-LC-OID"), r.Header.Get("X-LC-API-KEY")
 	if r.Header.Get("Authorization") != "" {
@@ -31,7 +59,7 @@ func (s *Server) requestHasCredentials(r *http.Request) bool {
 	if lcAPIKey != "" && (lcUID != "" || lcOID != "") {
 		return true
 	}
-	if lcUID != "" || lcOID != "" || lcAPIKey != "" {
+	if credentialHeadersOf(r).any() {
 		return false
 	}
 	return s.serverAuthCtx != nil && s.serverAuthCtx.HasCredentials()
@@ -70,18 +98,21 @@ func (s *Server) writeAuthChallenge(w http.ResponseWriter, r *http.Request, id j
 
 // incompleteCredentialsDetail explains which credential headers a request
 // presented without a usable combination.
-func incompleteCredentialsDetail(uid, oid, apiKey string) string {
+func incompleteCredentialsDetail(c credentialHeaders) string {
 	var present []string
-	if uid != "" {
+	if c.authorization {
+		present = append(present, "Authorization")
+	}
+	if c.uid {
 		present = append(present, "X-LC-UID")
 	}
-	if oid != "" {
+	if c.oid {
 		present = append(present, "X-LC-OID")
 	}
-	if apiKey != "" {
+	if c.apiKey {
 		present = append(present, "X-LC-API-KEY")
 	}
-	return fmt.Sprintf("Incomplete credentials (%s presented): provide Authorization, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers",
+	return fmt.Sprintf("Incomplete credentials (%s presented, empty or without a complete set): provide Authorization, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers",
 		strings.Join(present, ", "))
 }
 
