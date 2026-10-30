@@ -287,7 +287,7 @@ func RegisterGetAdapterSensors() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			client := lc.NewHiveClient(org)
+			client := NewClient(org)
 			record, err := client.Get(lc.HiveArgs{
 				HiveName:     hiveName,
 				PartitionKey: org.GetOID(),

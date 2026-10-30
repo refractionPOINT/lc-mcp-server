@@ -12,6 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
 // The hive write API replaces usr_mtd wholesale: legion_config_hive
@@ -144,15 +145,15 @@ func SetRecord(org *lc.Organization, w RecordWrite) (warning string, err error) 
 	if !hiveNameRe.MatchString(w.HiveName) {
 		return "", errors.New("invalid hive name")
 	}
-	if w.Key == "" {
-		return "", errors.New("record key is required")
+	if err := tools.ValidateHiveRecordKey(w.Key); err != nil {
+		return "", err
 	}
 	partitionKey, err := requireOwnPartition(org, w.PartitionKey)
 	if err != nil {
 		return "", err
 	}
 
-	client := lc.NewHiveClient(org)
+	client := NewClient(org)
 	existing, mtdErr := client.GetMTD(lc.HiveArgs{
 		HiveName:     w.HiveName,
 		PartitionKey: partitionKey,
@@ -191,6 +192,10 @@ func SetRecord(org *lc.Organization, w RecordWrite) (warning string, err error) 
 // large records are not capped by the gateway's 10MB form limit, matching what
 // the SDK's HiveClient.Add does.
 func postRecordData(org *lc.Organization, hiveName, partitionKey, key string, data lc.Dict, usrMtd *lc.UsrMtd) error {
+	// The key goes into the request path below.
+	if err := tools.ValidateHiveRecordKey(key); err != nil {
+		return err
+	}
 	zDat := &bytes.Buffer{}
 	b64 := base64.NewEncoder(base64.StdEncoding, zDat)
 	z := gzip.NewWriter(b64)
@@ -228,15 +233,16 @@ func SetRecordMetadata(org *lc.Organization, hiveName, partitionKey, key string,
 	if !hiveNameRe.MatchString(hiveName) {
 		return errors.New("invalid hive name")
 	}
-	if key == "" {
-		return errors.New("record key is required")
+	// The key goes into the request path below.
+	if err := tools.ValidateHiveRecordKey(key); err != nil {
+		return err
 	}
 	partitionKey, err := requireOwnPartition(org, partitionKey)
 	if err != nil {
 		return err
 	}
 
-	client := lc.NewHiveClient(org)
+	client := NewClient(org)
 	existing, err := client.GetMTD(lc.HiveArgs{
 		HiveName:     hiveName,
 		PartitionKey: partitionKey,

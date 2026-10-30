@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -98,4 +99,20 @@ func (f *FakeAPI) Context(t *testing.T, mode auth.AuthMode, oid string) context.
 		JWTToken: "eyJhbGciOiJIUzI1NiJ9." + claims + ".synthetic",
 	}
 	return auth.WithAuthContext(auth.WithSDKCache(context.Background(), cache), a)
+}
+
+// DotSegmentRequests returns the recorded requests whose path has a "." or ".."
+// segment: what anything between this server and the API that resolves dot
+// segments would turn into a different route.
+func (f *FakeAPI) DotSegmentRequests() []RecordedRequest {
+	var out []RecordedRequest
+	for _, r := range f.Requests() {
+		for _, seg := range strings.Split(r.Path, "/") {
+			if seg == "." || seg == ".." {
+				out = append(out, r)
+				break
+			}
+		}
+	}
+	return out
 }

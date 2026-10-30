@@ -85,6 +85,9 @@ func RegisterValidateHiveRecord() {
 			if !ok || key == "" {
 				return tools.ErrorResult("key parameter is required"), nil
 			}
+			if err := tools.ValidateHiveRecordKey(key); err != nil {
+				return tools.ErrorResultf("%v", err), nil
+			}
 
 			data, ok := args["data"].(map[string]interface{})
 			if !ok {
@@ -102,7 +105,8 @@ func RegisterValidateHiveRecord() {
 			}
 
 			// Not org.ValidateHiveRecord: the SDK puts the key into the path unescaped,
-			// so a key containing '/' or '..' could walk the request to another route.
+			// so a key containing '/' could walk the request to another route. The
+			// escape below handles that; ".." and "." survive it and are refused above.
 			result := lc.Dict{}
 			err = org.GenericPOSTRequest(
 				fmt.Sprintf("hive/%s/%s/%s/validate", hiveName, partitionKey, url.PathEscape(key)),

@@ -332,7 +332,7 @@ func RegisterRenameHiveRecord() {
 				return errResult, nil
 			}
 
-			client := lc.NewHiveClient(org)
+			client := NewClient(org)
 			_, err = client.Rename(lc.HiveArgs{
 				HiveName:     hiveName,
 				PartitionKey: partitionKey,

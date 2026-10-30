@@ -41,7 +41,7 @@ func RegisterListExternalAdapters() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := ListRecords(lc.NewHiveClient(org), "external_adapter", org.GetOID(), "adapters", listReq, nil)
+			resp, err := ListRecords(NewClient(org), "external_adapter", org.GetOID(), "adapters", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list external adapters: %v", err), nil
 			}
@@ -77,7 +77,7 @@ func RegisterGetExternalAdapter() {
 			}
 
 			// Create hive client for external adapters
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get external adapter
 			adapter, err := hive.Get(lc.HiveArgs{
@@ -197,7 +197,7 @@ func RegisterDeleteExternalAdapter() {
 			}
 
 			// Create hive client for external adapters
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete external adapter
 			_, err = hive.Remove(lc.HiveArgs{

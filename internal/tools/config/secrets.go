@@ -43,7 +43,7 @@ func RegisterListSecrets() {
 
 			// Names only: the records are listed metadata-only, so the backend
 			// never loads the secret values.
-			names, next, err := hive.ListNames(lc.NewHiveClient(org), "secret", org.GetOID(), listReq)
+			names, next, err := hive.ListNames(hive.NewClient(org), "secret", org.GetOID(), listReq)
 			if err != nil {
 				return tools.ErrorResultf("failed to list secrets: %v", err), nil
 			}
@@ -87,7 +87,7 @@ func RegisterGetSecret() {
 			}
 
 			// Create hive client for secrets
-			client := lc.NewHiveClient(org)
+			client := hive.NewClient(org)
 
 			// Get secret value
 			secret, err := client.Get(lc.HiveArgs{
@@ -205,7 +205,7 @@ func RegisterDeleteSecret() {
 			}
 
 			// Create hive client for secrets
-			client := lc.NewHiveClient(org)
+			client := hive.NewClient(org)
 
 			// Delete secret
 			_, err = client.Remove(lc.HiveArgs{

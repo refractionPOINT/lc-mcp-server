@@ -68,7 +68,7 @@ func RegisterListRules() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := ListRecords(lc.NewHiveClient(org), hiveName, org.GetOID(), "rules", listReq, nil)
+			resp, err := ListRecords(NewClient(org), hiveName, org.GetOID(), "rules", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list rules from hive '%s': %v", hiveName, err), nil
 			}
@@ -112,7 +112,7 @@ func RegisterGetRule() {
 			}
 
 			// Create hive client
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get rule
 			rule, err := hive.Get(lc.HiveArgs{
@@ -265,7 +265,7 @@ func RegisterDeleteRule() {
 			}
 
 			// Create hive client
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete rule
 			_, err = hive.Remove(lc.HiveArgs{

@@ -41,7 +41,7 @@ func RegisterListExtensionConfigs() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := ListRecords(lc.NewHiveClient(org), "extension_config", org.GetOID(), "configs", listReq, nil)
+			resp, err := ListRecords(NewClient(org), "extension_config", org.GetOID(), "configs", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list extension configs: %v", err), nil
 			}
@@ -77,7 +77,7 @@ func RegisterGetExtensionConfig() {
 			}
 
 			// Create hive client for extension configs
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get extension config
 			config, err := hive.Get(lc.HiveArgs{
@@ -197,7 +197,7 @@ func RegisterDeleteExtensionConfig() {
 			}
 
 			// Create hive client for extension configs
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete extension config
 			_, err = hive.Remove(lc.HiveArgs{
