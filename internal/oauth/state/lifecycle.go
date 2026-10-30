@@ -21,12 +21,16 @@ import (
 //	oauth:family:<id>             the grant's current refresh and access token
 //	oauth:tokfam:<sha256(token)>  token -> family id, for refresh and access
 //	                              tokens, kept as long as the token could live
+//	                              and, once rotated away, at least as long as
+//	                              its rotation record
 //	oauth:revoked:fam:<id>        set when the grant is revoked
 //	oauth:revoked:tok:<sha256>    set when a token is revoked
 //	oauth:refresh_claim:<sha256>  the refresh in flight on a refresh token,
 //	                              valued with the id of the attempt that owns it
 //	oauth:attempt_over:<id>       set when an attempt gives its claim up
-//	oauth:rotation:<sha256>       the outcome of a refresh token's rotation
+//	oauth:rotation:<sha256>       the outcome of a refresh token's rotation: the
+//	                              attempt, the successors, the grant and the
+//	                              resource (see rotationValue)
 //
 // The refresh record stays in place for the whole refresh: a claim is a
 // separate key, so revocation can always find the token, its family and its
@@ -94,6 +98,19 @@ local function ensure_hash(key)
 	if t ~= 'none' and t ~= 'hash' then
 		redis.call('DEL', key)
 	end
+end
+
+-- rotation_family returns the grant a rotation record names, or nil. A record is
+-- owner:access token:refresh token:family:resource; none of the first four
+-- contains a ':' and the resource, which may, comes last.
+local function rotation_family(rec)
+	if rec then
+		local fam = string.match(rec, '^[^:]*:[^:]*:[^:]*:([^:]*):')
+		if fam and fam ~= '' then
+			return fam
+		end
+	end
+	return nil
 end
 
 -- kill_family revokes a grant: the marker that blocks every write for it, and
@@ -216,6 +233,12 @@ const (
 // the indices and the family record are updated, the claim is dropped and the
 // outcome is recorded. A repeat of an attempt that already published finds the
 // record and answers publishReplayed.
+//
+// The old refresh and access tokens keep their token->family index for as long
+// as they could have lived and, if that is shorter, as long as the rotation
+// record (ARGV 11): the refresh grace window accepts the old refresh token for
+// that long, and a revocation of either old token in that window has to find the
+// grant, or it would succeed without revoking anything.
 var publishScript = redis.NewScript(luaPrelude + `
 local done = redis.call('GET', KEYS[5])
 if done then
@@ -242,11 +265,13 @@ redis.call('SET', KEYS[7], ARGV[5], 'PX', ARGV[6])
 redis.call('SET', KEYS[9], ARGV[2], 'PX', ARGV[4])
 redis.call('SET', KEYS[10], ARGV[2], 'PX', ARGV[6])
 redis.call('SET', KEYS[11], ARGV[2], 'NX', 'PX', old_ttl)
+extend(KEYS[11], ARGV[11])
 if #KEYS >= 13 then
 	local t = redis.call('PTTL', KEYS[12])
 	if t > 0 then
 		redis.call('SET', KEYS[13], ARGV[2], 'NX', 'PX', t)
 	end
+	extend(KEYS[13], ARGV[11])
 	redis.call('DEL', KEYS[12])
 end
 redis.call('DEL', KEYS[2])
@@ -308,16 +333,22 @@ const (
 // revokeTokenScript revokes the grant of a presented token, of either kind.
 //
 //	KEYS: 1 refresh record of the token, 2 access record of the token, 3 token
-//	      tombstone, 4 refresh claim of the token, 5 token->family index
-//	ARGV: 1 tombstone ttl (ms), 2 family marker ttl (ms)
+//	      tombstone, 4 refresh claim of the token, 5 token->family index, 6
+//	      rotation record of the token
+//	ARGV: 1 tombstone ttl (ms), 2 family marker ttl (ms), 3 the grant, when the
+//	      caller already knows it ("" otherwise)
 //
 // The family comes from the token's record, or, when the record is gone (the
-// token was rotated away), from its index. A token with no family (issued
-// before families existed) is revoked on its own, with the access token its
-// refresh record names. Otherwise the grant is marked revoked and its current
-// refresh token, access token and claim are deleted, in the same step. A token
-// that is not known at all changes nothing, so unauthenticated callers cannot
-// fill Redis with records.
+// token was rotated away), from its index, or, when that has expired as well,
+// from the token's rotation record: that is kept for the refresh grace window, so
+// a token the window still accepts always leads to its grant. A token with no
+// family (issued before families existed) is revoked on its own, with the access
+// token its refresh record names. Otherwise the grant is marked revoked and its
+// current refresh token, access token and claim are deleted, in the same step. A
+// token that is not known at all changes nothing, so unauthenticated callers
+// cannot fill Redis with records, unless the caller names the grant (a server
+// that holds a claim or a rotation record knows it): then that grant is revoked
+// whatever the token's own records say.
 var revokeTokenScript = redis.NewScript(luaPrelude + `
 local rrec = redis.call('GET', KEYS[1])
 local arec = redis.call('GET', KEYS[2])
@@ -332,7 +363,12 @@ if not fam then
 	local idx = redis.call('GET', KEYS[5])
 	if idx then fam = idx end
 end
-if not (rrec or arec or fam) then
+if not fam then
+	fam = rotation_family(redis.call('GET', KEYS[6]))
+end
+local known = nil
+if ARGV[3] ~= '' then known = ARGV[3] end
+if not (rrec or arec or fam or known) then
 	if redis.call('EXISTS', KEYS[3]) == 1 then return 4 end
 	return 0
 end
@@ -345,6 +381,7 @@ end
 if arec then redis.call('DEL', KEYS[2]) end
 redis.call('DEL', KEYS[4])
 if fam then kill_family(fam, ARGV[2]) end
+if known and known ~= fam then kill_family(known, ARGV[2]) end
 if rrec then return 1 end
 if arec then return 2 end
 return 3
@@ -686,7 +723,7 @@ func (m *Manager) preparePublish(claim *RefreshClaim, at *AccessTokenData, rt *R
 		keys:   keys,
 		args: []interface{}{
 			claim.Owner, fam, atData, ms(atTTL), rtData, ms(rtTTL), at.AccessToken, rt.RefreshToken, newRT,
-			rotationValue(claim.Owner, at.AccessToken, rt.RefreshToken, claim.Data), ms(RotationRecordTTL), ms(rtTTL), ms(max(atTTL, rtTTL)),
+			rotationValue(claim.Owner, at.AccessToken, rt.RefreshToken, fam, claim.Data), ms(RotationRecordTTL), ms(rtTTL), ms(max(atTTL, rtTTL)),
 		},
 	}, nil
 }
@@ -728,7 +765,7 @@ const (
 	// RevokedAccessToken: a live access token, and its grant, was revoked.
 	RevokedAccessToken
 	// RevokedGrantByToken: the token was already rotated away, but it still led
-	// to its grant, which was revoked.
+	// to its grant (through its index or its rotation record), which was revoked.
 	RevokedGrantByToken
 	// RevokedAlready: the token was revoked before and nothing else was found.
 	RevokedAlready
@@ -739,12 +776,26 @@ const (
 // token is tombstoned, and the grant's current refresh token, access token and
 // claim are deleted; a refresh that is in flight can then publish nothing. The
 // family is found from the token's record or, for a token that was rotated away
-// already, from its index. A token without a family (issued before families
-// existed) is revoked by itself, with the access token its refresh record
-// names. A token nobody knows changes nothing and is reported as
-// RevokedNothing; a backend failure is an error and leaves nothing half done:
-// the call can be repeated.
+// already, from its index or, while the refresh grace window lasts, from its
+// rotation record. A token without a family (issued before families existed) is
+// revoked by itself, with the access token its refresh record names. A token
+// nobody knows changes nothing and is reported as RevokedNothing; a backend
+// failure is an error and leaves nothing half done: the call can be repeated.
 func (m *Manager) RevokeToken(ctx context.Context, token string) (RevokeOutcome, error) {
+	return m.revokeToken(ctx, token, "")
+}
+
+// RevokeTokenInFamily is RevokeToken for a caller that already knows the grant
+// the token belongs to (it holds a claim on the token or a rotation record that
+// names it). That grant is revoked whatever the token's own records say, so the
+// outcome is never RevokedNothing for a non-empty family: a caller that gets a
+// revocation back can rely on the grant being marked revoked, not merely on the
+// token being unknown.
+func (m *Manager) RevokeTokenInFamily(ctx context.Context, token, familyID string) (RevokeOutcome, error) {
+	return m.revokeToken(ctx, token, familyID)
+}
+
+func (m *Manager) revokeToken(ctx context.Context, token, familyID string) (RevokeOutcome, error) {
 	h := tokenHash(token)
 	keys := []string{
 		RefreshPrefix + token,
@@ -752,8 +803,9 @@ func (m *Manager) RevokeToken(ctx context.Context, token string) (RevokeOutcome,
 		RevokedTokenPrefix + h,
 		RefreshClaimPrefix + h,
 		TokenFamilyPrefix + h,
+		RotationPrefix + h,
 	}
-	n, err := scriptInt(m.redis.Run(ctx, revokeTokenScript, keys, ms(RevokedTokenTTL), ms(RevokedFamilyTTL)))
+	n, err := scriptInt(m.redis.Run(ctx, revokeTokenScript, keys, ms(RevokedTokenTTL), ms(RevokedFamilyTTL), familyID))
 	if err != nil {
 		return RevokedNothing, fmt.Errorf("failed to revoke token: %w", err)
 	}
@@ -800,16 +852,18 @@ func (m *Manager) RevokeRefreshToken(ctx context.Context, refreshToken string) e
 // ===== Recovering a committed rotation =====
 
 // rotationValue is the content of a rotation record: the attempt that rotated
-// the token, the successors it published and the resource the old token was
-// authorized for (the successors may be narrower). The owner comes first and the
-// resource, which may contain ':', last. Tokens are base64url and never contain
-// ':'.
-func rotationValue(owner, accessToken, refreshToken string, old *RefreshTokenData) string {
+// the token, the successors it published, the grant they belong to and the
+// resource the old token was authorized for (the successors may be narrower).
+// Revocation reads the grant from it when the old token's index has expired, so
+// that a token the grace window still accepts always leads to its grant. The
+// resource, which may contain ':', comes last; tokens, owner and family ids are
+// base64url or hex and never contain ':'.
+func rotationValue(owner, accessToken, refreshToken, familyID string, old *RefreshTokenData) string {
 	res := ""
 	if old != nil {
 		res = old.Resource
 	}
-	return owner + ":" + accessToken + ":" + refreshToken + ":" + res
+	return owner + ":" + accessToken + ":" + refreshToken + ":" + familyID + ":" + res
 }
 
 // RotatedSuccessors is what a refresh token's rotation issued.
@@ -819,6 +873,11 @@ type RotatedSuccessors struct {
 	// AuthorizedResource is the resource the rotated token was bound to, before
 	// the rotation narrowed it (or not).
 	AuthorizedResource string
+	// SuccessorClaimed is set while a refresh of the successor refresh token holds
+	// its claim: another request is rotating it, or a revocation that could not be
+	// completed keeps it (see the client mismatch handling of the token manager).
+	// The successors are then not handed out.
+	SuccessorClaimed bool
 }
 
 // RotationSuccessors returns the successors a refresh token was rotated into,
@@ -827,8 +886,9 @@ type RotatedSuccessors struct {
 // holds. It returns nil when there is no such rotation, and also when the
 // successors can no longer be handed out: the grant was revoked, or the client
 // already moved on (the successor refresh token was itself rotated), or either
-// successor is gone. It never creates anything: a recovered rotation is the same
-// pair, not a second family.
+// successor is gone, or they do not belong to the grant the record names. It
+// never creates anything: a recovered rotation is the same pair, not a second
+// family.
 //
 // SECURITY: this is "refresh grace". Within RotationRecordTTL of a rotation,
 // whoever presents the already-rotated token gets the same successors. A replay
@@ -845,8 +905,8 @@ func (m *Manager) RotationSuccessors(ctx context.Context, rotatedRefreshToken st
 	if rec == "" {
 		return nil, nil
 	}
-	parts := strings.SplitN(rec, ":", 4)
-	if len(parts) != 4 || parts[1] == "" || parts[2] == "" {
+	parts := strings.SplitN(rec, ":", 5)
+	if len(parts) != 5 || parts[1] == "" || parts[2] == "" || parts[3] == "" {
 		return nil, nil
 	}
 	rt, err := m.GetRefreshTokenData(ctx, parts[2])
@@ -857,7 +917,7 @@ func (m *Manager) RotationSuccessors(ctx context.Context, rotatedRefreshToken st
 	if err != nil {
 		return nil, err
 	}
-	if rt == nil || at == nil {
+	if rt == nil || at == nil || rt.FamilyID != parts[3] {
 		return nil, nil
 	}
 	revoked, err := m.IsFamilyRevoked(ctx, rt.FamilyID)
@@ -867,7 +927,11 @@ func (m *Manager) RotationSuccessors(ctx context.Context, rotatedRefreshToken st
 	if revoked {
 		return nil, nil
 	}
-	return &RotatedSuccessors{Access: at, Refresh: rt, AuthorizedResource: parts[3]}, nil
+	claimed, err := m.redis.Exists(ctx, RefreshClaimPrefix+tokenHash(rt.RefreshToken))
+	if err != nil {
+		return nil, fmt.Errorf("failed to check the claim of the successor: %w", err)
+	}
+	return &RotatedSuccessors{Access: at, Refresh: rt, AuthorizedResource: parts[4], SuccessorClaimed: claimed > 0}, nil
 }
 
 // MarkFamilyRevoked marks a grant revoked with a single command. It is the

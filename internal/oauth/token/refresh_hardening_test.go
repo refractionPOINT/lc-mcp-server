@@ -20,10 +20,12 @@ func init() {
 }
 
 // isRevokeScript recognises the script that revokes a token's grant: it touches
-// the token's access record and tombstone, unlike a claim or a publish.
+// the token's access record and tombstone, unlike a claim, and not the family
+// record, unlike a publish (which names the rotation record, as the revocation
+// does too, to find the grant of a rotated token).
 func isRevokeScript(r faultproxy.Request) bool {
 	return r.IsScript() && r.HasKeyPrefix(state.RevokedTokenPrefix) && r.HasKeyPrefix(state.TokenPrefix) &&
-		r.HasKeyPrefix(state.RefreshClaimPrefix) && !r.HasKeyPrefix(state.RotationPrefix)
+		r.HasKeyPrefix(state.RefreshClaimPrefix) && !r.HasKeyPrefix(state.FamilyPrefix)
 }
 
 // isFamilyMarkerWrite recognises the plain write of a family's revoked marker.

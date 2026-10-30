@@ -95,9 +95,10 @@ var ErrInvalidTarget = errors.New("invalid_target")
 var ErrClientMismatch = errors.New("refresh token was issued to a different client")
 
 // ErrRefreshInFlight marks a refresh token that is being refreshed by another
-// request right now. That request either consumes the token or gives it up, so
-// a retry a moment later gets a definite answer. The token endpoint answers it
-// like any refused refresh token.
+// request right now, or that is held by a revocation that could not be confirmed
+// (until its claim runs out). That request either consumes the token or gives it
+// up, so a retry a moment later gets a definite answer. The token endpoint
+// answers it like any refused refresh token.
 var ErrRefreshInFlight = errors.New("refresh token is being refreshed by another request")
 
 // ErrRefreshRevoked marks a refresh whose token (or grant) was revoked, before
@@ -105,9 +106,10 @@ var ErrRefreshInFlight = errors.New("refresh token is being refreshed by another
 var ErrRefreshRevoked = errors.New("refresh token was revoked")
 
 // ErrRefreshSuperseded marks a refresh that lost the race to another refresh of
-// the same token, which rotated it. Nothing was issued to this request. It is
-// only reported when the rotation is proven; a claim that merely ran out is
-// ErrRefreshClaimLost.
+// the same token, which rotated it, when the successors cannot be handed to this
+// request either: the client already used them, or the grant was revoked.
+// Nothing was issued to this request. It is only reported when the rotation is
+// proven; a claim that merely ran out is ErrRefreshClaimLost.
 var ErrRefreshSuperseded = errors.New("refresh was superseded by another request")
 
 // ErrRefreshClaimLost marks a refresh that outlived its claim on the token
@@ -130,7 +132,8 @@ var ErrRefreshTokenDead = errors.New("the identity provider refused the refresh"
 // transient backend failure after which the same refresh token may be retried.
 // Losing a race to a concurrent refresh of the same token (ErrRefreshInFlight)
 // is transient: if the other refresh fails, the token is still valid, and if
-// it succeeded a retry reports the token as unknown.
+// it succeeded a retry is handed its successors while the refresh grace window
+// lasts and reports the token as unknown after it.
 func IsDeadRefresh(err error) bool {
 	for _, dead := range []error{ErrRefreshTokenUnknown, ErrRefreshTokenDead, ErrRefreshRevoked, ErrRefreshSuperseded, ErrClientMismatch, ErrInvalidTarget} {
 		if errors.Is(err, dead) {
@@ -471,19 +474,24 @@ func (m *Manager) ValidateAccessTokenForAudience(ctx context.Context, accessToke
 // The refresh record stays where it is for the whole refresh, so a revocation
 // that arrives meanwhile always finds the token, its grant and its access
 // token, and deletes them along with the claim. Exactly one refresh of a token
-// proceeds; the others get ErrRefreshInFlight (or, once it has rotated, an
-// unknown token). The successors are published in one atomic step that needs
+// proceeds; the others get ErrRefreshInFlight (or, once it has rotated, the
+// successors through the grace window described below, and an unknown token
+// after it). The successors are published in one atomic step that needs
 // the claim to still be this refresh's own and nothing to have been revoked, so
 // a refresh whose claim expired or was cleared issues nothing. That is only
 // ErrRefreshClaimLost (retryable) unless the token is proven rotated or
-// revoked: the dead-grant errors are reserved for those. A refresh that fails
-// for any other reason just gives its claim up: the token was never removed, so
-// the client can retry and stays signed in.
+// revoked: the dead-grant errors are reserved for those, and a token proven
+// rotated is dead only if the successors cannot be handed to the request. A
+// refresh that fails for any other reason just gives its claim up: the token was
+// never removed, so the client can retry and stays signed in.
 //
 // A rotation whose reply never reached the client is not lost: for
 // state.RotationRecordTTL the same client presenting the same refresh token is
 // handed the successors that rotation issued (see recoverRotation for the
-// security trade-off).
+// security trade-off). That includes a refresh whose own claim ran out and was
+// taken over by a retry that rotated the token: the slower request is not told
+// the grant is dead, it goes through the same checked recovery and is handed what
+// the retry issued.
 func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID string, resolve ResourceResolver) (*TokenResponse, error) {
 	claim, err := m.stateManager.ClaimRefreshToken(ctx, refreshToken)
 	switch {
@@ -616,8 +624,19 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 			m.logger.Warn("Refresh abandoned: the refresh token was revoked while it ran", "uid", uid)
 			return nil, ErrRefreshRevoked
 		case errors.Is(err, state.ErrAlreadyRotated):
-			m.logger.Warn("Refresh abandoned: another request rotated the refresh token while it ran", "uid", uid)
-			return nil, ErrRefreshSuperseded
+			// Another request took the claim over and rotated the token while this
+			// one ran. That is no reason to sign the client out: an immediate retry
+			// of this very token would be handed the successors through the grace
+			// window, so this request is handed them now, after the same checks
+			// (client binding and revocation of the grant, resource). Only if that
+			// is not possible, because the client already moved on to the successors
+			// or the grant was revoked, is the token dead.
+			m.logger.Warn("Refresh abandoned: another request rotated the refresh token while it ran; recovering its successors", "uid", uid)
+			resp, recoverErr := m.recoverRotation(ctx, claim.Token, clientID, resolve)
+			if errors.Is(recoverErr, ErrRefreshTokenUnknown) {
+				return nil, ErrRefreshSuperseded
+			}
+			return resp, recoverErr
 		case errors.Is(err, state.ErrClaimLost):
 			// Not proven dead: the claim ran out (or was taken over) but the
 			// token is still there, unrevoked and unrotated. The client retries.
@@ -648,26 +667,34 @@ const maxMismatchRevokeAttempts = 3
 var mismatchRevokeBackoff = 50 * time.Millisecond
 
 // revokeAfterMismatch revokes the grant of a token that a wrong client presented,
-// and only returns nil once the revocation is confirmed.
+// and only returns nil once the revocation is confirmed. familyID is the grant of
+// the token, which the caller knows from the claim it holds or from the rotation
+// record it read.
 //
 // A revocation that fails must not leave the token usable, or a thief gets
 // another go and the owner's next refresh succeeds as if nothing happened. So:
 //  1. The full revocation (one Lua script: tombstone, family marker, deletion of
 //     the current tokens) is tried a few times in the request, since most Redis
-//     failures are momentary.
+//     failures are momentary. It revokes the grant by its id, so it never comes
+//     back empty-handed because the token's own records or index are gone: a
+//     revocation that found nothing is not a confirmation.
 //  2. If it keeps failing, the family marker alone is written with a single
 //     command (MarkFamilyRevoked). The marker is what every path checks (claims,
 //     publishes, token validation and extension), so the grant is dead as soon as
 //     it lands; the token records left over are inert and expire on their own.
 //  3. If even that fails, the error is returned (a retryable backend error for
-//     the wrong client's request) and the caller keeps the refresh claim, which
-//     blocks every other refresh of the token until it expires on its own
-//     (RefreshClaimTTL); the next presentation by anyone repeats this.
+//     the wrong client's request) and the caller keeps the refresh claim it holds,
+//     which blocks every refresh of the token until it expires on its own
+//     (RefreshClaimTTL); the next presentation by anyone repeats this. On the
+//     live path the claim is the token's own; for a rotated token presented
+//     during the grace window it is the claim on the current successor (see
+//     revokeAfterReplayMismatch).
 //
 // Why not a background retry or a separate pending marker: another pod could not
 // see an in-process retry, and a marker written with a command that fails the
-// same way as the revocation protects nothing the family marker does not. This
-// design adds no state: the confirmation is the family marker itself.
+// same way as the revocation protects nothing the family marker does not. The
+// claim, by contrast, is taken before anything fails. This design adds no state:
+// the confirmation is the family marker itself.
 func (m *Manager) revokeAfterMismatch(ctx context.Context, token, familyID string) error {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
@@ -680,8 +707,13 @@ func (m *Manager) revokeAfterMismatch(ctx context.Context, token, familyID strin
 			case <-cleanup.Done():
 			}
 		}
-		if _, err = m.stateManager.RevokeToken(cleanup, token); err == nil {
+		var outcome state.RevokeOutcome
+		outcome, err = m.stateManager.RevokeTokenInFamily(cleanup, token, familyID)
+		if err == nil && outcome != state.RevokedNothing {
 			return nil
+		}
+		if err == nil {
+			err = errors.New("the revocation found no grant to revoke")
 		}
 		m.logger.Warn("Failed to revoke the token family after client mismatch; retrying", "error", err, "attempt", attempt+1)
 	}
@@ -694,19 +726,58 @@ func (m *Manager) revokeAfterMismatch(ctx context.Context, token, familyID strin
 	return fmt.Errorf("failed to revoke the grant after a client mismatch: %w", err)
 }
 
+// revokeAfterReplayMismatch is revokeAfterMismatch for a rotated refresh token
+// that a wrong client presented during the grace window. The token itself is gone;
+// what is worth protecting is the grant's current refresh token, its successor.
+//
+// On the live path the refresh claim on the presented token is held before the
+// client is compared, and kept when the revocation cannot be confirmed, so that
+// nobody refreshes meanwhile. Nothing is held here, so the same protection is
+// built: the claim on the successor is taken before the revocation is attempted
+// and kept when it cannot be confirmed. For the claim's lifetime a refresh of the
+// successor gets ErrRefreshInFlight, and so does anybody presenting the rotated
+// token with the right client id (recoverRotation), who might be a thief trying
+// client ids. A confirmed revocation deletes the claim along with the successor.
+//
+// If the claim cannot be taken (the successor is being refreshed already, it is
+// gone, or Redis fails) the revocation is attempted anyway: it is still what the
+// mismatch calls for, and the claim is only the fallback for when it fails.
+func (m *Manager) revokeAfterReplayMismatch(ctx context.Context, rotatedToken string, rot *state.RotatedSuccessors) error {
+	claim, err := m.stateManager.ClaimRefreshToken(ctx, rot.Refresh.RefreshToken)
+	if err != nil {
+		m.logger.Warn("Could not claim the successor refresh token before revoking after a client mismatch; revoking without the claim", "error", err)
+		claim = nil
+	}
+
+	if err := m.revokeAfterMismatch(ctx, rotatedToken, rot.Refresh.FamilyID); err != nil {
+		// Unconfirmed: the claim stays, nobody refreshes the successor meanwhile.
+		return err
+	}
+	if claim != nil {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		m.stateManager.ReleaseRefreshClaim(cleanup, claim)
+	}
+	return nil
+}
+
 // recoverRotation answers a presentation of a refresh token that no longer
 // exists. If it was rotated a moment ago, the committed rotation is handed back
 // rather than lost: the Redis client retries a lost reply, but if every reply to
 // a committed publish is lost the endpoint can only answer 503, and the client's
-// retry with the token it still holds must not be told the token is dead.
+// retry with the token it still holds must not be told the token is dead. The
+// same goes for a refresh that lost its claim to a retry which rotated the token.
 //
 // Within state.RotationRecordTTL of the rotation, the same client presenting the
 // same refresh token gets the same successors (never a second family, nothing is
 // minted). The usual conditions apply: the grant must not be revoked, the
 // successors must still exist (a client that already refreshed with them has
 // moved on and gets nothing), the client binding is enforced like on a live
-// token (a different client_id revokes the grant), and the resource requested
-// must be the one the successors were issued for.
+// token (a different client_id revokes the grant, with the same protection when
+// the revocation cannot be confirmed), and the resource requested must be the one
+// the successors were issued for. While a refresh of the successors is in flight,
+// or a revocation that could not be confirmed holds them, nothing is handed out
+// (ErrRefreshInFlight).
 //
 // SECURITY (refresh grace): the rotated token is not restored, but for this
 // short window a replay of it by a presenter that satisfies the client binding
@@ -728,7 +799,7 @@ func (m *Manager) recoverRotation(ctx context.Context, refreshToken, clientID st
 	if bound := rot.Refresh.ClientID; bound != "" && clientID != "" && subtle.ConstantTimeCompare([]byte(bound), []byte(clientID)) != 1 {
 		m.logger.Warn("Replay of a rotated refresh token refused: presented by a different client; revoking the grant",
 			"uid", uid, "expected_client_id", bound, "presented_client_id", clientID)
-		if err := m.revokeAfterMismatch(ctx, refreshToken, rot.Refresh.FamilyID); err != nil {
+		if err := m.revokeAfterReplayMismatch(ctx, refreshToken, rot); err != nil {
 			return nil, err
 		}
 		return nil, ErrClientMismatch
@@ -742,6 +813,11 @@ func (m *Manager) recoverRotation(ctx context.Context, refreshToken, clientID st
 		if resource != rot.Refresh.Resource {
 			return nil, fmt.Errorf("%w: the refresh was already completed for another resource", ErrInvalidTarget)
 		}
+	}
+
+	if rot.SuccessorClaimed {
+		m.logger.Warn("Refresh token was rotated moments ago, but its successor is being refreshed or held by a pending revocation; not handing out the successors", "uid", uid)
+		return nil, ErrRefreshInFlight
 	}
 
 	expiresIn := int(rot.Access.ExpiresAt - time.Now().Unix())

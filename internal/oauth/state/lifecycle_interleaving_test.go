@@ -15,10 +15,11 @@ import (
 
 // Random interleavings of everything that can happen to one grant: several
 // refresh attempts claiming, publishing and giving up, revocations by any token
-// the grant ever had, claims running out, and late copies of any earlier command
-// (what the Redis client does with a command whose reply was lost). After every
-// step the grant must satisfy the lifecycle's invariants. The walks are seeded,
-// so a failure names the seed that reproduces it.
+// the grant ever had (with or without the caller knowing the grant), claims
+// running out, tokens reaching the end of their lifetime, and late copies of any
+// earlier command (what the Redis client does with a command whose reply was
+// lost). After every step the grant must satisfy the lifecycle's invariants. The
+// walks are seeded, so a failure names the seed that reproduces it.
 
 type simAttempt struct {
 	owner string
@@ -81,17 +82,20 @@ func (s *sim) currentRefresh() string {
 
 func (s *sim) step(ctx context.Context) {
 	switch op := s.rng.Intn(100); {
-	case op < 22:
+	case op < 20:
 		s.claim(ctx)
-	case op < 46:
+	case op < 42:
 		s.publish(ctx)
-	case op < 58:
+	case op < 52:
 		s.release(ctx)
-	case op < 72:
+	case op < 66:
 		s.revoke(ctx)
-	case op < 78:
+	case op < 71:
 		s.logf("claims run out")
 		s.mr.FastForward(RefreshClaimTTL + time.Second)
+	case op < 80:
+		s.logf("two seconds pass")
+		s.mr.FastForward(2 * time.Second)
 	default:
 		if len(s.replays) > 0 {
 			i := s.rng.Intn(len(s.replays))
@@ -150,6 +154,17 @@ func (s *sim) publish(ctx context.Context) {
 		want = ErrAlreadyExists
 	}
 
+	// Now and then the token being rotated is at the end of its lifetime (records
+	// and indices last as long as each other): the rotation record then outlives
+	// the token's own records.
+	if s.rng.Intn(3) == 0 {
+		s.logf("%s is nearly out of lifetime", a.token)
+		nearlyExpired(s.mr, RefreshPrefix+a.token, a.token, time.Second)
+		if a.claim.Data != nil && a.claim.Data.AccessToken != "" {
+			nearlyExpired(s.mr, TokenPrefix+a.claim.Data.AccessToken, a.claim.Data.AccessToken, time.Second)
+		}
+	}
+
 	err := s.m.publish(ctx, a.call)
 	s.logf("publish by %s of %s -> %v", a.owner, a.token, err)
 	if !errors.Is(err, want) || (want == nil && err != nil) {
@@ -182,9 +197,28 @@ func (s *sim) releaseChecked(ctx context.Context, a *simAttempt) {
 
 func (s *sim) revoke(ctx context.Context) {
 	tok := s.tokens[s.rng.Intn(len(s.tokens))]
+	if s.rng.Intn(3) == 0 {
+		// A caller that knows the grant (the mismatch handling): revoking a known
+		// grant is never "nothing", whatever the token's own records say.
+		out, err := s.m.RevokeTokenInFamily(ctx, tok, simFamily)
+		s.logf("revoke %s in its grant -> %v", tok, out)
+		require.NoError(s.t, err)
+		if out == RevokedNothing {
+			s.fatalf("revoking %s in its known grant found nothing", tok)
+		}
+		s.revoked = true
+		s.replays = append(s.replays, func() { s.m.RevokeTokenInFamily(ctx, tok, simFamily) })
+		return
+	}
+	// While a token's rotation record is kept (the refresh grace window) the token
+	// leads to its grant, however long ago it would have expired by itself.
+	inWindow := s.mr.Exists(RotationPrefix + tokenHash(tok))
 	out, err := s.m.RevokeToken(ctx, tok)
 	s.logf("revoke %s -> %v", tok, out)
 	require.NoError(s.t, err)
+	if inWindow && out == RevokedNothing {
+		s.fatalf("revoking %s, which the grace window still accepts, found nothing", tok)
+	}
 	if out == RevokedRefreshToken || out == RevokedAccessToken || out == RevokedGrantByToken {
 		s.revoked = true
 	}

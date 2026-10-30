@@ -325,7 +325,8 @@ func TestFault_AClaimThatRanOutCannotPublishAfterARevocation(t *testing.T) {
 }
 
 // A refresh whose claim ran out and was taken over by another refresh must not
-// publish a second family of tokens when it wakes up.
+// publish a second family of tokens when it wakes up. It is not told the grant is
+// dead either: it is handed what the retry published (see refresh_grace_test.go).
 func TestFault_AClaimThatRanOutAndWasTakenOverCannotPublish(t *testing.T) {
 	stateManager, mr := setupTestStateManager(t)
 	fb := newMockFirebaseClient()
@@ -345,8 +346,8 @@ func TestFault_AClaimThatRanOutAndWasTakenOverCannotPublish(t *testing.T) {
 
 	first, err := m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
 	require.NoError(t, second.err, "the retry owns the token now")
-	assert.Error(t, err, "the slow refresh lost the token and publishes nothing")
-	assert.Nil(t, first)
+	require.NoError(t, err, "the slow refresh lost the token, published nothing, and is handed what the retry published")
+	assert.Equal(t, second.resp, first, "the same pair, not a second one")
 	assert.True(t, usable(t, m, second.resp.AccessToken))
 	var refreshKeys []string
 	for _, k := range liveTokenKeys(mr) {
