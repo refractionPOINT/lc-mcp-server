@@ -269,14 +269,6 @@ func (m *Manager) GenerateFamilyID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// familyGuards is the revocation markers that block writes for a family.
-func familyGuards(familyID string) []string {
-	if familyID == "" {
-		return nil
-	}
-	return []string{RevokedFamilyPrefix + familyID}
-}
-
 // IsFamilyRevoked reports whether the grant has been revoked. An empty family
 // id (legacy token) is never revoked this way.
 func (m *Manager) IsFamilyRevoked(ctx context.Context, familyID string) (bool, error) {
@@ -288,18 +280,6 @@ func (m *Manager) IsFamilyRevoked(ctx context.Context, familyID string) (bool, e
 		return false, fmt.Errorf("failed to check family revocation: %w", err)
 	}
 	return n > 0, nil
-}
-
-// RevokeFamily marks the grant revoked: none of its tokens can be written,
-// refreshed, extended or accepted afterwards, whatever is in flight.
-func (m *Manager) RevokeFamily(ctx context.Context, familyID string) error {
-	if familyID == "" {
-		return nil
-	}
-	if err := m.redis.Set(ctx, RevokedFamilyPrefix+familyID, "1", RevokedFamilyTTL); err != nil {
-		return fmt.Errorf("failed to revoke token family: %w", err)
-	}
-	return nil
 }
 
 // encodeAccessToken serializes an access token with its Firebase tokens
@@ -335,7 +315,8 @@ func (m *Manager) encodeAccessToken(token *AccessTokenData) (string, time.Durati
 // StoreAccessToken stores a new access token with encrypted Firebase tokens.
 // It is create-only: an existing record is never overwritten, so it cannot be
 // used to resurrect a revoked token. Changing a stored token goes through
-// UpdateAccessToken.
+// UpdateAccessToken. It writes the record alone; a new grant is stored with
+// IssueTokens.
 func (m *Manager) StoreAccessToken(ctx context.Context, token *AccessTokenData) error {
 	data, ttl, err := m.encodeAccessToken(token)
 	if err != nil {
@@ -356,16 +337,22 @@ func (m *Manager) StoreAccessToken(ctx context.Context, token *AccessTokenData) 
 // not been revoked, in one atomic step. It reports whether the record was
 // updated; false means it was revoked or expired meanwhile, and nothing was
 // written, so an update that raced a revocation can never bring the token back.
+// The token's index and its family record are kept alive at least as long as the
+// token itself.
 func (m *Manager) UpdateAccessToken(ctx context.Context, token *AccessTokenData) (bool, error) {
 	data, ttl, err := m.encodeAccessToken(token)
 	if err != nil {
 		return false, err
 	}
-	res, err := m.redis.UpdateUnlessGuarded(ctx, TokenPrefix+token.AccessToken, data, ttl, familyGuards(token.FamilyID)...)
+	keys := []string{TokenPrefix + token.AccessToken}
+	if fam := token.FamilyID; fam != "" {
+		keys = append(keys, RevokedFamilyPrefix+fam, TokenFamilyPrefix+tokenHash(token.AccessToken), FamilyPrefix+fam)
+	}
+	n, err := scriptInt(m.redis.Run(ctx, updateAccessScript, keys, data, ms(ttl), token.FamilyID))
 	if err != nil {
 		return false, fmt.Errorf("failed to update access token: %w", err)
 	}
-	return res == redis.WriteDone, nil
+	return n == updateDone, nil
 }
 
 // GetAccessTokenData retrieves and decrypts access token data
@@ -445,20 +432,6 @@ func (m *Manager) UpdateAccessTokenFirebaseTokens(ctx context.Context, accessTok
 	return nil
 }
 
-// RevokeAccessToken deletes an access token. Writes to access tokens are
-// update-only, so nothing in flight can bring it back.
-func (m *Manager) RevokeAccessToken(ctx context.Context, accessToken string) error {
-	key := TokenPrefix + accessToken
-
-	if err := m.redis.Delete(ctx, key); err != nil {
-		return fmt.Errorf("failed to revoke access token: %w", err)
-	}
-
-	m.logger.Info("Revoked access token")
-
-	return nil
-}
-
 // ===== Refresh Token Management =====
 
 // GenerateRefreshToken generates a secure random refresh token
@@ -489,8 +462,8 @@ func (m *Manager) encodeRefreshToken(token *RefreshTokenData) (string, error) {
 }
 
 // StoreRefreshToken stores a new refresh token with encrypted Firebase refresh
-// token. It is create-only, so an existing (or just claimed and restored)
-// record is never overwritten.
+// token. It is create-only, so an existing record is never overwritten. It
+// writes the record alone; a new grant is stored with IssueTokens.
 func (m *Manager) StoreRefreshToken(ctx context.Context, token *RefreshTokenData) error {
 	data, err := m.encodeRefreshToken(token)
 	if err != nil {
@@ -535,191 +508,6 @@ func (m *Manager) decodeRefreshToken(data string) (*RefreshTokenData, error) {
 	}
 
 	return &tokenData, nil
-}
-
-// RevokeRefreshToken revokes a refresh token and its grant: the record is
-// deleted atomically, a tombstone stops an operation in flight on it from
-// restoring it or publishing successors, and, when the record carried one, the
-// family is marked revoked and its access token deleted.
-func (m *Manager) RevokeRefreshToken(ctx context.Context, refreshToken string) error {
-	hash := tokenHash(refreshToken)
-	raw, found, err := m.redis.GetDeleteAndTombstone(ctx, RefreshPrefix+refreshToken, RefreshClaimPrefix+hash, RevokedTokenPrefix+hash, RevokedTokenTTL)
-	if err != nil {
-		return fmt.Errorf("failed to revoke refresh token: %w", err)
-	}
-
-	if found {
-		// Only the ids are needed, so a record that no longer decrypts is
-		// revoked too.
-		var rec RefreshTokenData
-		if err := json.Unmarshal([]byte(raw), &rec); err == nil {
-			if err := m.RevokeFamily(ctx, rec.FamilyID); err != nil {
-				return err
-			}
-			if rec.AccessToken != "" {
-				if err := m.RevokeAccessToken(ctx, rec.AccessToken); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	m.logger.Info("Revoked refresh token")
-
-	return nil
-}
-
-// ===== Refresh Token Claims =====
-
-// RefreshClaim is a refresh token taken out of circulation by one refresh. The
-// record is gone from Redis while the claim is held; the claimant either
-// publishes the successors (PublishRotation) or puts the token back
-// (RestoreRefreshToken), and always releases the claim.
-type RefreshClaim struct {
-	Token string
-	Data  *RefreshTokenData
-
-	raw       string
-	remaining time.Duration
-	claimedAt time.Time
-}
-
-// ErrRefreshInFlight means the refresh token is claimed by a refresh that has
-// not finished: it may still be restored or consumed.
-var ErrRefreshInFlight = errors.New("refresh in flight")
-
-// ClaimRefreshToken atomically takes a refresh token: exactly one caller gets
-// it, any other (and any later one) gets nil. Use RefreshInFlight to tell a
-// token that is being refreshed from one that does not exist.
-func (m *Manager) ClaimRefreshToken(ctx context.Context, refreshToken string) (*RefreshClaim, error) {
-	raw, remaining, found, err := m.redis.ClaimAndDelete(ctx, RefreshPrefix+refreshToken, RefreshClaimPrefix+tokenHash(refreshToken), RefreshClaimTTL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to claim refresh token: %w", err)
-	}
-	if !found {
-		return nil, nil
-	}
-	claim := &RefreshClaim{Token: refreshToken, raw: raw, remaining: remaining, claimedAt: time.Now()}
-
-	data, err := m.decodeRefreshToken(raw)
-	if err != nil {
-		// Not ours to consume if we cannot read it: put it back.
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		if _, rerr := m.RestoreRefreshToken(cleanup, claim); rerr != nil {
-			m.logger.Error("Failed to restore an unreadable refresh token", "error", rerr)
-		}
-		m.ReleaseRefreshClaim(cleanup, refreshToken)
-		return nil, err
-	}
-	claim.Data = data
-	return claim, nil
-}
-
-// RefreshInFlight reports whether a refresh of the token is in progress.
-func (m *Manager) RefreshInFlight(ctx context.Context, refreshToken string) (bool, error) {
-	n, err := m.redis.Exists(ctx, RefreshClaimPrefix+tokenHash(refreshToken))
-	if err != nil {
-		return false, fmt.Errorf("failed to check refresh claim: %w", err)
-	}
-	return n > 0, nil
-}
-
-// ReleaseRefreshClaim drops the in-flight marker of a refresh token.
-func (m *Manager) ReleaseRefreshClaim(ctx context.Context, refreshToken string) {
-	if err := m.redis.Delete(ctx, RefreshClaimPrefix+tokenHash(refreshToken)); err != nil {
-		m.logger.Warn("Failed to release refresh claim", "error", err)
-	}
-}
-
-// RestoreRefreshToken puts a claimed refresh token back, create-only and with
-// its remaining lifetime, so a refresh that failed for a transient reason does
-// not sign the client out. It never restores a token that was revoked
-// meanwhile (the token's tombstone or its family's marker exists): that returns
-// ErrTokenRevoked. It reports whether the token was put back.
-func (m *Manager) RestoreRefreshToken(ctx context.Context, claim *RefreshClaim) (bool, error) {
-	remaining := claim.remaining - time.Since(claim.claimedAt)
-	if claim.remaining < 0 {
-		remaining = RefreshTTL * time.Second // had no expiry; never leave one unbounded
-	}
-	if remaining < time.Millisecond {
-		return false, nil // expired while we held it
-	}
-
-	guards := append([]string{RevokedTokenPrefix + tokenHash(claim.Token)}, familyGuards(claim.familyID())...)
-	res, err := m.redis.CreateUnlessGuarded(ctx, RefreshPrefix+claim.Token, claim.raw, remaining, guards...)
-	if err != nil {
-		return false, fmt.Errorf("failed to restore refresh token: %w", err)
-	}
-	switch res {
-	case redis.WriteBlocked:
-		return false, ErrTokenRevoked
-	case redis.WriteConflict:
-		return false, ErrAlreadyExists
-	}
-	return true, nil
-}
-
-func (c *RefreshClaim) familyID() string {
-	if c.Data == nil {
-		return ""
-	}
-	return c.Data.FamilyID
-}
-
-// RevokeClaimedFamily revokes the grant of a claimed refresh token: the token
-// is tombstoned (it is already out of Redis), the family marked revoked and the
-// access token it was issued with deleted.
-func (m *Manager) RevokeClaimedFamily(ctx context.Context, claim *RefreshClaim) error {
-	var firstErr error
-	if err := m.redis.Set(ctx, RevokedTokenPrefix+tokenHash(claim.Token), "1", RevokedTokenTTL); err != nil {
-		firstErr = fmt.Errorf("failed to tombstone refresh token: %w", err)
-	}
-	if err := m.RevokeFamily(ctx, claim.familyID()); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	if claim.Data != nil && claim.Data.AccessToken != "" {
-		if err := m.RevokeAccessToken(ctx, claim.Data.AccessToken); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-// PublishRotation stores the successor access and refresh tokens of a claimed
-// refresh token, and deletes the access token it was issued with, as one atomic
-// step that is refused when the refresh token or its family was revoked since
-// the claim (ErrTokenRevoked: nothing is written). The successors must carry
-// the family id of the claim (or a fresh one when the claim had none).
-func (m *Manager) PublishRotation(ctx context.Context, claim *RefreshClaim, at *AccessTokenData, rt *RefreshTokenData) error {
-	atData, atTTL, err := m.encodeAccessToken(at)
-	if err != nil {
-		return err
-	}
-	rtData, err := m.encodeRefreshToken(rt)
-	if err != nil {
-		return err
-	}
-
-	guards := append([]string{RevokedTokenPrefix + tokenHash(claim.Token)}, familyGuards(claim.familyID())...)
-	var deletes []string
-	if claim.Data != nil && claim.Data.AccessToken != "" {
-		deletes = append(deletes, TokenPrefix+claim.Data.AccessToken)
-	}
-	res, err := m.redis.CreateAllUnlessGuarded(ctx, []redis.Entry{
-		{Key: TokenPrefix + at.AccessToken, Value: atData, TTL: atTTL},
-		{Key: RefreshPrefix + rt.RefreshToken, Value: rtData, TTL: RefreshTTL * time.Second},
-	}, deletes, guards)
-	if err != nil {
-		return fmt.Errorf("failed to publish rotated tokens: %w", err)
-	}
-	switch res {
-	case redis.WriteBlocked:
-		return ErrTokenRevoked
-	case redis.WriteConflict:
-		return ErrAlreadyExists
-	}
-	return nil
 }
 
 // ===== Client Registration Management =====
