@@ -31,6 +31,10 @@ const (
 	// marker carries no document: it only selects which fetch budget applies
 	// and can never authorize anything.
 	KnownPrefix = "oauth:cimd:known:"
+	// GenPrefix holds a per-URL generation shared by all replicas. It orders
+	// publishing a fetched document against invalidating the URL (see
+	// publishDoc and invalidate).
+	GenPrefix = "oauth:cimd:gen:"
 	// URLPrefix counts fetches per document URL, CachedHostPrefix counts the
 	// new documents a host got cached today and CachedAllKey the same across
 	// every host (see mayCacheNewDoc).
@@ -53,6 +57,12 @@ const (
 
 	// knownTTL is how long a URL stays "known" after its last validated fetch.
 	knownTTL = 7 * 24 * time.Hour
+
+	// genTTL is how long a URL's generation is kept after it last changed. A
+	// fetch is bounded to requestTimeout+1s from the moment its generation is
+	// read, so this only has to outlive that by a wide margin; keeping it short
+	// bounds the keys that junk URLs (404s) can create.
+	genTTL = 15 * time.Minute
 
 	// The cache lives in the Redis shared with tokens and authorization codes,
 	// so what can be written into it is bounded in size and in count. Real
@@ -121,6 +131,16 @@ type Store interface {
 	// IncrEphemeral increments a counter, starting a new window of the given
 	// length when the counter is created, and returns the new value.
 	IncrEphemeral(ctx context.Context, key string, window time.Duration) (int64, error)
+	// PublishDocIfGeneration atomically checks that genKey still holds
+	// expectedGen ("" meaning absent) and, if so, bumps it and writes docKey (and
+	// knownKey when not empty). It reports whether it wrote.
+	PublishDocIfGeneration(ctx context.Context, genKey, expectedGen string, genTTL time.Duration,
+		docKey, doc string, docTTL time.Duration, knownKey string, knownTTL time.Duration) (bool, error)
+	// InvalidateDoc atomically bumps genKey and deletes docKey; knownKey is
+	// deleted too when dropKnown is set, otherwise its expiry is renewed if it
+	// exists.
+	InvalidateDoc(ctx context.Context, genKey string, genTTL time.Duration,
+		docKey, knownKey string, dropKnown bool, knownTTL time.Duration) error
 }
 
 // Fetcher resolves CIMD client_ids to validated documents.
@@ -296,6 +316,10 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		return shed("too many client metadata lookups in progress; try again shortly")
 	}
 
+	// The generation is read before the request is made: whatever this fetch
+	// returns may only be published if no replica invalidated or published the
+	// URL since (see publishDoc).
+	gen, genOK := f.readGeneration(ctx, key)
 	doc, ttl, err := f.fetch(ctx, clientID)
 	if err != nil {
 		var e *Error
@@ -309,18 +333,22 @@ func (f *Fetcher) fetchAndCache(ctx context.Context, clientID, key string) (*Doc
 		// keep working until its TTL runs out. A transient error leaves the
 		// cache alone: the document may well be unchanged.
 		if e.gone || e.Kind == KindInvalidDocument || e.Kind == KindUnsupported {
-			f.dropDoc(ctx, key)
+			f.invalidate(ctx, key, true)
 		}
 		f.logger.Info("CIMD client rejected", "client_host", host, "outcome", "error", "kind", int(e.Kind), "reason", e.Message)
 		return nil, e
 	}
 	f.logger.Info("CIMD client resolved", "client_host", host, "outcome", "ok", "cache_ttl_seconds", int(ttl.Seconds()))
-	if ttl > 0 {
-		f.storeDoc(ctx, host, key, doc, ttl, known)
-	} else {
+	switch {
+	case ttl <= 0:
 		// no-store/no-cache/private: the new answer replaces whatever was
-		// cached before.
-		f.dropDoc(ctx, key)
+		// cached before. The URL stays known (a valid answer was just
+		// obtained): the marker only selects the fetch budget.
+		f.invalidate(ctx, key, false)
+	case !genOK:
+		f.logger.Warn("CIMD generation unavailable; not caching", "client_host", host)
+	default:
+		f.storeDoc(ctx, host, key, gen, doc, ttl, known)
 	}
 	return doc, nil
 }
@@ -331,12 +359,25 @@ func (f *Fetcher) isKnown(ctx context.Context, key string) bool {
 	return err == nil && v != ""
 }
 
-// dropDoc removes the cached document and the known marker for key.
-func (f *Fetcher) dropDoc(ctx context.Context, key string) {
-	for _, p := range []string{DocPrefix, KnownPrefix} {
-		if _, err := f.store.ConsumeEphemeral(ctx, p+key); err != nil {
-			f.logger.Warn("CIMD cache invalidation failed", "error", err)
-		}
+// readGeneration reads the URL's generation ("" when it has none yet).
+func (f *Fetcher) readGeneration(ctx context.Context, key string) (string, bool) {
+	gen, err := f.store.GetEphemeral(ctx, GenPrefix+key)
+	if err != nil {
+		f.logger.Warn("CIMD generation read failed", "error", err)
+		return "", false
+	}
+	return gen, true
+}
+
+// invalidate removes the cached document and bumps the URL's generation in one
+// atomic step, so a fetch that began earlier (on any replica) can no longer
+// publish its, now stale, result. dropKnown also removes the known marker:
+// right for a URL that is gone or unacceptable. A valid answer that merely
+// isn't cacheable keeps (and renews) the marker, which authorizes nothing and
+// only selects the fetch budget.
+func (f *Fetcher) invalidate(ctx context.Context, key string, dropKnown bool) {
+	if err := f.store.InvalidateDoc(ctx, GenPrefix+key, genTTL, DocPrefix+key, KnownPrefix+key, dropKnown, knownTTL); err != nil {
+		f.logger.Warn("CIMD cache invalidation failed", "error", err)
 	}
 }
 
@@ -441,31 +482,39 @@ func (f *Fetcher) cachedDoc(ctx context.Context, key string) (*Document, bool) {
 
 // storeDoc caches a validated document (and marks its URL known) within the
 // size and count bounds. Beyond them the document is simply not cached.
-func (f *Fetcher) storeDoc(ctx context.Context, host, key string, doc *Document, ttl time.Duration, known bool) {
+//
+// gen is the URL's generation as read before the fetch that produced doc. The
+// write happens only if the generation is still gen, and it bumps it: an
+// invalidation (or another publication) that landed while this fetch was in
+// flight wins, so a slow replica can neither bring back a document that was
+// withdrawn nor overwrite a newer one. The loser's caller still gets the
+// document it fetched; it just isn't cached, and the next lookup fetches again.
+func (f *Fetcher) storeDoc(ctx context.Context, host, key, gen string, doc *Document, ttl time.Duration, known bool) {
 	b, err := json.Marshal(doc)
 	if err != nil {
 		return
 	}
 	if len(b) > maxCachedDocBytes {
 		f.logger.Info("CIMD document too large to cache", "client_host", host, "bytes", len(b))
+		// The new answer still replaces what was cached before.
+		f.invalidate(ctx, key, false)
 		return
 	}
 	// Refreshing a known URL does not add a distinct entry; a new one must fit
 	// the budgets. Beyond them the document is cached briefly and not marked
 	// known: spending the budgets (anyone can, /authorize is unauthenticated)
 	// must not stop a client in real use from being served from cache.
+	knownKey := KnownPrefix + key
 	if !known && !f.mayCacheNewDoc(ctx, host) {
 		f.logger.Warn("CIMD new-document cache budget exhausted; caching briefly", "client_host", host)
-		if err := f.store.SetEphemeral(ctx, DocPrefix+key, string(b), min(ttl, minCacheTTL)); err != nil {
-			f.logger.Warn("CIMD cache write failed", "error", err)
-		}
-		return
+		ttl, knownKey = min(ttl, minCacheTTL), ""
 	}
-	if err := f.store.SetEphemeral(ctx, DocPrefix+key, string(b), ttl); err != nil {
+	ok, err := f.store.PublishDocIfGeneration(ctx, GenPrefix+key, gen, genTTL, DocPrefix+key, string(b), ttl, knownKey, knownTTL)
+	switch {
+	case err != nil:
 		f.logger.Warn("CIMD cache write failed", "error", err)
-	}
-	if err := f.store.SetEphemeral(ctx, KnownPrefix+key, "1", knownTTL); err != nil {
-		f.logger.Warn("CIMD known-marker write failed", "error", err)
+	case !ok:
+		f.logger.Info("CIMD fetched document discarded: URL changed while fetching", "client_host", host)
 	}
 }
 
