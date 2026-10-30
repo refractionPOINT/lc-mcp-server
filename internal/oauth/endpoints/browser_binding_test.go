@@ -134,7 +134,7 @@ func TestCallback_ProviderURLSentToAVictimDoesNotIssueACode(t *testing.T) {
 		"a victim browser with no binding cookie":             nil,
 		"a victim browser with a binding cookie of its own":   {victimCookie},
 		"a victim browser with an unrelated secret":           {{Name: h.browserBindCookieName(), Value: "x"}},
-		"a victim browser with the selection cookies only":    {{Name: selectionBindCookie, Value: "x"}, {Name: selectionAckCookie, Value: "x"}},
+		"a victim browser with the selection cookies only":    {{Name: h.selectionBindCookieName(), Value: "x"}, {Name: h.selectionAckCookieName(), Value: "x"}},
 		"the attacker's secret under the name used over http": {{Name: browserBindCookie, Value: bindCookieOf(t, h, attacker.cookies).Value}},
 		"an empty binding cookie":                             {{Name: h.browserBindCookieName(), Value: ""}},
 	} {
@@ -323,10 +323,10 @@ func TestBrowserBinding_ConcurrentSignInsInOneBrowserBothWork(t *testing.T) {
 	provider := q.Get("provider")
 	q.Del("provider")
 	loc, _ := url.Parse(authorizeRequest(h, q).Header().Get("Location"))
-	picked := completeSelection(t, h, loc.Query().Get("session"), provider)
+	picked, held := completeSelection(t, h, loc.Query().Get("session"), provider, secret)
 	require.Equal(t, http.StatusFound, picked.Code, picked.Body.String())
 	back, _ := url.Parse(picked.Header().Get("Location"))
-	w := authorizeRequest(h, back.Query(), append(picked.Result().Cookies(), secret)...)
+	w := authorizeRequest(h, back.Query(), held...)
 	secondCookie := bindCookieOf(t, h, w.Result().Cookies())
 	assert.Equal(t, secret.Value, secondCookie.Value, "the browser's secret is reused, not replaced")
 	second := signIn{fb: firebaseStateOf(t, w), cookies: []*http.Cookie{secondCookie}}
@@ -377,9 +377,9 @@ func TestBrowserBinding_ForeignCookieValueIsNotAdopted(t *testing.T) {
 	provider := q.Get("provider")
 	q.Del("provider")
 	loc, _ := url.Parse(authorizeRequest(h, q).Header().Get("Location"))
-	picked := completeSelection(t, h, loc.Query().Get("session"), provider)
+	picked, held := completeSelection(t, h, loc.Query().Get("session"), provider, planted)
 	back, _ := url.Parse(picked.Header().Get("Location"))
-	w := authorizeRequest(h, back.Query(), append(picked.Result().Cookies(), planted)...)
+	w := authorizeRequest(h, back.Query(), held...)
 	require.Equal(t, http.StatusFound, w.Code, w.Body.String())
 
 	issued := bindCookieOf(t, h, w.Result().Cookies())

@@ -24,24 +24,46 @@ func authorizeRequest(h *Handlers, q url.Values, cookies ...*http.Cookie) *httpt
 	return w
 }
 
+// mergeCookies is what a browser holds after receiving each set of cookies in
+// turn: a later cookie replaces an earlier one of the same name.
+func mergeCookies(sets ...[]*http.Cookie) []*http.Cookie {
+	var out []*http.Cookie
+	for _, set := range sets {
+		for _, c := range set {
+			replaced := false
+			for i := range out {
+				if out[i].Name == c.Name {
+					out[i], replaced = c, true
+				}
+			}
+			if !replaced {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
 // completeSelection plays the browser on the selection page of a session: it
 // loads the page, then picks provider from the same browser. It returns the
-// response to the pick (a redirect back to /authorize, or an error).
-func completeSelection(t *testing.T, h *Handlers, session, provider string) *httptest.ResponseRecorder {
+// response to the pick (a redirect back to /authorize, or an error) and the
+// cookies the browser then holds (page and pick).
+func completeSelection(t *testing.T, h *Handlers, session, provider string, initial ...*http.Cookie) (*httptest.ResponseRecorder, []*http.Cookie) {
 	t.Helper()
 	page := httptest.NewRecorder()
-	h.HandleProviderSelection(page, httptest.NewRequest(http.MethodGet, "/oauth/select-provider?session="+session, nil), session)
+	pageReq := httptest.NewRequest(http.MethodGet, "/oauth/select-provider?session="+session, nil)
+	withCookies(pageReq, initial...)
+	h.HandleProviderSelection(page, pageReq, session)
 	require.Equal(t, http.StatusOK, page.Code, page.Body.String())
 
 	form := url.Values{"provider": {provider}}
 	req := httptest.NewRequest(http.MethodPost, "/oauth/select-provider?session="+session, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	for _, c := range page.Result().Cookies() {
-		req.AddCookie(c)
-	}
+	held := mergeCookies(initial, page.Result().Cookies())
+	withCookies(req, held...)
 	w := httptest.NewRecorder()
 	h.HandleProviderSelection(w, req, session)
-	return w
+	return w, mergeCookies(held, w.Result().Cookies())
 }
 
 // browserAuthorize is /authorize for a request that names a provider, the way a
@@ -62,12 +84,12 @@ func browserAuthorize(t *testing.T, h *Handlers, q url.Values) *httptest.Respons
 	if w.Code != http.StatusFound || err != nil || loc.Path != "/oauth/select-provider" {
 		return w
 	}
-	picked := completeSelection(t, h, loc.Query().Get("session"), provider)
+	picked, held := completeSelection(t, h, loc.Query().Get("session"), provider)
 	if picked.Code != http.StatusFound {
 		return picked
 	}
 	back, err := url.Parse(picked.Header().Get("Location"))
 	require.NoError(t, err)
 	require.Equal(t, "/authorize", back.Path)
-	return authorizeRequest(h, back.Query(), picked.Result().Cookies()...)
+	return authorizeRequest(h, back.Query(), held...)
 }

@@ -227,7 +227,7 @@ func TestSelection_PickingFromABrowserThatDidNotRenderThePageFails(t *testing.T)
 			// The victim's browser never rendered the page: no cookie, or somebody else's.
 			for _, cookies := range [][]*http.Cookie{
 				nil,
-				{{Name: selectionBindCookie, Value: "attacker-chosen"}},
+				{{Name: h.selectionBindCookieName(), Value: "attacker-chosen"}},
 			} {
 				_, session2, _ := selectionPageOf(t, h, clientID, c.redirect)
 				req := httptest.NewRequest(http.MethodGet, "/oauth/select-provider/google?session="+session2, nil)
@@ -260,7 +260,7 @@ func TestSelection_PickingFromABrowserThatDidNotRenderThePageFails(t *testing.T)
 			back, err := url.Parse(w.Header().Get("Location"))
 			require.NoError(t, err)
 			assert.NotEmpty(t, back.Query().Get(selectionAckParam))
-			w2 := authorizeRequest(h, back.Query(), w.Result().Cookies()...)
+			w2 := authorizeRequest(h, back.Query(), mergeCookies(attackerCookies, w.Result().Cookies())...)
 			assert.Contains(t, w2.Header().Get("Location"), "firebase.example.com")
 			assert.True(t, created)
 		})

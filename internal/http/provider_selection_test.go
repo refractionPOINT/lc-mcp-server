@@ -25,6 +25,8 @@ func TestProviderSelectionRoute_CIMDClientNeedsSameOriginClick(t *testing.T) {
 	s.oauthHandlers = handlers
 
 	const secret = "browser-binding-secret"
+	// The browser's binding secret, as the selection page issues it (43 chars).
+	const browserSecret = "bBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBbBb"
 	sum := sha256.Sum256([]byte(secret))
 	newSession := func(id string) {
 		require.NoError(t, s.stateManager.CreateSelectionSession(context.Background(), id, map[string]string{
@@ -41,7 +43,9 @@ func TestProviderSelectionRoute_CIMDClientNeedsSameOriginClick(t *testing.T) {
 			req.Header.Set("Sec-Fetch-Site", site)
 		}
 		if withCookie {
-			req.AddCookie(&http.Cookie{Name: "lc_oauth_selection_view", Value: secret})
+			// The server URL is https, so the cookies carry the __Host- prefix.
+			req.AddCookie(&http.Cookie{Name: "__Host-lc_oauth_selection_view", Value: secret})
+			req.AddCookie(&http.Cookie{Name: "__Host-lc_oauth_browser", Value: browserSecret})
 		}
 		w := httptest.NewRecorder()
 		s.mux.ServeHTTP(w, req)
@@ -55,12 +59,13 @@ func TestProviderSelectionRoute_CIMDClientNeedsSameOriginClick(t *testing.T) {
 	assert.Contains(t, w.Header().Get("Location"), "/authorize?")
 	var ack *http.Cookie
 	for _, c := range w.Result().Cookies() {
-		if c.Name == "lc_oauth_selection" {
+		if c.Name == "__Host-lc_oauth_selection" {
 			ack = c
 		}
 	}
 	require.NotNil(t, ack)
 	assert.Equal(t, http.SameSiteStrictMode, ack.SameSite)
+	assert.Equal(t, "/", ack.Path)
 
 	// a cross-site page navigating the popup that showed the page, cookie and all
 	for _, site := range []string{"cross-site", "same-site", "none"} {

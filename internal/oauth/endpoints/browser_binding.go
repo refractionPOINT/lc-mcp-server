@@ -82,17 +82,36 @@ func (h *Handlers) browserBindingCookie(secret string, maxAge int) *http.Cookie 
 // the transaction. An existing well-formed secret is reused, so several
 // sign-ins started in one browser at once all stay valid.
 func (h *Handlers) bindTransactionToBrowser(w http.ResponseWriter, r *http.Request) (string, error) {
-	secret := ""
-	if c, err := r.Cookie(h.browserBindCookieName()); err == nil && browserSecretShape.MatchString(c.Value) {
-		secret = c.Value
-	} else {
+	secret, err := h.ensureBrowserSecret(w, r)
+	if err != nil {
+		return "", err
+	}
+	return sha256Hex(secret), nil
+}
+
+// ensureBrowserSecret returns this browser's binding secret, reusing a
+// well-formed one it presented and otherwise minting one, and (re)sets the
+// cookie on the response.
+func (h *Handlers) ensureBrowserSecret(w http.ResponseWriter, r *http.Request) (string, error) {
+	secret, ok := h.browserSecretOf(r)
+	if !ok {
 		var err error
 		if secret, err = randomToken(); err != nil {
 			return "", err
 		}
 	}
 	http.SetCookie(w, h.browserBindingCookie(secret, state.StateTTL))
-	return sha256Hex(secret), nil
+	return secret, nil
+}
+
+// browserSecretOf returns the well-formed browser-binding secret the request
+// presents, if any.
+func (h *Handlers) browserSecretOf(r *http.Request) (string, bool) {
+	c, err := r.Cookie(h.browserBindCookieName())
+	if err != nil || !browserSecretShape.MatchString(c.Value) {
+		return "", false
+	}
+	return c.Value, true
 }
 
 // transactionBoundToBrowser reports whether the request comes from the browser
