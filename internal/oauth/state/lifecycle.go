@@ -82,20 +82,30 @@ local function extend(key, ms)
 	end
 end
 
+-- ensure_hash clears a family record that is not a hash. Nothing writes one,
+-- but a script that fails half way cannot be rolled back, so the type is
+-- checked before the first write rather than trusted.
+local function ensure_hash(key)
+	local t = redis.call('TYPE', key).ok
+	if t ~= 'none' and t ~= 'hash' then
+		redis.call('DEL', key)
+	end
+end
+
 -- kill_family revokes a grant: the marker that blocks every write for it, and
 -- the current tokens and claim its record names.
 local function kill_family(fam, marker_ttl)
-	redis.call('SET', P_FAMILY_REVOKED .. fam, '1', 'PX', marker_ttl)
 	local fk = P_FAMILY .. fam
-	if redis.call('EXISTS', fk) == 1 then
+	if redis.call('TYPE', fk).ok == 'hash' then
 		local rt = redis.call('HGET', fk, 'rt')
 		local rth = redis.call('HGET', fk, 'rth')
 		local at = redis.call('HGET', fk, 'at')
 		if rt then redis.call('DEL', P_REFRESH .. rt) end
 		if rth then redis.call('DEL', P_CLAIM .. rth) end
 		if at then redis.call('DEL', P_TOKEN .. at) end
-		redis.call('DEL', fk)
 	end
+	redis.call('DEL', fk)
+	redis.call('SET', P_FAMILY_REVOKED .. fam, '1', 'PX', marker_ttl)
 end
 `, RefreshPrefix, TokenPrefix, RefreshClaimPrefix, FamilyPrefix, RevokedFamilyPrefix)
 
@@ -209,6 +219,7 @@ if redis.call('EXISTS', KEYS[6]) == 1 or redis.call('EXISTS', KEYS[7]) == 1 then
 	return 0
 end
 if old_ttl < 1 then old_ttl = ARGV[12] end
+ensure_hash(KEYS[8])
 redis.call('SET', KEYS[6], ARGV[3], 'PX', ARGV[4])
 redis.call('SET', KEYS[7], ARGV[5], 'PX', ARGV[6])
 redis.call('SET', KEYS[9], ARGV[2], 'PX', ARGV[4])
@@ -254,6 +265,7 @@ local a = redis.call('GET', KEYS[1])
 if a and a ~= ARGV[1] then return 0 end
 local r = redis.call('GET', KEYS[2])
 if r and r ~= ARGV[3] then return 0 end
+ensure_hash(KEYS[4])
 redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
 redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[4])
 redis.call('SET', KEYS[5], ARGV[5], 'PX', ARGV[2])
@@ -532,15 +544,16 @@ func (m *Manager) claimAs(ctx context.Context, refreshToken, owner string) (*Ref
 		m.releaseClaim(cleanup, h, owner)
 		return nil, fmt.Errorf("failed to claim refresh token: %w", err)
 	}
+	// The reply carries the refresh record, so it is never printed.
 	reply, ok := res.([]interface{})
 	if !ok || len(reply) != 3 {
-		return nil, fmt.Errorf("unexpected claim reply %v", res)
+		return nil, fmt.Errorf("unexpected claim reply of type %T", res)
 	}
 	status, ok1 := reply[0].(int64)
 	raw, ok2 := reply[1].(string)
 	fam, ok3 := reply[2].(string)
 	if !ok1 || !ok2 || !ok3 {
-		return nil, fmt.Errorf("unexpected claim reply %v", res)
+		return nil, errors.New("unexpected claim reply: wrong element types")
 	}
 	switch status {
 	case claimNotFound:
@@ -630,7 +643,8 @@ func (m *Manager) preparePublish(claim *RefreshClaim, at *AccessTokenData, rt *R
 		TokenFamilyPrefix + newRT,
 		TokenFamilyPrefix + h,
 	}
-	if old := claim.Data.AccessToken; old != "" {
+	if claim.Data != nil && claim.Data.AccessToken != "" {
+		old := claim.Data.AccessToken
 		keys = append(keys, TokenPrefix+old, TokenFamilyPrefix+tokenHash(old))
 	}
 	return &scriptCall{
@@ -649,7 +663,10 @@ func (m *Manager) publish(ctx context.Context, call *scriptCall) error {
 		return fmt.Errorf("failed to publish rotated tokens: %w", err)
 	}
 	switch n {
-	case publishDone, publishReplayed:
+	case publishDone:
+		return nil
+	case publishReplayed:
+		m.logger.Info("Rotation was already published by this refresh; a repeated command was answered from its record")
 		return nil
 	case publishConflict:
 		return ErrAlreadyExists
