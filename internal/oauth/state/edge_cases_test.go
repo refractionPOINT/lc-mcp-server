@@ -490,7 +490,7 @@ func TestSelectionSession_EdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		params := map[string]string{}
-		err = manager.StoreSelectionSession(ctx, sessionID, params)
+		err = manager.CreateSelectionSession(ctx, sessionID, params)
 		require.NoError(t, err)
 
 		consumed, err := manager.ConsumeSelectionSession(ctx, sessionID)
@@ -509,7 +509,7 @@ func TestSelectionSession_EdgeCases(t *testing.T) {
 			params[fmt.Sprintf("param_%d", i)] = fmt.Sprintf("value_%d", i)
 		}
 
-		err = manager.StoreSelectionSession(ctx, sessionID, params)
+		err = manager.CreateSelectionSession(ctx, sessionID, params)
 		require.NoError(t, err)
 
 		consumed, err := manager.ConsumeSelectionSession(ctx, sessionID)

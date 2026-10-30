@@ -50,7 +50,7 @@ func RegisterListOrgNotes() {
 					return BriefData(d, "description")
 				}
 			}
-			resp, err := ListRecords(lc.NewHiveClient(org), "org_notes", org.GetOID(), "org_notes", listReq, briefFn)
+			resp, err := ListRecords(NewClient(org), "org_notes", org.GetOID(), "org_notes", listReq, briefFn)
 			if err != nil {
 				return tools.ErrorResultf("failed to list org notes: %v", err), nil
 			}
@@ -86,7 +86,7 @@ func RegisterGetOrgNote() {
 			}
 
 			// Create hive client for org notes
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get org note
 			orgNote, err := hive.Get(lc.HiveArgs{
@@ -218,7 +218,7 @@ func RegisterDeleteOrgNote() {
 			}
 
 			// Create hive client for org notes
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete org note
 			_, err = hive.Remove(lc.HiveArgs{

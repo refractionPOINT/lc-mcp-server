@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/refractionpoint/lc-mcp-go/internal/auth"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -316,7 +319,7 @@ func TestManager_WrapResult_Disabled(t *testing.T) {
 		assert.Equal(t, data, wrapped, "Small data should be returned inline")
 	})
 
-	t.Run("uploads large data to temp file when disabled", func(t *testing.T) {
+	t.Run("uploads large data to temp file when disabled, for a local stdio request", func(t *testing.T) {
 		cfg := &Config{
 			TokenThreshold: 10,    // Low threshold to trigger upload
 			Enabled:        false, // GCS disabled, should use temp file
@@ -329,7 +332,9 @@ func TestManager_WrapResult_Disabled(t *testing.T) {
 			largeData[string(rune('a'+i%26))+string(rune(i))] = "this is a long value"
 		}
 
-		wrapped, err := mgr.WrapResult(ctx, largeData, "test_tool")
+		// Only the stdio server marks its requests as running on the caller's own
+		// machine, where a path on this host is a path the caller can read.
+		wrapped, err := mgr.WrapResult(auth.WithLocalFilesystemAccess(ctx), largeData, "test_tool")
 
 		require.NoError(t, err)
 		wrappedMap, ok := wrapped.(map[string]interface{})
@@ -365,6 +370,70 @@ func TestManager_WrapResult_Disabled(t *testing.T) {
 		// Should return data as-is when estimation fails
 		assert.NoError(t, err)
 		assert.Equal(t, data, wrapped)
+	})
+}
+
+// With GCS disabled the only place to put a large result is this process's temp
+// directory. A remote tenant of the shared HTTP server cannot read a path on the
+// server, and nothing cleans those files up, so such a request writes nothing
+// and gets the result inline (errNoLargeResultStorage makes WrapMCPResult return
+// the original).
+func TestWrapResult_DisabledNeverWritesServerFilesForRemoteCallers(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	mgr, err := NewManager(context.Background(), &Config{TokenThreshold: 10, Enabled: false})
+	require.NoError(t, err)
+
+	for name, ctx := range map[string]context.Context{
+		"no identity":    context.Background(),
+		"tenant request": ctxFor("oid-a", "key-a"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			res, err := mgr.UploadToGCS(ctx, largeData(), "get_payload")
+			assert.ErrorIs(t, err, errNoLargeResultStorage)
+			assert.Nil(t, res)
+
+			wrapped, err := mgr.WrapResult(ctx, largeData(), "get_payload")
+			assert.ErrorIs(t, err, errNoLargeResultStorage)
+			assert.Nil(t, wrapped)
+		})
+	}
+
+	entries, err := os.ReadDir(tmp)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing may be written to the server's temp directory")
+}
+
+func TestWrapMCPResult_DisabledReturnsRemoteCallersResultInline(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	mgr, err := NewManager(context.Background(), &Config{TokenThreshold: 10, Enabled: false})
+	require.NoError(t, err)
+
+	text, _ := json.Marshal(largeData())
+	mcp := map[string]interface{}{
+		"isError": false,
+		"content": []interface{}{map[string]interface{}{"type": "text", "text": string(text)}},
+	}
+
+	t.Run("remote tenant: the original result, nothing written", func(t *testing.T) {
+		ctx := WithGCSManager(ctxFor("oid-a", "key-a"), mgr)
+		assert.Equal(t, mcp, WrapMCPResult(ctx, mcp, "get_payload"))
+		entries, err := os.ReadDir(tmp)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
+
+	t.Run("local stdio user: a temp file they can read", func(t *testing.T) {
+		ctx := WithGCSManager(auth.WithLocalFilesystemAccess(ctxFor("oid-a", "key-a")), mgr)
+		result := WrapMCPResult(ctx, mcp, "get_payload").(map[string]interface{})
+		item := result["content"].([]interface{})[0].(map[string]interface{})
+		var body map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(item["text"].(string)), &body))
+		assert.Equal(t, true, body["is_temp_file"])
+		link, _ := body["resource_link"].(string)
+		assert.FileExists(t, link)
+		assert.Equal(t, tmp, filepath.Dir(link))
 	})
 }
 

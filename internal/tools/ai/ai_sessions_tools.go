@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	lc "github.com/refractionPOINT/go-limacharlie/limacharlie"
@@ -22,6 +23,10 @@ func init() {
 	RegisterGetAIChat()
 	RegisterGetAIChatHistory()
 }
+
+// aiAgentRefPrefix is the URI form of an ai_agent record the SDK accepts in place of
+// its bare key.
+const aiAgentRefPrefix = "hive://ai_agent/"
 
 // stringArg returns the trimmed string at key, requiring it to be non-empty.
 func optString(args map[string]interface{}, key string) (string, bool) {
@@ -137,6 +142,12 @@ func RegisterStartAISession() {
 			}
 
 			slog.Info("Tool called: start_ai_session", toolCallAttrs(ctx, "definition_name_len", len(definitionName))...)
+
+			// The SDK reads the definition from hive/ai_agent/<oid>/<key>/data, with the key as
+			// given or as the name of a hive://ai_agent/<name> reference.
+			if err := tools.ValidateHiveRecordKey(strings.TrimPrefix(definitionName, aiAgentRefPrefix)); err != nil {
+				return tools.ErrorResultf("definition_name: %v", err), nil
+			}
 
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {

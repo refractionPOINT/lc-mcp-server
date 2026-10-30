@@ -609,3 +609,150 @@ func TestOAuthWorkflow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, tokenData)
 }
+
+func TestSetNX(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	ctx := context.Background()
+
+	ok, err := client.SetNX(ctx, "k", "first", time.Minute)
+	require.NoError(t, err)
+	assert.True(t, ok)
+
+	ok, err = client.SetNX(ctx, "k", "second", time.Minute)
+	require.NoError(t, err)
+	assert.False(t, ok, "an existing key is not overwritten")
+	v, _ := client.Get(ctx, "k")
+	assert.Equal(t, "first", v)
+	assert.Equal(t, time.Minute, mr.TTL("k"))
+
+	ok, err = client.SetNX(ctx, "forever", "v", 0)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Zero(t, mr.TTL("forever"), "zero means no expiry")
+
+	_, err = client.SetNX(ctx, "neg", "v", -time.Second)
+	assert.Error(t, err)
+}
+
+func TestCreateOnly(t *testing.T) {
+	ctx := context.Background()
+	// Each subtest gets its own Redis (and clock) with "k" freshly created as
+	// "first", so they don't depend on each other's order.
+	created := func(t *testing.T) (*Client, *miniredis.Miniredis) {
+		t.Helper()
+		client, mr := setupTestRedis(t)
+		ok, err := client.CreateOnly(ctx, "k", "first", time.Minute)
+		require.NoError(t, err)
+		require.True(t, ok, "a free key is created")
+		require.Equal(t, time.Minute, mr.TTL("k"))
+		return client, mr
+	}
+
+	t.Run("the same value again is what a repeated command finds", func(t *testing.T) {
+		client, mr := created(t)
+		mr.FastForward(20 * time.Second)
+		ok, err := client.CreateOnly(ctx, "k", "first", time.Minute)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Equal(t, 40*time.Second, mr.TTL("k"), "the repeat does not renew the expiry")
+	})
+
+	t.Run("another value is never written", func(t *testing.T) {
+		client, _ := created(t)
+		ok, err := client.CreateOnly(ctx, "k", "second", time.Minute)
+		require.NoError(t, err)
+		assert.False(t, ok)
+		v, _ := client.Get(ctx, "k")
+		assert.Equal(t, "first", v)
+	})
+
+	t.Run("a value that only starts or ends the same is another value", func(t *testing.T) {
+		client, _ := created(t)
+		for _, other := range []string{"fir", "first!", "", "FIRST"} {
+			ok, err := client.CreateOnly(ctx, "k", other, time.Minute)
+			require.NoError(t, err)
+			assert.False(t, ok, "%q", other)
+		}
+		v, _ := client.Get(ctx, "k")
+		assert.Equal(t, "first", v)
+	})
+
+	t.Run("zero means no expiry", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		ok, err := client.CreateOnly(ctx, "forever", "v", 0)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.Zero(t, mr.TTL("forever"))
+		ok, err = client.CreateOnly(ctx, "forever", "v", 0)
+		require.NoError(t, err)
+		assert.True(t, ok)
+	})
+
+	t.Run("a sub-millisecond expiry still expires", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		ok, err := client.CreateOnly(ctx, "blink", "v", time.Microsecond)
+		require.NoError(t, err)
+		assert.True(t, ok)
+		assert.NotZero(t, mr.TTL("blink"))
+	})
+
+	t.Run("a key of another type is a conflict, not an error", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		mr.HSet("hash", "f", "v")
+		ok, err := client.CreateOnly(ctx, "hash", "v", time.Minute)
+		require.NoError(t, err)
+		assert.False(t, ok)
+	})
+
+	t.Run("a negative expiry is refused", func(t *testing.T) {
+		client, mr := setupTestRedis(t)
+		_, err := client.CreateOnly(ctx, "neg", "v", -time.Second)
+		assert.Error(t, err)
+		assert.False(t, mr.Exists("neg"))
+	})
+}
+
+func TestSetXXKeepTTL(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	ctx := context.Background()
+
+	ok, err := client.SetXXKeepTTL(ctx, "missing", "v")
+	require.NoError(t, err)
+	assert.False(t, ok, "a missing key is not created")
+	assert.False(t, mr.Exists("missing"))
+
+	require.NoError(t, client.Set(ctx, "k", "old", 90*time.Second))
+	ok, err = client.SetXXKeepTTL(ctx, "k", "new")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	v, _ := client.Get(ctx, "k")
+	assert.Equal(t, "new", v)
+	assert.Equal(t, 90*time.Second, mr.TTL("k"), "the expiry is kept")
+}
+
+func TestRun(t *testing.T) {
+	client, mr := setupTestRedis(t)
+	ctx := context.Background()
+	script := NewScript(`
+		local old = redis.call('GET', KEYS[1])
+		redis.call('SET', KEYS[1], ARGV[1])
+		return {old or '', tonumber(ARGV[2]) + 1}
+	`)
+
+	res, err := client.Run(ctx, script, []string{"k"}, "first", 41)
+	require.NoError(t, err)
+	assert.Equal(t, []interface{}{"", int64(42)}, res)
+	v, _ := mr.Get("k")
+	assert.Equal(t, "first", v)
+
+	res, err = client.Run(ctx, script, []string{"k"}, "second", 1)
+	require.NoError(t, err)
+	assert.Equal(t, []interface{}{"first", int64(2)}, res)
+
+	// A failover or restart empties the server's script cache; Run loads the
+	// script again instead of failing.
+	require.NoError(t, client.client.ScriptFlush(ctx).Err())
+	res, err = client.Run(ctx, script, []string{"k"}, "third", 2)
+	require.NoError(t, err)
+	assert.Equal(t, []interface{}{"second", int64(3)}, res)
+}

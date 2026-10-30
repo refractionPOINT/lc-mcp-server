@@ -41,7 +41,7 @@ func RegisterListInvestigations() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := ListRecords(lc.NewHiveClient(org), "investigation", org.GetOID(), "investigations", listReq, nil)
+			resp, err := ListRecords(NewClient(org), "investigation", org.GetOID(), "investigations", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list investigations: %v", err), nil
 			}
@@ -77,7 +77,7 @@ func RegisterGetInvestigation() {
 			}
 
 			// Create hive client for investigations
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get investigation
 			investigation, err := hive.Get(lc.HiveArgs{
@@ -207,7 +207,7 @@ func RegisterDeleteInvestigation() {
 			}
 
 			// Create hive client for investigations
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete investigation
 			_, err = hive.Remove(lc.HiveArgs{

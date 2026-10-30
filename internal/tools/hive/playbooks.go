@@ -41,7 +41,7 @@ func RegisterListPlaybooks() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := ListRecords(lc.NewHiveClient(org), "playbook", org.GetOID(), "playbooks", listReq, nil)
+			resp, err := ListRecords(NewClient(org), "playbook", org.GetOID(), "playbooks", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list playbooks: %v", err), nil
 			}
@@ -77,7 +77,7 @@ func RegisterGetPlaybook() {
 			}
 
 			// Create hive client for playbooks
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get playbook
 			playbook, err := hive.Get(lc.HiveArgs{
@@ -200,7 +200,7 @@ func RegisterDeletePlaybook() {
 			}
 
 			// Create hive client for playbooks
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete playbook
 			_, err = hive.Remove(lc.HiveArgs{

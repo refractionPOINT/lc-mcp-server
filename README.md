@@ -210,6 +210,20 @@ export MCP_MODE="stdio"
 export MCP_PROFILE="all"
 ```
 
+### HTTP Credentials and OAuth Scopes
+
+Over HTTP a request is authenticated by exactly one of: an `Authorization: Bearer` token (an MCP OAuth access token or a LimaCharlie JWT, optionally with `X-LC-OID` to pin an org JWT), `X-LC-UID` + `X-LC-API-KEY`, or `X-LC-OID` + `X-LC-API-KEY`. The server-wide credentials from the environment are used **only** when the request carries no credential header at all. A request with an incomplete set (for example only `X-LC-API-KEY`) is rejected with a 401 challenge; it never runs as the server's own identity.
+
+MCP OAuth access tokens carry the scopes they were granted and are enforced on every tool call, direct or through `lc_call_tool`:
+
+| Scope | Allows |
+|---|---|
+| `limacharlie:read` | tools annotated `readOnlyHint: true` |
+| `limacharlie:write` | everything `read` allows, plus every other tool (including unannotated ones) |
+| `limacharlie:admin` | everything |
+
+Scopes are hierarchical (`admin` > `write` > `read`), and a token granted no scope gets the server default (`read` + `write`). For `lc_call_tool` the target tool decides which scope is needed. A call the token's scopes do not cover is answered with HTTP 403 and `WWW-Authenticate: Bearer error="insufficient_scope", scope="<needed scope>", resource_metadata="..."` (MCP authorization spec, "Runtime Insufficient Scope Errors"), so a client can step up. API keys, LimaCharlie JWTs and the server-wide credentials are not OAuth-scoped and are not restricted by this. `tools/list` is not narrowed by scope; each tool's `readOnlyHint` is in the listing.
+
 ### Optional Configuration
 
 ```bash

@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"html/template"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -187,14 +189,17 @@ func testHandlers(t *testing.T) (*Handlers, *state.Manager, *mockFirebaseClient,
 		"http://127.0.0.1:3000/callback",
 	}
 
-	// Create handlers - need to bypass template loading
+	// The selection page is part of every authorization, so tests load the real templates.
+	tmpl, err := template.ParseGlob("../../../templates/*.html")
+	require.NoError(t, err)
+
 	handlers := &Handlers{
 		stateManager:        stateManager,
 		tokenManager:        tokenManager,
 		firebaseClient:      mockFB,
 		metadataProvider:    metadataProvider,
 		logger:              testLogger(),
-		templates:           nil, // Templates not needed for most tests
+		templates:           tmpl,
 		allowedRedirectURIs: allowedRedirectURIs,
 	}
 
@@ -210,4 +215,73 @@ func generatePKCEChallenge(verifier string) string {
 // stringPtr is a helper to get a pointer to a string
 func stringPtr(s string) *string {
 	return &s
+}
+
+// mustCreateTx stores an OAuth transaction the way /authorize does and returns
+// its server-generated transaction id.
+//
+// Like /authorize, it binds the transaction to a browser (the one withBrowser
+// makes requests from) unless the test already chose a binding.
+func mustCreateTx(t *testing.T, sm *state.Manager, st *state.OAuthState) string {
+	t.Helper()
+	if st.BrowserBinding == "" {
+		st.BrowserBinding = sha256Hex(testBrowserSecret)
+	}
+	txID, err := sm.CreateOAuthState(context.Background(), st)
+	require.NoError(t, err)
+	return txID
+}
+
+// testBrowserSecret is the browser-binding secret of the browser that
+// mustCreateTx binds hand-built transactions to.
+const testBrowserSecret = "test-browser-secret-0123456789abcdefghijk"
+
+// withBrowser makes req come from the browser mustCreateTx binds transactions to.
+func withBrowser(h *Handlers, req *http.Request) *http.Request {
+	req.AddCookie(&http.Cookie{Name: h.browserBindCookieName(), Value: testBrowserSecret})
+	return req
+}
+
+// withCookies makes req carry cookies, as a browser holding them would send.
+func withCookies(req *http.Request, cookies ...*http.Cookie) *http.Request {
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	return req
+}
+
+// seedMappings stores the provider-round-trip mappings /authorize writes for a
+// transaction.
+func seedMappings(t *testing.T, sm *state.Manager, firebaseState, txID, firebaseSessionID string) {
+	t.Helper()
+	require.NoError(t, sm.StoreOAuthMappings(context.Background(), firebaseState, txID, firebaseSessionID))
+}
+
+// storedTxs returns every OAuth transaction currently in Redis, by transaction id.
+func storedTxs(t *testing.T, sm *state.Manager, mr *miniredis.Miniredis) map[string]*state.OAuthState {
+	t.Helper()
+	out := map[string]*state.OAuthState{}
+	for _, k := range mr.Keys() {
+		id, ok := strings.CutPrefix(k, state.StatePrefix)
+		if !ok {
+			continue
+		}
+		st, err := sm.GetOAuthState(context.Background(), id)
+		require.NoError(t, err)
+		if st != nil {
+			out[id] = st
+		}
+	}
+	return out
+}
+
+// onlyTx returns the single transaction in Redis.
+func onlyTx(t *testing.T, sm *state.Manager, mr *miniredis.Miniredis) (string, *state.OAuthState) {
+	t.Helper()
+	txs := storedTxs(t, sm, mr)
+	require.Len(t, txs, 1)
+	for id, st := range txs {
+		return id, st
+	}
+	return "", nil
 }

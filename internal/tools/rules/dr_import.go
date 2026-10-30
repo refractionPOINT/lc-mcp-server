@@ -159,7 +159,7 @@ func RegisterImportDRRules() {
 				overrides.Enabled = &e
 			}
 
-			client := lc.NewHiveClient(org)
+			client := hive.NewClient(org)
 			hiveID := lc.HiveID{
 				Name:      hiveName,
 				Partition: lc.PartitionID(org.GetOID()),

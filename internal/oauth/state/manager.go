@@ -3,7 +3,9 @@ package state
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,7 +34,7 @@ func NewManager(redisClient *redis.Client, encryption *crypto.TokenEncryption, l
 
 // ===== OAuth State Management =====
 
-// GenerateState generates a secure random state parameter (32 bytes)
+// GenerateState generates a secure random identifier (32 bytes).
 func (m *Manager) GenerateState() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -41,27 +43,65 @@ func (m *Manager) GenerateState() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreOAuthState stores OAuth authorization request state
-func (m *Manager) StoreOAuthState(ctx context.Context, state *OAuthState) error {
-	key := StatePrefix + state.State
+// ErrAlreadyExists is returned when a create-only record already exists.
+var ErrAlreadyExists = errors.New("record already exists")
 
-	data, err := json.Marshal(state)
+// createOnly stores value under key only if the key is free. A key that already
+// holds exactly this value is what an earlier run of the same call left (the
+// Redis client sends a command again when its reply was lost), so that is
+// success, not a conflict: values carry random ids, so another writer cannot
+// produce the same one. Anything else under the key is ErrAlreadyExists and is
+// never overwritten.
+func (m *Manager) createOnly(ctx context.Context, key, value string, ttlSeconds int) error {
+	ok, err := m.redis.CreateOnly(ctx, key, value, time.Duration(ttlSeconds)*time.Second)
 	if err != nil {
-		return fmt.Errorf("failed to marshal OAuth state: %w", err)
+		return err
 	}
-
-	if err := m.redis.SetEX(ctx, key, string(data), StateTTL); err != nil {
-		return fmt.Errorf("failed to store OAuth state: %w", err)
+	if !ok {
+		return ErrAlreadyExists
 	}
-
-	m.logger.Debug("Stored OAuth state")
-
 	return nil
 }
 
-// GetOAuthState retrieves OAuth state
-func (m *Manager) GetOAuthState(ctx context.Context, state string) (*OAuthState, error) {
-	key := StatePrefix + state
+// maxCreateAttempts bounds retries on an id collision, which with 256-bit
+// random ids only a broken random source or a Redis fault can cause.
+const maxCreateAttempts = 3
+
+// CreateOAuthState stores an OAuth authorization transaction under a
+// server-generated, unguessable transaction id and returns that id.
+//
+// SECURITY: the transaction is never keyed by anything the client supplied.
+// The client's own "state" is only data (OAuthState.State) that is echoed back
+// to its redirect URI. The write is create-only, so no request can replace a
+// transaction that is in flight. Everything that continues the flow (the
+// provider round trip, MFA) refers to the transaction by this id.
+func (m *Manager) CreateOAuthState(ctx context.Context, st *OAuthState) (string, error) {
+	for attempt := 0; attempt < maxCreateAttempts; attempt++ {
+		txID, err := m.GenerateState()
+		if err != nil {
+			return "", err
+		}
+		st.TxID = txID
+		data, err := json.Marshal(st)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal OAuth state: %w", err)
+		}
+		err = m.createOnly(ctx, StatePrefix+txID, string(data), StateTTL)
+		if errors.Is(err, ErrAlreadyExists) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to store OAuth state: %w", err)
+		}
+		m.logger.Debug("Stored OAuth state")
+		return txID, nil
+	}
+	return "", fmt.Errorf("failed to store OAuth state: transaction id collision")
+}
+
+// GetOAuthState retrieves an OAuth transaction by its transaction id.
+func (m *Manager) GetOAuthState(ctx context.Context, txID string) (*OAuthState, error) {
+	key := StatePrefix + txID
 
 	data, err := m.redis.Get(ctx, key)
 	if err != nil {
@@ -80,9 +120,10 @@ func (m *Manager) GetOAuthState(ctx context.Context, state string) (*OAuthState,
 	return &oauthState, nil
 }
 
-// ConsumeOAuthState retrieves and deletes OAuth state (single-use)
-func (m *Manager) ConsumeOAuthState(ctx context.Context, state string) (*OAuthState, error) {
-	key := StatePrefix + state
+// ConsumeOAuthState retrieves and deletes an OAuth transaction by its
+// transaction id (single-use).
+func (m *Manager) ConsumeOAuthState(ctx context.Context, txID string) (*OAuthState, error) {
+	key := StatePrefix + txID
 
 	// Use atomic get-and-delete
 	data, err := m.redis.AtomicGetAndDelete(ctx, key)
@@ -157,7 +198,8 @@ func (m *Manager) StoreAuthorizationCode(ctx context.Context, code *Authorizatio
 		return fmt.Errorf("failed to marshal authorization code: %w", err)
 	}
 
-	if err := m.redis.SetEX(ctx, key, string(data), CodeTTL); err != nil {
+	// Create-only: a code is never replaced once issued.
+	if err := m.createOnly(ctx, key, string(data), CodeTTL); err != nil {
 		return fmt.Errorf("failed to store authorization code: %w", err)
 	}
 
@@ -212,45 +254,110 @@ func (m *Manager) GenerateAccessToken() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreAccessToken stores an access token with encrypted Firebase tokens
-func (m *Manager) StoreAccessToken(ctx context.Context, token *AccessTokenData) error {
-	// Encrypt Firebase tokens before storage
+// ErrTokenRevoked is returned when a write was refused because the token, or
+// the grant (family) it belongs to, has been revoked.
+var ErrTokenRevoked = errors.New("token revoked")
+
+// tokenHash is the identifier revocation records use for a token, so the keys
+// carry no usable credential.
+func tokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// GenerateFamilyID generates the id of a new token family (one grant).
+func (m *Manager) GenerateFamilyID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate family id: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// IsFamilyRevoked reports whether the grant has been revoked. An empty family
+// id (legacy token) is never revoked this way.
+func (m *Manager) IsFamilyRevoked(ctx context.Context, familyID string) (bool, error) {
+	if familyID == "" {
+		return false, nil
+	}
+	n, err := m.redis.Exists(ctx, RevokedFamilyPrefix+familyID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check family revocation: %w", err)
+	}
+	return n > 0, nil
+}
+
+// encodeAccessToken serializes an access token with its Firebase tokens
+// encrypted, and returns the Redis TTL: the logical lifetime plus the grace
+// period that lets the server recover an expired token transparently.
+func (m *Manager) encodeAccessToken(token *AccessTokenData) (string, time.Duration, error) {
 	encryptedIDToken, err := m.encryption.Encrypt(token.FirebaseIDToken)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt ID token: %w", err)
+		return "", 0, fmt.Errorf("failed to encrypt ID token: %w", err)
 	}
 
 	encryptedRefreshToken, err := m.encryption.Encrypt(token.FirebaseRefreshToken)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt refresh token: %w", err)
+		return "", 0, fmt.Errorf("failed to encrypt refresh token: %w", err)
 	}
 
-	// Create copy with encrypted tokens
 	encrypted := *token
 	encrypted.FirebaseIDToken = encryptedIDToken
 	encrypted.FirebaseRefreshToken = encryptedRefreshToken
 
-	key := TokenPrefix + token.AccessToken
-
 	data, err := json.Marshal(encrypted)
 	if err != nil {
-		return fmt.Errorf("failed to marshal access token: %w", err)
+		return "", 0, fmt.Errorf("failed to marshal access token: %w", err)
 	}
 
-	// Add grace period to Redis TTL so token data persists beyond logical expiration
-	// This allows the server to auto-refresh expired tokens transparently
-	ttl := int(token.ExpiresAt - time.Now().Unix() + TokenGracePeriod)
+	ttl := token.ExpiresAt - time.Now().Unix() + TokenGracePeriod
 	if ttl <= 0 {
-		return fmt.Errorf("token already expired")
+		return "", 0, fmt.Errorf("token already expired")
+	}
+	return string(data), time.Duration(ttl) * time.Second, nil
+}
+
+// StoreAccessToken stores a new access token with encrypted Firebase tokens.
+// It is create-only: an existing record is never overwritten, so it cannot be
+// used to resurrect a revoked token. Changing a stored token goes through
+// UpdateAccessToken. It writes the record alone; a new grant is stored with
+// IssueTokens.
+func (m *Manager) StoreAccessToken(ctx context.Context, token *AccessTokenData) error {
+	data, ttl, err := m.encodeAccessToken(token)
+	if err != nil {
+		return err
 	}
 
-	if err := m.redis.SetEX(ctx, key, string(data), ttl); err != nil {
+	if err := m.createOnly(ctx, TokenPrefix+token.AccessToken, data, int(ttl/time.Second)); err != nil {
 		return fmt.Errorf("failed to store access token: %w", err)
 	}
 
-	m.logger.Debug("Stored access token", "expires_at", token.ExpiresAt, "redis_ttl", ttl)
+	m.logger.Debug("Stored access token", "expires_at", token.ExpiresAt, "redis_ttl", int(ttl/time.Second))
 
 	return nil
+}
+
+// UpdateAccessToken writes back a changed access token (lifetime extension,
+// refreshed Firebase tokens) only if the record still exists and its family has
+// not been revoked, in one atomic step. It reports whether the record was
+// updated; false means it was revoked or expired meanwhile, and nothing was
+// written, so an update that raced a revocation can never bring the token back.
+// The token's index and its family record are kept alive at least as long as the
+// token itself.
+func (m *Manager) UpdateAccessToken(ctx context.Context, token *AccessTokenData) (bool, error) {
+	data, ttl, err := m.encodeAccessToken(token)
+	if err != nil {
+		return false, err
+	}
+	keys := []string{TokenPrefix + token.AccessToken}
+	if fam := token.FamilyID; fam != "" {
+		keys = append(keys, RevokedFamilyPrefix+fam, TokenFamilyPrefix+tokenHash(token.AccessToken), FamilyPrefix+fam)
+	}
+	n, err := scriptInt(m.redis.Run(ctx, updateAccessScript, keys, data, ms(ttl), token.FamilyID))
+	if err != nil {
+		return false, fmt.Errorf("failed to update access token: %w", err)
+	}
+	return n == updateDone, nil
 }
 
 // GetAccessTokenData retrieves and decrypts access token data
@@ -293,45 +400,40 @@ func (m *Manager) GetAccessTokenData(ctx context.Context, accessToken string) (*
 // ExtendAccessTokenExpiration extends the expiration time of an access token
 // This is used for transparent token refresh without changing the token string
 func (m *Manager) ExtendAccessTokenExpiration(ctx context.Context, accessToken string, newExpiresAt int64) error {
-	// Get existing token data
 	tokenData, err := m.GetAccessTokenData(ctx, accessToken)
 	if tokenData == nil || err != nil {
 		return fmt.Errorf("access token not found: %w", err)
 	}
 
-	// Update expiration time
 	tokenData.ExpiresAt = newExpiresAt
 
-	// Re-store with updated expiration (StoreAccessToken handles Redis TTL)
-	return m.StoreAccessToken(ctx, tokenData)
+	updated, err := m.UpdateAccessToken(ctx, tokenData)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return fmt.Errorf("access token not found or revoked")
+	}
+	return nil
 }
 
 // UpdateAccessTokenFirebaseTokens updates Firebase tokens for an existing access token
 func (m *Manager) UpdateAccessTokenFirebaseTokens(ctx context.Context, accessToken, newIDToken string, newExpiresAt int64) error {
-	// Get existing token data
 	tokenData, err := m.GetAccessTokenData(ctx, accessToken)
 	if tokenData == nil || err != nil {
 		return fmt.Errorf("access token not found: %w", err)
 	}
 
-	// Update Firebase tokens
 	tokenData.FirebaseIDToken = newIDToken
 	tokenData.FirebaseExpiresAt = newExpiresAt
 
-	// Store updated token (encryption happens in StoreAccessToken)
-	return m.StoreAccessToken(ctx, tokenData)
-}
-
-// RevokeAccessToken deletes an access token
-func (m *Manager) RevokeAccessToken(ctx context.Context, accessToken string) error {
-	key := TokenPrefix + accessToken
-
-	if err := m.redis.Delete(ctx, key); err != nil {
-		return fmt.Errorf("failed to revoke access token: %w", err)
+	updated, err := m.UpdateAccessToken(ctx, tokenData)
+	if err != nil {
+		return err
 	}
-
-	m.logger.Info("Revoked access token")
-
+	if !updated {
+		return fmt.Errorf("access token not found or revoked")
+	}
 	return nil
 }
 
@@ -346,26 +448,34 @@ func (m *Manager) GenerateRefreshToken() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreRefreshToken stores a refresh token with encrypted Firebase refresh token
-func (m *Manager) StoreRefreshToken(ctx context.Context, token *RefreshTokenData) error {
-	// Encrypt Firebase refresh token before storage
+// encodeRefreshToken serializes a refresh token with its Firebase refresh
+// token encrypted.
+func (m *Manager) encodeRefreshToken(token *RefreshTokenData) (string, error) {
 	encryptedFBRefreshToken, err := m.encryption.Encrypt(token.FirebaseRefreshToken)
 	if err != nil {
-		return fmt.Errorf("failed to encrypt refresh token: %w", err)
+		return "", fmt.Errorf("failed to encrypt refresh token: %w", err)
 	}
 
-	// Create copy with encrypted token
 	encrypted := *token
 	encrypted.FirebaseRefreshToken = encryptedFBRefreshToken
 
-	key := RefreshPrefix + token.RefreshToken
-
 	data, err := json.Marshal(encrypted)
 	if err != nil {
-		return fmt.Errorf("failed to marshal refresh token: %w", err)
+		return "", fmt.Errorf("failed to marshal refresh token: %w", err)
+	}
+	return string(data), nil
+}
+
+// StoreRefreshToken stores a new refresh token with encrypted Firebase refresh
+// token. It is create-only, so an existing record is never overwritten. It
+// writes the record alone; a new grant is stored with IssueTokens.
+func (m *Manager) StoreRefreshToken(ctx context.Context, token *RefreshTokenData) error {
+	data, err := m.encodeRefreshToken(token)
+	if err != nil {
+		return err
 	}
 
-	if err := m.redis.SetEX(ctx, key, string(data), RefreshTTL); err != nil {
+	if err := m.createOnly(ctx, RefreshPrefix+token.RefreshToken, data, RefreshTTL); err != nil {
 		return fmt.Errorf("failed to store refresh token: %w", err)
 	}
 
@@ -387,31 +497,22 @@ func (m *Manager) GetRefreshTokenData(ctx context.Context, refreshToken string) 
 		return nil, nil
 	}
 
+	return m.decodeRefreshToken(data)
+}
+
+func (m *Manager) decodeRefreshToken(data string) (*RefreshTokenData, error) {
 	var tokenData RefreshTokenData
 	if err := json.Unmarshal([]byte(data), &tokenData); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal refresh token: %w", err)
 	}
 
-	// Decrypt Firebase refresh token
+	var err error
 	tokenData.FirebaseRefreshToken, err = m.encryption.Decrypt(tokenData.FirebaseRefreshToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt refresh token: %w", err)
 	}
 
 	return &tokenData, nil
-}
-
-// RevokeRefreshToken deletes a refresh token
-func (m *Manager) RevokeRefreshToken(ctx context.Context, refreshToken string) error {
-	key := RefreshPrefix + refreshToken
-
-	if err := m.redis.Delete(ctx, key); err != nil {
-		return fmt.Errorf("failed to revoke refresh token: %w", err)
-	}
-
-	m.logger.Info("Revoked refresh token")
-
-	return nil
 }
 
 // ===== Client Registration Management =====
@@ -434,8 +535,9 @@ func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientReg
 		return fmt.Errorf("failed to marshal client registration: %w", err)
 	}
 
-	// No expiration for client registrations
-	if err := m.redis.Set(ctx, key, string(data), 0); err != nil {
+	// No expiration for client registrations. Create-only: a registration (and
+	// so the redirect URIs it vouches for) is never replaced under its id.
+	if err := m.createOnly(ctx, key, string(data), 0); err != nil {
 		return fmt.Errorf("failed to store client registration: %w", err)
 	}
 
@@ -476,21 +578,72 @@ func (m *Manager) GenerateSelectionSessionID() (string, error) {
 	return base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreSelectionSession stores OAuth parameters for provider selection
-func (m *Manager) StoreSelectionSession(ctx context.Context, sessionID string, params map[string]string) error {
-	key := SelectionPrefix + sessionID
-
+// CreateSelectionSession stores OAuth parameters for provider selection under
+// a server-generated session id. Create-only.
+func (m *Manager) CreateSelectionSession(ctx context.Context, sessionID string, params map[string]string) error {
 	data, err := json.Marshal(params)
 	if err != nil {
 		return fmt.Errorf("failed to marshal selection session: %w", err)
 	}
 
-	if err := m.redis.SetEX(ctx, key, string(data), SelectionTTL); err != nil {
+	if err := m.createOnly(ctx, SelectionPrefix+sessionID, string(data), SelectionTTL); err != nil {
 		return fmt.Errorf("failed to store selection session: %w", err)
 	}
 
 	m.logger.Debug("Stored selection session")
 
+	return nil
+}
+
+// UpdateSelectionSession rewrites a selection session that still exists,
+// keeping its expiry. A session that was consumed or expired in the meantime
+// is not resurrected (ErrSelectionSessionGone).
+func (m *Manager) UpdateSelectionSession(ctx context.Context, sessionID string, params map[string]string) error {
+	data, err := json.Marshal(params)
+	if err != nil {
+		return fmt.Errorf("failed to marshal selection session: %w", err)
+	}
+	ok, err := m.redis.SetXXKeepTTL(ctx, SelectionPrefix+sessionID, string(data))
+	if err != nil {
+		return fmt.Errorf("failed to update selection session: %w", err)
+	}
+	if !ok {
+		return ErrSelectionSessionGone
+	}
+	return nil
+}
+
+// ErrSelectionSessionGone is returned when a selection session expired or was consumed.
+var ErrSelectionSessionGone = errors.New("selection session expired or already used")
+
+// StoreOAuthMappings records the provider round trip of a transaction: the
+// Firebase state that comes back on the callback maps to the server's
+// transaction id and to the Firebase session id. Both writes are create-only
+// (a Firebase state already in use fails the login instead of redirecting
+// another login's callback), and neither involves anything the client supplied.
+func (m *Manager) StoreOAuthMappings(ctx context.Context, firebaseState, txID, firebaseSessionID string) error {
+	if firebaseState == "" || txID == "" {
+		return fmt.Errorf("firebase state and transaction id are required")
+	}
+	stateKey := SelectionPrefix + "oauth:state:" + firebaseState
+	sessionKey := SelectionPrefix + "oauth:fbsession:" + firebaseState
+
+	stateData, err := json.Marshal(map[string]string{"oauth_state": txID})
+	if err != nil {
+		return err
+	}
+	sessionData, err := json.Marshal(map[string]string{"session_id": firebaseSessionID})
+	if err != nil {
+		return err
+	}
+	if err := m.createOnly(ctx, stateKey, string(stateData), SelectionTTL); err != nil {
+		return fmt.Errorf("failed to store OAuth state mapping: %w", err)
+	}
+	if err := m.createOnly(ctx, sessionKey, string(sessionData), SelectionTTL); err != nil {
+		// Only the key this call created is removed.
+		_ = m.redis.Delete(ctx, stateKey)
+		return fmt.Errorf("failed to store OAuth session mapping: %w", err)
+	}
 	return nil
 }
 
@@ -515,9 +668,10 @@ func (m *Manager) ConsumeSelectionSession(ctx context.Context, sessionID string)
 	return params, nil
 }
 
-// ConsumeOAuthStateMappings atomically consumes OAuth state and all related mappings
+// ConsumeOAuthStateMappings atomically consumes the mappings of a provider
+// round trip and returns the transaction id and the Firebase session id.
 // SECURITY FIX: Prevents TOCTOU race conditions during OAuth callback processing
-func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState string) (oauthState string, sessionID string, err error) {
+func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState string) (txID string, sessionID string, err error) {
 	// Build keys for atomic multi-get-and-delete
 	keys := []string{
 		SelectionPrefix + "oauth:state:" + firebaseState,
@@ -537,7 +691,7 @@ func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState s
 	if results[0] != "" {
 		var stateData map[string]string
 		if err := json.Unmarshal([]byte(results[0]), &stateData); err == nil {
-			oauthState = stateData["oauth_state"]
+			txID = stateData["oauth_state"]
 		}
 	}
 
@@ -549,19 +703,18 @@ func (m *Manager) ConsumeOAuthStateMappings(ctx context.Context, firebaseState s
 		}
 	}
 
-	if oauthState == "" || sessionID == "" {
+	if txID == "" || sessionID == "" {
 		m.logger.Warn("OAuth state mappings incomplete",
-			"oauth_state", oauthState,
+			"tx_id", txID,
 			"session_id", sessionID,
 			"firebase_state", firebaseState)
 		return "", "", fmt.Errorf("invalid or incomplete OAuth state mappings")
 	}
 
 	m.logger.Debug("Atomically consumed OAuth state mappings",
-		"firebase_state", firebaseState,
-		"oauth_state", oauthState)
+		"firebase_state", firebaseState)
 
-	return oauthState, sessionID, nil
+	return txID, sessionID, nil
 }
 
 // ===== MFA Session Management =====
@@ -592,7 +745,8 @@ func (m *Manager) StoreMFASession(ctx context.Context, sessionID string, session
 		return fmt.Errorf("failed to encrypt MFA session: %w", err)
 	}
 
-	if err := m.redis.SetEX(ctx, key, encryptedData, MFATTL); err != nil {
+	// Create-only: the id is server-generated and a session is never replaced.
+	if err := m.createOnly(ctx, key, encryptedData, MFATTL); err != nil {
 		return fmt.Errorf("failed to store MFA session: %w", err)
 	}
 

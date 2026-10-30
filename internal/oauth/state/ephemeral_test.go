@@ -67,7 +67,7 @@ func TestIncrEphemeralRepairsACounterWithoutTTL(t *testing.T) {
 func TestGetSelectionSessionDoesNotConsume(t *testing.T) {
 	m, _ := setupTestManager(t)
 	ctx := context.Background()
-	require.NoError(t, m.StoreSelectionSession(ctx, "s1", map[string]string{"client_id": "c"}))
+	require.NoError(t, m.CreateSelectionSession(ctx, "s1", map[string]string{"client_id": "c"}))
 
 	for i := 0; i < 2; i++ {
 		p, err := m.GetSelectionSession(ctx, "s1")

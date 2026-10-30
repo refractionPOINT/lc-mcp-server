@@ -20,10 +20,12 @@ func setupMFASession(t *testing.T, stateManager *state.Manager, oauthStateParam 
 	t.Helper()
 	ctx := context.Background()
 	oauthState := state.NewOAuthState(oauthStateParam, "challenge", "S256", "https://app.example.com/callback", "test-client", "openid", "", "google.com")
-	require.NoError(t, stateManager.StoreOAuthState(ctx, oauthState))
+	// Transactions are keyed by a server-generated id; the client's state is
+	// only data, and the MFA session points at the transaction id.
+	txID := mustCreateTx(t, stateManager, oauthState)
 	sessionID, err := stateManager.GenerateMFASessionID()
 	require.NoError(t, err)
-	mfaSession := state.NewMFASession("pending", "totp-id", oauthStateParam, "User", "uid", "user@test.com", nil)
+	mfaSession := state.NewMFASession("pending", "totp-id", txID, "User", "uid", "user@test.com", nil)
 	require.NoError(t, stateManager.StoreMFASession(ctx, sessionID, mfaSession))
 	return sessionID
 }
@@ -50,7 +52,7 @@ func TestHandleMFAVerify_FirebaseErrorMapping(t *testing.T) {
 			}
 
 			w := httptest.NewRecorder()
-			handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "123456")
+			handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "123456")
 
 			assert.Equal(t, tt.wantStatus, w.Code)
 			var resp map[string]interface{}
@@ -77,13 +79,13 @@ func TestHandleMFAVerify_AfterSessionExpiredReportsExpiry(t *testing.T) {
 	}
 
 	w := httptest.NewRecorder()
-	handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "123456")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "123456")
 	require.Equal(t, http.StatusBadRequest, w.Code)
 
 	// The challenge page lets the user submit again; that must say the
 	// session is gone rather than fail with a server error.
 	w = httptest.NewRecorder()
-	handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "654321")
+	handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "654321")
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp map[string]interface{}
 	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
@@ -91,28 +93,24 @@ func TestHandleMFAVerify_AfterSessionExpiredReportsExpiry(t *testing.T) {
 }
 
 func TestHandleCallback_MFAWithoutTOTPFactor(t *testing.T) {
-	handlers, stateManager, mockFB, _ := testHandlers(t)
+	handlers, stateManager, mockFB, mr := testHandlers(t)
 	ctx := context.Background()
 
-	oauthState := state.NewOAuthState("oauth-sms-only", "challenge", "S256", "https://app.example.com/callback", "test-client", "openid", "", "google.com")
-	require.NoError(t, stateManager.StoreOAuthState(ctx, oauthState))
-	fbState := "fb-sms-only"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-sms-only", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-sms-only"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": "session-sms"})
+	fbState := storeCallbackFixtures(t, stateManager, "oauth-sms-only", "https://app.example.com/callback")
+	txID, _ := onlyTx(t, stateManager, mr)
 
 	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {
 		return nil, &firebase.MFAUnsupportedError{FactorCount: 1}
 	}
 
 	w := httptest.NewRecorder()
-	handlers.HandleCallback(w, httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+fbState+"&code=test", nil))
+	handlers.HandleCallback(w, withBrowser(handlers, httptest.NewRequest(http.MethodGet, "/oauth/callback?state="+fbState+"&code=test", nil)))
 
 	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Empty(t, w.Header().Get("Location"), "must not start an MFA challenge that cannot succeed")
 	assert.Contains(t, w.Body.String(), "authenticator app")
 
-	consumed, _ := stateManager.GetOAuthState(ctx, "oauth-sms-only")
+	consumed, _ := stateManager.GetOAuthState(ctx, txID)
 	assert.Nil(t, consumed, "OAuth state must not be reusable after the flow ends")
 }
 

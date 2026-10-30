@@ -111,23 +111,20 @@ func ValidateUID(uid string) error {
 	return nil
 }
 
-// ValidateOID validates an organization ID
+// oidPattern is the only shape a LimaCharlie organization ID takes: a UUID.
+var oidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// ValidateOID validates an organization ID. OIDs are UUIDs; anything else is
+// refused, because an OID is interpolated into API paths, cache keys and
+// object names, where values such as "." or ".." could change what they point
+// at.
 func ValidateOID(oid string) error {
 	if oid == "" {
 		return errors.New("OID cannot be empty")
 	}
-
-	// OIDs should be reasonable length
-	if len(oid) > 128 {
-		return errors.New("OID too long (maximum 128 characters)")
+	if !oidPattern.MatchString(oid) {
+		return errors.New("OID must be a valid UUID (8-4-4-4-12 hex digits)")
 	}
-
-	// OIDs typically contain alphanumeric and hyphens
-	// Allow more flexibility than UID since these are system-generated
-	if !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(oid) {
-		return errors.New("OID contains invalid characters")
-	}
-
 	return nil
 }
 

@@ -128,11 +128,12 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CIMD clients must pass through the selection page, which shows who is
+	// Every client must pass through the selection page, which shows who is
 	// asking and where the user will be sent. A direct provider parameter is
-	// honoured only with the acknowledgement that page issues.
-	if isCIMD && provider != "" && !h.consumeSelectionAck(w, r, clientID, redirectURI, stateParam, codeChallenge) {
-		h.logger.Info("CIMD client skipped selection page; showing it", "client_host", clientHost(clientID))
+	// honoured only with the acknowledgement that page issues, so no client,
+	// registered or not, can send the user straight to the identity provider.
+	if provider != "" && !h.consumeSelectionAck(w, r, clientID, redirectURI, stateParam, codeChallenge) {
+		h.logger.Info("Client skipped the selection page; showing it", "cimd", isCIMD, "redirect_host", redirectHost(redirectURI))
 		provider = ""
 	}
 
@@ -165,7 +166,7 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"resource":              canonicalResource,
 		}
 
-		if err := h.stateManager.StoreSelectionSession(r.Context(), sessionID, paramsMap); err != nil {
+		if err := h.stateManager.CreateSelectionSession(r.Context(), sessionID, paramsMap); err != nil {
 			h.logger.Error("Failed to store selection session", "error", err, "session_id", sessionID)
 			WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store session", http.StatusInternalServerError))
 			return
@@ -184,13 +185,28 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store OAuth state
+	// Bind the transaction to this browser for its whole life: the provider
+	// callback and the MFA steps only proceed from the browser that holds the
+	// secret behind this hash.
+	browserBinding, err := h.bindTransactionToBrowser(w, r)
+	if err != nil {
+		h.logger.Error("Failed to bind OAuth transaction to browser", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to generate session", http.StatusInternalServerError))
+		return
+	}
+
+	// Store the transaction under a server-generated id; the client's state is
+	// only data in it.
 	oauthState := state.NewOAuthState(stateParam, codeChallenge, codeChallengeMethod, redirectURI, clientID, scope, canonicalResource, providerID)
-	if err := h.stateManager.StoreOAuthState(r.Context(), oauthState); err != nil {
-		h.logger.Error("Failed to store OAuth state", "error", err, "state", stateParam)
+	oauthState.BrowserBinding = browserBinding
+	txID, err := h.stateManager.CreateOAuthState(r.Context(), oauthState)
+	if err != nil {
+		h.logger.Error("Failed to store OAuth state", "error", err)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to store state", http.StatusInternalServerError))
 		return
 	}
+	// From here on a failure abandons the transaction.
+	abandon := func() { _, _ = h.stateManager.ConsumeOAuthState(context.WithoutCancel(r.Context()), txID) }
 
 	// Create Firebase auth URI
 	serverURL := h.metadataProvider.GetServerURL()
@@ -198,20 +214,33 @@ func (h *Handlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, firebaseAuthURI, err := h.firebaseClient.CreateAuthURI(r.Context(), providerID, callbackURL, []string{"openid", "email", "profile"})
 	if err != nil {
+		abandon()
 		h.logger.Error("Failed to create Firebase auth URI", "error", err, "provider", providerID)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to initiate authentication", http.StatusInternalServerError))
 		return
 	}
 
 	// Extract Firebase state from auth URI
-	parsedURI, _ := url.Parse(firebaseAuthURI)
-	firebaseState := parsedURI.Query().Get("state")
+	parsedURI, err := url.Parse(firebaseAuthURI)
+	firebaseState := ""
+	if err == nil {
+		firebaseState = parsedURI.Query().Get("state")
+	}
+	if firebaseState == "" {
+		abandon()
+		h.logger.Error("Firebase auth URI carries no state", "provider", providerID)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to initiate authentication", http.StatusInternalServerError))
+		return
+	}
 
-	// Store bidirectional mappings
-	ctx := r.Context()
-	h.stateManager.StoreSelectionSession(ctx, "oauth:session:"+stateParam, map[string]string{"firebase_state": firebaseState})
-	h.stateManager.StoreSelectionSession(ctx, "oauth:state:"+firebaseState, map[string]string{"oauth_state": stateParam})
-	h.stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+firebaseState, map[string]string{"session_id": sessionID})
+	// Bind the provider round trip to the transaction: the state that comes
+	// back on the callback leads to the server's transaction id.
+	if err := h.stateManager.StoreOAuthMappings(r.Context(), firebaseState, txID, sessionID); err != nil {
+		abandon()
+		h.logger.Error("Failed to store OAuth mappings", "error", err, "provider", providerID)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to initiate authentication", http.StatusInternalServerError))
+		return
+	}
 
 	// Redirect to Firebase OAuth URL
 	http.Redirect(w, r, firebaseAuthURI, http.StatusFound)
@@ -241,7 +270,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// SECURITY FIX: Atomically consume all OAuth state mappings to prevent TOCTOU race conditions
 	// This prevents attacks where an attacker tries to reuse state mappings between check and use
-	oauthStateParam, sessionID, err := h.stateManager.ConsumeOAuthStateMappings(r.Context(), firebaseState)
+	txID, sessionID, err := h.stateManager.ConsumeOAuthStateMappings(r.Context(), firebaseState)
 	if err != nil {
 		h.logger.Error("Failed to consume OAuth state mappings", "error", err, "firebase_state", firebaseState)
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>State expired or invalid</p>")
@@ -249,10 +278,21 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get OAuth state (don't consume yet - may need it for MFA flow)
-	oauthState, err := h.stateManager.GetOAuthState(r.Context(), oauthStateParam)
+	oauthState, err := h.stateManager.GetOAuthState(r.Context(), txID)
 	if err != nil || oauthState == nil {
-		h.logger.Error("Failed to get OAuth state", "error", err, "oauth_state", oauthStateParam)
+		h.logger.Error("Failed to get OAuth state", "error", err)
 		writeHTML(w, http.StatusBadRequest, "<h1>OAuth Error</h1><p>State expired</p>")
+		return
+	}
+
+	// The browser returning from the provider must be the one that started this
+	// transaction: otherwise a provider URL prepared by someone else (with their
+	// own client and redirect URI) could be completed by a victim, whose code
+	// would go to the preparer. Checked before anything is exchanged with the
+	// provider, and a code is never issued without it.
+	if !h.transactionBoundToBrowser(r, oauthState) {
+		h.abandonOnBrowserMismatch(r, "callback", txID, oauthState)
+		h.renderOAuthError(w, http.StatusForbidden, browserMismatchPage)
 		return
 	}
 
@@ -271,7 +311,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Store MFA session with proper error handling
-		mfaSession := state.NewMFASession(mfaErr.MFAPendingCredential, mfaErr.MFAEnrollmentID, oauthStateParam, mfaErr.DisplayName, mfaErr.LocalID, mfaErr.Email, &mfaErr.PendingToken)
+		mfaSession := state.NewMFASession(mfaErr.MFAPendingCredential, mfaErr.MFAEnrollmentID, txID, mfaErr.DisplayName, mfaErr.LocalID, mfaErr.Email, &mfaErr.PendingToken)
 		if storeErr := h.stateManager.StoreMFASession(r.Context(), mfaSessionID, mfaSession); storeErr != nil {
 			h.logger.Error("Failed to store MFA session", "error", storeErr, "provider", oauthState.Provider)
 			WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Failed to initiate MFA challenge")
@@ -291,7 +331,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		// The account only has factors this server cannot verify (e.g. SMS).
 		// Tell the user in the browser; a redirect would surface only a
 		// generic error in the MCP client.
-		if _, err := h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam); err != nil {
+		if _, err := h.stateManager.ConsumeOAuthState(r.Context(), txID); err != nil {
 			h.logger.Warn("Failed to consume OAuth state after unsupported MFA", "error", err)
 		}
 		h.renderOAuthError(w, http.StatusForbidden, oauthErrorPage{
@@ -311,7 +351,7 @@ func (h *Handlers) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// No MFA required - consume OAuth state now that we're completing the flow
-	_, err = h.stateManager.ConsumeOAuthState(r.Context(), oauthStateParam)
+	_, err = h.stateManager.ConsumeOAuthState(r.Context(), txID)
 	if err != nil {
 		h.logger.Error("Failed to consume OAuth state")
 		WriteOAuthErrorRedirect(w, r, h.metadataProvider.GetServerURL(), oauthState.RedirectURI, oauthState.State, ErrServerError, "Authentication failed")
@@ -441,7 +481,7 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 	}
 
 	// Create token response
-	tokenResp, err := h.tokenManager.CreateTokenResponse(r.Context(), authCode.UID, authCode.FirebaseIDToken, authCode.FirebaseRefreshToken, authCode.FirebaseExpiresAt, authCode.Scope, tokenResource)
+	tokenResp, err := h.tokenManager.CreateTokenResponse(r.Context(), authCode.UID, authCode.FirebaseIDToken, authCode.FirebaseRefreshToken, authCode.FirebaseExpiresAt, authCode.Scope, tokenResource, authCode.ClientID)
 	if err != nil {
 		h.logger.Error("Failed to create token response", "error", err, "uid", authCode.UID)
 		WriteOAuthError(w, NewOAuthError(ErrServerError, "Failed to issue tokens", http.StatusInternalServerError))
@@ -453,16 +493,34 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 
 func (h *Handlers) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
 	refreshToken := r.FormValue("refresh_token")
+	clientID := r.FormValue("client_id")
 
 	if refreshToken == "" {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Missing refresh_token", http.StatusBadRequest))
 		return
 	}
+	if len(clientID) > token.MaxClientIDLen {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Invalid client_id", http.StatusBadRequest))
+		return
+	}
 
-	// Refresh access token
-	tokenResp, err := h.tokenManager.RefreshAccessToken(r.Context(), refreshToken, h.refreshResourceResolver(r.Form["resource"]))
+	// Refresh access token. The refresh token is bound to the client it was
+	// issued to, which must be the one presenting it.
+	tokenResp, err := h.tokenManager.RefreshAccessToken(r.Context(), refreshToken, clientID, h.refreshResourceResolver(r.Form["resource"]))
+	if errors.Is(err, token.ErrClientMismatch) {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidGrant, "Invalid client credentials", http.StatusBadRequest))
+		return
+	}
 	if errors.Is(err, token.ErrInvalidTarget) {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidTarget, "resource is not covered by the authorized resource", http.StatusBadRequest))
+		return
+	}
+	if err != nil && !token.IsDeadRefresh(err) {
+		// A backend failure (Redis, Firebase or the JWT service): the refresh
+		// token is still valid. invalid_grant would make the client drop it and
+		// sign the user out; server_error lets it retry.
+		h.logger.Error("Refresh failed for a transient reason", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Temporary failure refreshing the token; retry shortly", http.StatusServiceUnavailable))
 		return
 	}
 	if err != nil {
@@ -489,9 +547,15 @@ func (h *Handlers) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.tokenManager.RevokeToken(r.Context(), token, tokenTypeHint)
+	// RFC 7009: 200 whether the token was revoked or was never valid, so an
+	// unknown token is no error. A backend failure is: the token may still be
+	// live, and 200 would tell the client it is dead.
+	if err := h.tokenManager.RevokeToken(r.Context(), token, tokenTypeHint); err != nil {
+		h.logger.Error("Token revocation failed", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Revocation failed; retry later", http.StatusInternalServerError))
+		return
+	}
 
-	// Always return 200 OK per OAuth spec
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -732,21 +796,21 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 			nonce = n
 		}
 
+		// The page always says who is asking and where the user will be sent,
+		// and is bound to this browser: nothing is shown without that.
 		client, oerr := h.selectionDisplay(r.Context(), sessionID)
 		if oerr != nil {
 			WriteOAuthError(w, oerr)
 			return
 		}
-		if client != nil {
-			if err := h.bindSelectionToBrowser(w, r, sessionID); err != nil {
-				h.logger.Warn("Failed to bind selection session to browser", "error", err)
-				WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
-				return
-			}
-			// No window.opener for whoever opened this page: a cross-site
-			// opener must not be able to navigate it after it has rendered.
-			w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		if err := h.bindSelectionToBrowser(w, r, sessionID); err != nil {
+			h.logger.Warn("Failed to bind selection session to browser", "error", err)
+			WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Session expired or invalid", http.StatusBadRequest))
+			return
 		}
+		// No window.opener for whoever opened this page: a cross-site opener
+		// must not be able to navigate it after it has rendered.
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 
 		data := struct {
 			SessionID string
@@ -767,9 +831,24 @@ func (h *Handlers) HandleProviderSelection(w http.ResponseWriter, r *http.Reques
 func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, sessionID string) {
 	// Get MFA session to extract email
 	mfaSession, _ := h.stateManager.GetMFASession(r.Context(), sessionID)
+	if mfaSession == nil {
+		h.renderOAuthError(w, http.StatusBadRequest, mfaExpiredPage)
+		return
+	}
+
+	// The challenge belongs to a transaction, which belongs to one browser. No
+	// identity information is rendered before this passes.
+	switch h.mfaBrowserBound(r, "mfa-challenge", sessionID, mfaSession) {
+	case mfaBindingExpired:
+		h.renderOAuthError(w, http.StatusBadRequest, mfaExpiredPage)
+		return
+	case mfaBindingMismatch:
+		h.renderOAuthError(w, http.StatusForbidden, browserMismatchPage)
+		return
+	}
 
 	email := "user"
-	if mfaSession != nil && mfaSession.Email != "" {
+	if mfaSession.Email != "" {
 		email = mfaSession.Email
 	}
 
@@ -800,7 +879,70 @@ func (h *Handlers) HandleMFAChallenge(w http.ResponseWriter, r *http.Request, se
 	h.templates.ExecuteTemplate(w, "mfa_challenge.html", data)
 }
 
+// mfaExpiredPage is shown in place of the MFA challenge when the sign-in it
+// belongs to no longer exists.
+var mfaExpiredPage = oauthErrorPage{
+	ErrorTitle:   "Sign-in expired",
+	ErrorMessage: "This sign-in expired or was already completed. Nothing was granted. Go back to the application you were signing in to and start the sign-in again from there.",
+	ErrorCode:    "session_expired",
+	RetryURL:     limaCharlieWebAppURL,
+	RetryLabel:   "Open LimaCharlie",
+}
+
+type mfaBindingResult int
+
+const (
+	mfaBindingOK mfaBindingResult = iota
+	// mfaBindingExpired: the MFA session's transaction is gone or cannot be read.
+	mfaBindingExpired
+	// mfaBindingMismatch: the transaction belongs to another browser.
+	mfaBindingMismatch
+)
+
+// mfaBrowserBound checks that the request comes from the browser the MFA
+// session's transaction was started in. It fails closed: a transaction that is
+// missing or unreadable (expired, consumed, store trouble) proves nothing about
+// the browser, so the MFA session is dropped and the step is refused before it
+// shows an identity, counts an attempt or reaches the provider. On a mismatch
+// the transaction is abandoned as well.
+func (h *Handlers) mfaBrowserBound(r *http.Request, step, sessionID string, mfaSession *state.MFASession) mfaBindingResult {
+	tx, err := h.stateManager.GetOAuthState(r.Context(), mfaSession.OAuthState)
+	if err != nil || tx == nil {
+		h.logger.Warn("MFA step for a missing or unreadable transaction", "step", step, "error", err)
+		h.stateManager.ConsumeMFASession(context.WithoutCancel(r.Context()), sessionID)
+		return mfaBindingExpired
+	}
+	if h.transactionBoundToBrowser(r, tx) {
+		return mfaBindingOK
+	}
+	h.abandonOnBrowserMismatch(r, step, mfaSession.OAuthState, tx)
+	h.stateManager.ConsumeMFASession(context.WithoutCancel(r.Context()), sessionID)
+	return mfaBindingMismatch
+}
+
 func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessionID, code string) {
+	// Before anything is counted or sent to the provider: only the browser the
+	// transaction was started in may verify its MFA challenge, and a session id
+	// seen by anyone else cannot be used to burn its attempts.
+	if pre, _ := h.stateManager.GetMFASession(r.Context(), sessionID); pre != nil {
+		switch h.mfaBrowserBound(r, "mfa-verify", sessionID, pre) {
+		case mfaBindingExpired:
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"success":           false,
+				"error":             "invalid_request",
+				"error_description": "Session expired or invalid. Please restart authentication.",
+			})
+			return
+		case mfaBindingMismatch:
+			writeJSON(w, http.StatusForbidden, map[string]interface{}{
+				"success":           false,
+				"error":             "browser_mismatch",
+				"error_description": "This sign-in was not started in this browser, or it expired. Go back to the application you were signing in to and start the sign-in again from there.",
+			})
+			return
+		}
+	}
+
 	// SECURITY FIX: Check and increment attempts BEFORE processing MFA verification
 	// This prevents brute force attacks on MFA codes
 	attempts, err := h.stateManager.IncrementMFAAttempts(r.Context(), sessionID)
@@ -872,6 +1014,20 @@ func (h *Handlers) HandleMFAVerify(w http.ResponseWriter, r *http.Request, sessi
 			"success":           false,
 			"error":             "invalid_request",
 			"error_description": "OAuth state expired. Please restart the authentication flow.",
+		})
+		return
+	}
+
+	// The record just consumed is the authority: no code without the binding.
+	// (Checked above too, but the transaction could have been replaced between.)
+	if !h.transactionBoundToBrowser(r, oauthState) {
+		h.logger.Warn("SECURITY: MFA verification from a browser the transaction was not started in",
+			"redirect_host", redirectHost(oauthState.RedirectURI))
+		h.stateManager.ConsumeMFASession(r.Context(), sessionID)
+		writeJSON(w, http.StatusForbidden, map[string]interface{}{
+			"success":           false,
+			"error":             "browser_mismatch",
+			"error_description": "This sign-in was not started in this browser, or it expired. Go back to the application you were signing in to and start the sign-in again from there.",
 		})
 		return
 	}
@@ -1046,6 +1202,15 @@ func (h *Handlers) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	// Validate required parameters
 	if req.ClientName == "" {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Missing client_name parameter", http.StatusBadRequest))
+		return
+	}
+	// The name is shown to users on the sign-in page, so it is kept plain:
+	// control and bidi/format characters are dropped and the length is bounded
+	// (RFC 7591 lets the server replace requested metadata values; the response
+	// carries the stored one).
+	req.ClientName = cimd.SanitizeClientName(req.ClientName)
+	if req.ClientName == "" {
+		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "client_name must contain printable text", http.StatusBadRequest))
 		return
 	}
 

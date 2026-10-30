@@ -22,8 +22,7 @@ import (
 // ===== HandleAuthorize Tests =====
 
 func TestHandleAuthorize_ValidRequest(t *testing.T) {
-	handlers, stateManager, mockFB, _ := testHandlers(t)
-	ctx := context.Background()
+	handlers, stateManager, mockFB, mr := testHandlers(t)
 
 	// Track if CreateAuthURI was called
 	createAuthURICalled := false
@@ -49,10 +48,8 @@ func TestHandleAuthorize_ValidRequest(t *testing.T) {
 	params.Set("scope", "openid profile")
 	params.Set("provider", "google")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+params.Encode(), nil)
-	w := httptest.NewRecorder()
-
-	handlers.HandleAuthorize(w, req)
+	// Through the selection page, the way a browser gets to the provider.
+	w := browserAuthorize(t, handlers, params)
 
 	// Should redirect to Firebase
 	assert.Equal(t, http.StatusFound, w.Code)
@@ -61,10 +58,9 @@ func TestHandleAuthorize_ValidRequest(t *testing.T) {
 	location := w.Header().Get("Location")
 	assert.Contains(t, location, "firebase.example.com")
 
-	// Verify state was stored
-	storedState, err := stateManager.GetOAuthState(ctx, "client-state-123")
-	assert.NoError(t, err)
-	require.NotNil(t, storedState)
+	// Verify state was stored, under a server-generated transaction id
+	txID, storedState := onlyTx(t, stateManager, mr)
+	assert.NotContains(t, txID, "client-state-123")
 	assert.Equal(t, "client-state-123", storedState.State)
 	assert.Equal(t, challenge, storedState.CodeChallenge)
 	assert.Equal(t, "google.com", storedState.Provider)
@@ -277,10 +273,7 @@ func TestHandleAuthorize_UnsupportedProvider(t *testing.T) {
 	params.Set("code_challenge_method", "S256")
 	params.Set("provider", "unsupported-provider")
 
-	req := httptest.NewRequest(http.MethodGet, "/authorize?"+params.Encode(), nil)
-	w := httptest.NewRecorder()
-
-	handlers.HandleAuthorize(w, req)
+	w := browserAuthorize(t, handlers, params)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
@@ -291,9 +284,6 @@ func TestHandleAuthorize_UnsupportedProvider(t *testing.T) {
 }
 
 func TestHandleAuthorize_ProviderNormalization(t *testing.T) {
-	handlers, stateManager, _, _ := testHandlers(t)
-	ctx := context.Background()
-
 	verifier := "test-verifier-123456789012345678901234567890"
 	challenge := generatePKCEChallenge(verifier)
 
@@ -309,6 +299,7 @@ func TestHandleAuthorize_ProviderNormalization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.inputProvider, func(t *testing.T) {
+			handlers, stateManager, _, mr := testHandlers(t)
 			params := url.Values{}
 			params.Set("response_type", "code")
 			params.Set("client_id", "test-client")
@@ -318,17 +309,12 @@ func TestHandleAuthorize_ProviderNormalization(t *testing.T) {
 			params.Set("code_challenge_method", "S256")
 			params.Set("provider", tt.inputProvider)
 
-			req := httptest.NewRequest(http.MethodGet, "/authorize?"+params.Encode(), nil)
-			w := httptest.NewRecorder()
-
-			handlers.HandleAuthorize(w, req)
+			w := browserAuthorize(t, handlers, params)
 
 			assert.Equal(t, http.StatusFound, w.Code)
 
 			// Verify provider was normalized in stored state
-			storedState, err := stateManager.GetOAuthState(ctx, "state-"+tt.inputProvider)
-			assert.NoError(t, err)
-			require.NotNil(t, storedState)
+			_, storedState := onlyTx(t, stateManager, mr)
 			assert.Equal(t, tt.expectedProvider, storedState.Provider)
 		})
 	}
@@ -354,15 +340,12 @@ func TestHandleCallback_ValidCallback(t *testing.T) {
 		"https://test.example.com",
 		"google.com",
 	)
-	err := stateManager.StoreOAuthState(ctx, oauthState)
-	require.NoError(t, err)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Store state mappings
 	fbState := "firebase-state-456"
 	sessionID := "session-789"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-state-123", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-state-123"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+	seedMappings(t, stateManager, fbState, txID, sessionID)
 
 	// Mock Firebase sign-in
 	signInCalled := false
@@ -383,7 +366,7 @@ func TestHandleCallback_ValidCallback(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	// Should redirect to client with authorization code
 	assert.Equal(t, http.StatusFound, w.Code)
@@ -419,7 +402,7 @@ func TestHandleCallback_InvalidCallbackDoesNotLogCode(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=secret-provider-code&state=secret-state", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	out := logs.String()
@@ -434,7 +417,7 @@ func TestHandleCallback_MissingFirebaseState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=test", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "Missing state")
@@ -447,7 +430,7 @@ func TestHandleCallback_InvalidState(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?state=non-existent-state&code=test", nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "expired or invalid")
@@ -456,7 +439,6 @@ func TestHandleCallback_InvalidState(t *testing.T) {
 // SECURITY TEST: State reuse attack (TOCTOU)
 func TestHandleCallback_StateReuseAttack(t *testing.T) {
 	handlers, stateManager, _, _ := testHandlers(t)
-	ctx := context.Background()
 
 	// Setup OAuth state
 	oauthState := state.NewOAuthState(
@@ -469,34 +451,31 @@ func TestHandleCallback_StateReuseAttack(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Store mappings
 	fbState := "fb-state-reuse"
 	sessionID := "session-reuse"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-state-reuse", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-state-reuse"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+	seedMappings(t, stateManager, fbState, txID, sessionID)
 
 	callbackURL := "/oauth/callback?state=" + fbState + "&code=test"
 
 	// First request should succeed
 	req1 := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w1 := httptest.NewRecorder()
-	handlers.HandleCallback(w1, req1)
+	handlers.HandleCallback(w1, withBrowser(handlers, req1))
 	assert.Equal(t, http.StatusFound, w1.Code)
 
 	// Second request with same state should fail (state consumed)
 	req2 := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w2 := httptest.NewRecorder()
-	handlers.HandleCallback(w2, req2)
+	handlers.HandleCallback(w2, withBrowser(handlers, req2))
 	assert.Equal(t, http.StatusBadRequest, w2.Code)
 	assert.Contains(t, w2.Body.String(), "expired or invalid")
 }
 
 func TestHandleCallback_FirebaseSignInFailure(t *testing.T) {
 	handlers, stateManager, mockFB, _ := testHandlers(t)
-	ctx := context.Background()
 
 	// Setup OAuth state
 	oauthState := state.NewOAuthState(
@@ -509,14 +488,12 @@ func TestHandleCallback_FirebaseSignInFailure(t *testing.T) {
 		"",
 		"google.com",
 	)
-	stateManager.StoreOAuthState(ctx, oauthState)
+	txID := mustCreateTx(t, stateManager, oauthState)
 
 	// Store mappings
 	fbState := "fb-state-fail"
 	sessionID := "session-fail"
-	stateManager.StoreSelectionSession(ctx, "oauth:session:oauth-state-fail", map[string]string{"firebase_state": fbState})
-	stateManager.StoreSelectionSession(ctx, "oauth:state:"+fbState, map[string]string{"oauth_state": "oauth-state-fail"})
-	stateManager.StoreSelectionSession(ctx, "oauth:fbsession:"+fbState, map[string]string{"session_id": sessionID})
+	seedMappings(t, stateManager, fbState, txID, sessionID)
 
 	// Mock Firebase failure
 	mockFB.signInWithIdpFunc = func(ctx context.Context, requestURI, postBody, sid, providerId string) (*firebase.SignInWithIdpResponse, error) {
@@ -527,7 +504,7 @@ func TestHandleCallback_FirebaseSignInFailure(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, callbackURL, nil)
 	w := httptest.NewRecorder()
 
-	handlers.HandleCallback(w, req)
+	handlers.HandleCallback(w, withBrowser(handlers, req))
 
 	// Should redirect to client with error
 	assert.Equal(t, http.StatusFound, w.Code)

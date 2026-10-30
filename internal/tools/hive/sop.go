@@ -50,7 +50,7 @@ func RegisterListSops() {
 					return BriefData(d, "description")
 				}
 			}
-			resp, err := ListRecords(lc.NewHiveClient(org), "sop", org.GetOID(), "sops", listReq, briefFn)
+			resp, err := ListRecords(NewClient(org), "sop", org.GetOID(), "sops", listReq, briefFn)
 			if err != nil {
 				return tools.ErrorResultf("failed to list SOPs: %v", err), nil
 			}
@@ -86,7 +86,7 @@ func RegisterGetSop() {
 			}
 
 			// Create hive client for SOPs
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get SOP
 			sop, err := hive.Get(lc.HiveArgs{
@@ -218,7 +218,7 @@ func RegisterDeleteSop() {
 			}
 
 			// Create hive client for SOPs
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete SOP
 			_, err = hive.Remove(lc.HiveArgs{

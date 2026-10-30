@@ -146,6 +146,37 @@ func (c *Client) SignInWithIdp(ctx context.Context, requestURI, queryString, ses
 	return &resp, nil
 }
 
+// ErrRefreshTokenRejected means Firebase refused the refresh token itself
+// (expired, revoked, or its user disabled/deleted): signing in again is the
+// only way forward. Other RefreshIDToken errors are transient or are
+// configuration problems on our side, and the same refresh token may be
+// retried once they are fixed.
+var ErrRefreshTokenRejected = errors.New("firebase rejected the refresh token")
+
+// deadRefreshCodes are the securetoken error codes that say the grant behind
+// the refresh token is permanently gone (see "Exchange a refresh token for an
+// ID token" in the Firebase Auth REST reference). The other codes it documents
+// (API key not valid, PROJECT_NUMBER_MISMATCH, INVALID_GRANT_TYPE,
+// MISSING_REFRESH_TOKEN) mean our request or configuration is wrong, and
+// treating them as a dead grant would sign every user out over a bad deploy.
+var deadRefreshCodes = map[string]bool{
+	"TOKEN_EXPIRED":         true,
+	"USER_DISABLED":         true,
+	"USER_NOT_FOUND":        true,
+	"INVALID_REFRESH_TOKEN": true,
+}
+
+// isDeadRefreshBody reports whether a securetoken 400 body carries one of the
+// permanent grant failures. Anything else, including a body that is not
+// Firebase's error format, is not proven dead.
+func isDeadRefreshBody(body []byte) bool {
+	var fbErr FirebaseError
+	if json.Unmarshal(body, &fbErr) != nil {
+		return false
+	}
+	return deadRefreshCodes[firebaseErrorCode(&fbErr)]
+}
+
 // RefreshIDToken refreshes an expired Firebase ID token
 func (c *Client) RefreshIDToken(ctx context.Context, refreshToken string) (idToken string, expiresAt int64, err error) {
 	// Build form data for token refresh
@@ -174,6 +205,13 @@ func (c *Client) RefreshIDToken(ctx context.Context, refreshToken string) (idTok
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Firebase answers a dead refresh token (expired, revoked, user
+		// disabled or deleted) with 400, but it also answers 400 for a bad API
+		// key or project, so the error code decides. Everything else is
+		// retryable.
+		if resp.StatusCode == http.StatusBadRequest && isDeadRefreshBody(body) {
+			return "", 0, fmt.Errorf("%w: status %d: %s", ErrRefreshTokenRejected, resp.StatusCode, string(body))
+		}
 		return "", 0, fmt.Errorf("refresh failed with status %d: %s", resp.StatusCode, string(body))
 	}
 

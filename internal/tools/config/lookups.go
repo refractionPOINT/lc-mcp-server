@@ -47,7 +47,7 @@ func RegisterListLookups() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := hive.ListRecords(lc.NewHiveClient(org), "lookup", org.GetOID(), "lookups", listReq, nil)
+			resp, err := hive.ListRecords(hive.NewClient(org), "lookup", org.GetOID(), "lookups", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list lookups: %v", err), nil
 			}
@@ -83,7 +83,7 @@ func RegisterGetLookup() {
 			}
 
 			// Create hive client for lookups
-			client := lc.NewHiveClient(org)
+			client := hive.NewClient(org)
 
 			// Get lookup table
 			lookup, err := client.Get(lc.HiveArgs{
@@ -203,7 +203,7 @@ func RegisterDeleteLookup() {
 			}
 
 			// Create hive client for lookups
-			client := lc.NewHiveClient(org)
+			client := hive.NewClient(org)
 
 			// Delete lookup table
 			_, err = client.Remove(lc.HiveArgs{
@@ -313,7 +313,7 @@ func RegisterQueryLookup() {
 			}
 
 			// Create hive client for lookups
-			client := lc.NewHiveClient(org)
+			client := hive.NewClient(org)
 
 			// Get lookup table
 			lookup, err := client.Get(lc.HiveArgs{

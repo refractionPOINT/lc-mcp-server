@@ -94,7 +94,7 @@ func TestCreateTokenResponse_Success(t *testing.T) {
 	firebaseExpiresAt := time.Now().Add(1 * time.Hour).Unix()
 	scope := "openid email profile"
 
-	response, err := manager.CreateTokenResponse(ctx, uid, firebaseIDToken, firebaseRefreshToken, firebaseExpiresAt, scope, "")
+	response, err := manager.CreateTokenResponse(ctx, uid, firebaseIDToken, firebaseRefreshToken, firebaseExpiresAt, scope, "", "")
 
 	require.NoError(t, err)
 	assert.NotNil(t, response)
@@ -112,7 +112,7 @@ func TestRefreshAccessToken_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// First create initial tokens
-	initial, err := manager.CreateTokenResponse(ctx, "user-123", "firebase-id", "firebase-refresh", time.Now().Add(1*time.Hour).Unix(), "openid email", "")
+	initial, err := manager.CreateTokenResponse(ctx, "user-123", "firebase-id", "firebase-refresh", time.Now().Add(1*time.Hour).Unix(), "openid email", "", "")
 	require.NoError(t, err)
 
 	// Configure mock Firebase
@@ -123,7 +123,7 @@ func TestRefreshAccessToken_Success(t *testing.T) {
 	}
 
 	// Execute refresh
-	refreshed, err := manager.RefreshAccessToken(ctx, initial.RefreshToken, nil)
+	refreshed, err := manager.RefreshAccessToken(ctx, initial.RefreshToken, "", nil)
 
 	require.NoError(t, err)
 	assert.NotNil(t, refreshed)
@@ -141,7 +141,7 @@ func TestRefreshAccessToken_RefreshTokenNotFound(t *testing.T) {
 	manager, _, _ := setupTestManager(t)
 	ctx := context.Background()
 
-	response, err := manager.RefreshAccessToken(ctx, "non-existent-refresh-token", nil)
+	response, err := manager.RefreshAccessToken(ctx, "non-existent-refresh-token", "", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -153,7 +153,7 @@ func TestRefreshAccessToken_FirebaseRefreshFails(t *testing.T) {
 	ctx := context.Background()
 
 	// Create initial tokens
-	initial, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+	initial, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 	require.NoError(t, err)
 
 	// Mock Firebase to fail
@@ -161,7 +161,7 @@ func TestRefreshAccessToken_FirebaseRefreshFails(t *testing.T) {
 		return "", 0, errors.New("Firebase API error")
 	}
 
-	response, err := manager.RefreshAccessToken(ctx, initial.RefreshToken, nil)
+	response, err := manager.RefreshAccessToken(ctx, initial.RefreshToken, "", nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, response)
@@ -175,7 +175,7 @@ func TestRevokeToken_AccessToken(t *testing.T) {
 	ctx := context.Background()
 
 	// Create tokens
-	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 	require.NoError(t, err)
 
 	// Revoke access token
@@ -194,7 +194,7 @@ func TestRevokeToken_RefreshToken(t *testing.T) {
 	ctx := context.Background()
 
 	// Create tokens
-	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 	require.NoError(t, err)
 
 	// Revoke refresh token
@@ -225,7 +225,7 @@ func TestIntrospectToken_ActiveToken(t *testing.T) {
 	ctx := context.Background()
 
 	// Create active token
-	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid email profile", "")
+	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid email profile", "", "")
 	require.NoError(t, err)
 
 	response, err := manager.IntrospectToken(ctx, tokens.AccessToken)
@@ -260,16 +260,20 @@ func TestRefreshAccessToken_TokenRotation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create initial tokens
-	initial, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+	initial, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 	require.NoError(t, err)
 
 	// First refresh should succeed
-	refreshed1, err1 := manager.RefreshAccessToken(ctx, initial.RefreshToken, nil)
+	refreshed1, err1 := manager.RefreshAccessToken(ctx, initial.RefreshToken, "", nil)
 	assert.NoError(t, err1)
 	assert.NotNil(t, refreshed1)
 
-	// Second refresh with same token should fail (token rotated)
-	refreshed2, err2 := manager.RefreshAccessToken(ctx, initial.RefreshToken, nil)
+	// The client moves on to the successors (within the refresh grace window the
+	// rotated token only hands back the pair already issued, see
+	// TestRefreshGrace_*), so the rotated token yields nothing any more.
+	_, err = manager.RefreshAccessToken(ctx, refreshed1.RefreshToken, "", nil)
+	require.NoError(t, err)
+	refreshed2, err2 := manager.RefreshAccessToken(ctx, initial.RefreshToken, "", nil)
 	assert.Error(t, err2, "Refresh token should be invalid after first use (rotation)")
 	assert.Nil(t, refreshed2)
 }
@@ -294,7 +298,7 @@ func TestTokenResponse_OAuth2Compliance(t *testing.T) {
 		manager, _, _ := setupTestManager(t)
 		ctx := context.Background()
 
-		tokens, err := manager.CreateTokenResponse(ctx, "user", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+		tokens, err := manager.CreateTokenResponse(ctx, "user", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 
 		require.NoError(t, err)
 		assert.Equal(t, "Bearer", tokens.TokenType, "Token type must be 'Bearer' per RFC 6749")
@@ -308,7 +312,7 @@ func TestTokenExtension_TrackingFields(t *testing.T) {
 		manager, stateManager, _ := setupTestManager(t)
 		ctx := context.Background()
 
-		tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+		tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 		require.NoError(t, err)
 
 		tokenData, err := stateManager.GetAccessTokenData(ctx, tokens.AccessToken)
@@ -408,7 +412,7 @@ func TestTokenExtension_CountIncrementsOnExtension(t *testing.T) {
 	}
 
 	// Create initial token
-	tokens, err := manager.CreateTokenResponse(ctx, "user", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+	tokens, err := manager.CreateTokenResponse(ctx, "user", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 	require.NoError(t, err)
 
 	// Check initial extension count
@@ -419,8 +423,9 @@ func TestTokenExtension_CountIncrementsOnExtension(t *testing.T) {
 
 	// Set token to be expiring soon (within refresh buffer)
 	tokenData.ExpiresAt = time.Now().Add(30 * time.Minute).Unix() // Less than 1 hour buffer
-	err = stateManager.StoreAccessToken(ctx, tokenData)
+	updated, err := stateManager.UpdateAccessToken(ctx, tokenData)
 	require.NoError(t, err)
+	require.True(t, updated)
 
 	// Validate token - should proactively extend it
 	result, err := manager.ValidateAccessToken(ctx, tokens.AccessToken, true)
@@ -576,7 +581,10 @@ func TestRevokeToken_DoesNotLogToken(t *testing.T) {
 	manager.WithJWTExchange(mockJWTExchange("mock-limacharlie-jwt", nil))
 	ctx := context.Background()
 
-	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "")
+	// Revoking either token ends its grant, so each case needs a grant of its own.
+	access, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
+	require.NoError(t, err)
+	refresh, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -585,10 +593,10 @@ func TestRevokeToken_DoesNotLogToken(t *testing.T) {
 		hint  string
 		msg   string
 	}{
-		{"access token", tokens.AccessToken, "access_token", "Revoked access token"},
-		{"refresh token", tokens.RefreshToken, "refresh_token", "Revoked refresh token"},
-		// The state manager's delete succeeds for an unknown token too, so only
-		// check that the token is absent.
+		{"access token", access.AccessToken, "access_token", "Revoked access token"},
+		{"refresh token", refresh.RefreshToken, "refresh_token", "Revoked refresh token"},
+		// Nothing is stored for an unknown token, so only check that the token
+		// is absent from the log.
 		{"unknown token, no hint", "unknown-token-value", "", ""},
 	}
 	for _, tc := range cases {

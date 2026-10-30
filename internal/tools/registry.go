@@ -1051,6 +1051,33 @@ func checkAIAgentPermission(ctx context.Context, oid string) error {
 	return nil
 }
 
+// RequireAIAgentAccessToOrg runs the ai_agent.operate check against an
+// organization a tool acts on through an argument, rather than the request's
+// effective org (which the transport has already checked). The credential is
+// switched to that org first, exactly as for an org-scoped call, so an org
+// that blocks AI agents can't be reached by naming it in a tool argument.
+//
+// Use it for a tool that gains access to the organization. A tool that only
+// takes access away (removing an org from a group) has no need of the org's
+// consent and must not require it.
+func RequireAIAgentAccessToOrg(ctx context.Context, oid string) error {
+	if err := auth.ValidateOID(oid); err != nil {
+		return fmt.Errorf("invalid organization ID: %w", err)
+	}
+	// Without enforcement (or a cache to check against) there is no check to
+	// run, and the switch below is not free: in UID OAuth mode it exchanges the
+	// Firebase token for a JWT over the network, and a failure there would fail
+	// a call that needs no permission.
+	if !auth.IsPermissionEnforcementEnabled(ctx) || auth.GetPermissionCache(ctx) == nil {
+		return nil
+	}
+	orgCtx, err := auth.WithOID(ctx, oid, nil)
+	if err != nil {
+		return fmt.Errorf("cannot act on organization %s with this credential: %w", oid, err)
+	}
+	return checkAIAgentPermission(orgCtx, oid)
+}
+
 // Helper functions for creating tool results
 
 // ToJSON converts a value to compact JSON string without HTML escaping
@@ -1196,6 +1223,13 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 	reg, ok := GetTool(toolName)
 	if !ok {
 		return ErrorResultf("tool %q not found", toolName), nil
+	}
+
+	// Every internal dispatch honors the caller's OAuth scope, so a meta tool
+	// cannot reach a tool its token may not call (no-op for credentials that
+	// are not OAuth-scoped).
+	if err := CheckToolScope(ctx, reg); err != nil {
+		return nil, err
 	}
 
 	// Validate parameters against schema

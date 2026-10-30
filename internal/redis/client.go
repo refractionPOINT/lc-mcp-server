@@ -18,6 +18,7 @@ type Client struct {
 	atomicGetAndDelete      *redis.Script
 	atomicMultiGetAndDelete *redis.Script
 	incrWithWindow          *redis.Script
+	createOnly              *redis.Script
 }
 
 // Config holds Redis configuration
@@ -114,6 +115,27 @@ func (c *Client) loadScripts() {
 		return n
 	`)
 
+	// Create-only that survives its own retry: stores the value if the key is
+	// free, and also answers "stored" when the key already holds exactly this
+	// value (see CreateOnly). KEYS[1] is the key, ARGV[1] the value, ARGV[2] the
+	// expiry in milliseconds (0 for none). The type check keeps a key of another
+	// type a plain conflict instead of a script error.
+	c.createOnly = redis.NewScript(`
+		local ok
+		if tonumber(ARGV[2]) > 0 then
+			ok = redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2])
+		else
+			ok = redis.call('SET', KEYS[1], ARGV[1], 'NX')
+		end
+		if ok then
+			return 1
+		end
+		if redis.call('TYPE', KEYS[1]).ok == 'string' and redis.call('GET', KEYS[1]) == ARGV[1] then
+			return 1
+		end
+		return 0
+	`)
+
 	c.logger.Debug("Loaded atomic Redis Lua scripts")
 }
 
@@ -129,6 +151,82 @@ func (c *Client) Get(ctx context.Context, key string) (string, error) {
 // Set stores a value in Redis
 func (c *Client) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	return c.client.Set(ctx, key, value, expiration).Err()
+}
+
+// SetNX stores a value only if the key does not exist (SET NX) and reports
+// whether it was stored. A zero expiration stores the key without one.
+//
+// A command whose reply was lost is sent again by the client library, and the
+// repeat of a SET NX that already took effect reports "not stored" even though
+// the caller's own value is there. Records that one writer creates under a
+// random id should use CreateOnly instead.
+func (c *Client) SetNX(ctx context.Context, key string, value interface{}, expiration time.Duration) (bool, error) {
+	if expiration < 0 {
+		return false, fmt.Errorf("expiration must not be negative")
+	}
+	return c.client.SetNX(ctx, key, value, expiration).Result()
+}
+
+// CreateOnly stores value under key only if the key is free, and reports whether
+// the key now holds exactly value: true when it was created or already held this
+// value, false when it holds something else (it is never overwritten). A zero
+// expiration stores the key without one; an existing key keeps the expiry it has.
+//
+// It is one atomic script, so it is safe to run twice with the same arguments, as
+// the client library does when a reply is lost: the repeat of a create that took
+// effect finds its own value and still answers true. Another writer can only be
+// mistaken for the same one if it writes the very same value, which for the
+// records created this way (they carry random ids) is the same record.
+func (c *Client) CreateOnly(ctx context.Context, key, value string, expiration time.Duration) (bool, error) {
+	if expiration < 0 {
+		return false, fmt.Errorf("expiration must not be negative")
+	}
+	ms := expiration.Milliseconds()
+	if expiration > 0 && ms == 0 {
+		ms = 1
+	}
+	n, err := c.createOnly.Run(ctx, c.client, []string{key}, value, ms).Int64()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// SetXXKeepTTL overwrites a key only if it still exists (SET XX KEEPTTL),
+// leaving its expiry unchanged, and reports whether it was updated. A record
+// that was consumed or expired in the meantime is not resurrected.
+func (c *Client) SetXXKeepTTL(ctx context.Context, key string, value interface{}) (bool, error) {
+	res, err := c.client.SetArgs(ctx, key, value, redis.SetArgs{Mode: "XX", KeepTTL: true}).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return res == "OK", nil
+}
+
+// Script is a Lua script that Redis runs atomically. Callers that build key
+// names inside the script (instead of receiving every key in KEYS) need a
+// standalone or primary/replica Redis, not a cluster.
+type Script struct {
+	script *redis.Script
+}
+
+// NewScript prepares a Lua script for Run.
+func NewScript(src string) *Script {
+	return &Script{script: redis.NewScript(src)}
+}
+
+// Run executes the script (EVALSHA, falling back to EVAL when the server has
+// not loaded it yet) and returns the raw reply: int64, string or []interface{}.
+//
+// A command that fails on the network is retried by the client with the same
+// arguments, and the failed attempt may already have been executed. Scripts must
+// therefore be safe to run twice with the same arguments and answer the second
+// run like the first.
+func (c *Client) Run(ctx context.Context, s *Script, keys []string, args ...interface{}) (interface{}, error) {
+	return s.script.Run(ctx, c.client, keys, args...).Result()
 }
 
 // SetEX stores a value with expiration time

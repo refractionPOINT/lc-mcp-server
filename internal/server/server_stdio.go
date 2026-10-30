@@ -41,7 +41,9 @@ func NewSTDIOServer(cfg *config.Config, logger *slog.Logger) (*STDIOServer, erro
 			"bucket", gcsConfig.BucketName,
 			"threshold", gcsConfig.TokenThreshold)
 	} else {
-		logger.Info("GCS disabled, large results will be returned inline")
+		// The single local user can read this machine's temp directory, so large
+		// results go there (see gcs.Manager.UploadToGCS).
+		logger.Info("GCS disabled (GCS_BUCKET_NAME not set), large results will be saved to a temporary file on this machine")
 	}
 
 	// Initialize metrics manager for GCP Monitoring
@@ -121,6 +123,11 @@ func (s *STDIOServer) Serve(ctx context.Context) error {
 	contextFunc := func(reqCtx context.Context) context.Context {
 		// Add auth context for all requests
 		reqCtx = auth.WithAuthContext(reqCtx, s.config.Auth)
+
+		// stdio is a single local user on their own machine, so tools may touch the
+		// local filesystem by caller-supplied path. Opt-in only: the HTTP transport
+		// never sets this (see auth.WithLocalFilesystemAccess).
+		reqCtx = auth.WithLocalFilesystemAccess(reqCtx)
 
 		// Add SDK cache
 		reqCtx = auth.WithSDKCache(reqCtx, s.sdkCache)

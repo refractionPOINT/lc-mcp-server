@@ -15,6 +15,24 @@ import (
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 )
 
+const (
+	// maxInlineUploadBytes bounds the decoded size of file_content. The HTTP
+	// transport caps a whole request at 10 MiB, and base64 inflates content by 4/3,
+	// so 7 MiB of payload (about 9.3 MiB encoded) is the most that can arrive in one
+	// call with room left for the JSON envelope. The same bound applies in stdio so
+	// the tool behaves the same everywhere; larger files go through file_path there.
+	maxInlineUploadBytes = 7 * 1024 * 1024
+
+	// maxInlineDownloadBytes bounds how much payload get_payload returns inline
+	// (base64) when no file_path is given. Results above the large-result threshold
+	// are moved to storage by the shared result wrapper when it is configured; this
+	// cap keeps one call from materialising an unbounded response regardless.
+	maxInlineDownloadBytes = 25 * 1024 * 1024
+
+	inHTTPAlternativeUpload   = "Send the content inline instead: pass 'file_content' as base64 (up to 7 MiB decoded) and omit 'file_path'."
+	inHTTPAlternativeDownload = "Omit 'file_path': the payload is returned inline as base64 in 'content_base64' (up to 25 MiB)."
+)
+
 func init() {
 	// Register payload management tools
 	RegisterListPayloads()
@@ -91,18 +109,18 @@ func RegisterListPayloads() {
 func RegisterCreatePayload() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "create_payload",
-		Description: "Upload a payload from a file on disk or base64-encoded content",
+		Description: "Upload a payload from base64-encoded content (or, on a local stdio server only, a file on disk)",
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("create_payload",
-			mcp.WithDescription("Upload a payload (executable or script) to be deployed and executed on sensors. The file extension in the name determines execution type (.exe, .ps1, .bat, .sh). Provide either file_path OR file_content (base64-encoded), not both."),
+			mcp.WithDescription("Upload a payload (executable or script) to be deployed and executed on sensors. The file extension in the name determines execution type (.exe, .ps1, .bat, .sh). Send the content inline as file_content (base64-encoded, up to 7 MiB decoded) - this works everywhere and is what to use against the hosted server. file_path (a file on the machine running the MCP server) is only honored by a local stdio server and is refused by the hosted HTTP server. Provide either file_content OR file_path, not both."),
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name for the payload (include file extension for execution type)")),
 			mcp.WithString("file_path",
-				mcp.Description("Absolute path to the file on disk to upload (mutually exclusive with file_content)")),
+				mcp.Description("Local stdio server only: absolute path to a file on the machine running the MCP server (mutually exclusive with file_content). Refused by the hosted HTTP server; use file_content there")),
 			mcp.WithString("file_content",
-				mcp.Description("Base64-encoded file content to upload (mutually exclusive with file_path)")),
+				mcp.Description("Base64-encoded file content to upload, up to 7 MiB decoded (mutually exclusive with file_path). Works on every server")),
 			mcp.WithDestructiveHintAnnotation(false),
 		),
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
@@ -118,6 +136,14 @@ func RegisterCreatePayload() {
 			pathProvided := hasPath && filePath != ""
 			contentProvided := hasContent && fileContent != ""
 
+			// A caller-chosen path is only honored on the caller's own machine. Over
+			// HTTP it would read the shared server's filesystem into the caller's org.
+			if pathProvided {
+				if refusal := tools.RefuseServerFilesystem(ctx, "create_payload", "file_path", inHTTPAlternativeUpload); refusal != nil {
+					return refusal, nil
+				}
+			}
+
 			if !pathProvided && !contentProvided {
 				return tools.ErrorResult("exactly one of 'file_path' or 'file_content' must be provided"), nil
 			}
@@ -129,27 +155,32 @@ func RegisterCreatePayload() {
 			var size int64
 
 			if contentProvided {
-				// Decode base64 content
+				// Reject on the encoded length first so an oversized value is never
+				// decoded into memory.
+				if len(fileContent) > base64.StdEncoding.EncodedLen(maxInlineUploadBytes) {
+					return tools.ErrorResultf("file_content is too large: at most %d bytes (7 MiB) of decoded content can be sent inline", maxInlineUploadBytes), nil
+				}
 				decoded, err := base64.StdEncoding.DecodeString(fileContent)
 				if err != nil {
 					return tools.ErrorResultf("invalid base64 content: %v", err), nil
 				}
+				if len(decoded) > maxInlineUploadBytes {
+					return tools.ErrorResultf("file_content is too large: %d bytes decoded, at most %d bytes (7 MiB) can be sent inline", len(decoded), maxInlineUploadBytes), nil
+				}
 				reader = bytes.NewReader(decoded)
 				size = int64(len(decoded))
 			} else {
-				// Security: Validate file path
+				// stdio only from here: validate the path, then stream the file.
 				if err := validateFilePath(filePath); err != nil {
 					return tools.ErrorResultf("invalid file path: %v", err), nil
 				}
 
-				// Open and read file
 				file, err := os.Open(filePath)
 				if err != nil {
 					return tools.ErrorResultf("failed to open file '%s': %v", filePath, err), nil
 				}
 				defer file.Close()
 
-				// Get file info for size reporting
 				fileInfo, err := file.Stat()
 				if err != nil {
 					return tools.ErrorResultf("failed to stat file '%s': %v", filePath, err), nil
@@ -181,19 +212,18 @@ func RegisterCreatePayload() {
 func RegisterGetPayload() {
 	tools.RegisterTool(&tools.ToolRegistration{
 		Name:        "get_payload",
-		Description: "Download a payload to a file on disk",
+		Description: "Download a payload (returned inline as base64, or saved to a file on a local stdio server)",
 		Profile:     "platform_admin",
 		RequiresOID: true,
 		Schema: mcp.NewTool("get_payload",
-			mcp.WithDescription("Download a payload to a local file path."),
+			mcp.WithDescription("Download a payload. By default the content is returned inline, base64-encoded in 'content_base64' (up to 25 MiB) - this works everywhere and is what to use against the hosted server. file_path (save to a file on the machine running the MCP server) is only honored by a local stdio server and is refused by the hosted HTTP server."),
 			mcp.WithString("name",
 				mcp.Required(),
 				mcp.Description("Name of the payload to retrieve")),
 			mcp.WithString("file_path",
-				mcp.Required(),
-				mcp.Description("Absolute path where to save the payload")),
-			// Reads the payload from LimaCharlie but writes it to the local
-			// filesystem, so it is not a read-only tool.
+				mcp.Description("Local stdio server only: absolute path on the machine running the MCP server where to save the payload. Omit to receive the content inline as base64. Refused by the hosted HTTP server")),
+			// Without file_path it only reads from LimaCharlie. With file_path (stdio
+			// only) it writes the local filesystem, so it is not a read-only tool.
 			mcp.WithReadOnlyHintAnnotation(false),
 			mcp.WithDestructiveHintAnnotation(false),
 		),
@@ -203,14 +233,17 @@ func RegisterGetPayload() {
 				return tools.ErrorResult("name parameter is required"), nil
 			}
 
-			filePath, ok := args["file_path"].(string)
-			if !ok || filePath == "" {
-				return tools.ErrorResult("file_path parameter is required"), nil
-			}
-
-			// Security: Validate destination path
-			if err := validateFilePath(filePath); err != nil {
-				return tools.ErrorResultf("invalid file path: %v", err), nil
+			filePath, _ := args["file_path"].(string)
+			toFile := filePath != ""
+			if toFile {
+				// A caller-chosen destination is only honored on the caller's own
+				// machine. Over HTTP it would overwrite files on the shared server.
+				if refusal := tools.RefuseServerFilesystem(ctx, "get_payload", "file_path", inHTTPAlternativeDownload); refusal != nil {
+					return refusal, nil
+				}
+				if err := validateFilePath(filePath); err != nil {
+					return tools.ErrorResultf("invalid file path: %v", err), nil
+				}
 			}
 
 			org, err := getOrganization(ctx)
@@ -221,6 +254,19 @@ func RegisterGetPayload() {
 			data, err := org.Payload(name)
 			if err != nil {
 				return tools.ErrorResultf("failed to download payload '%s': %v", name, err), nil
+			}
+
+			if !toFile {
+				if len(data) > maxInlineDownloadBytes {
+					return tools.ErrorResultf("payload '%s' is %d bytes, above the %d byte (25 MiB) limit for inline retrieval", name, len(data), maxInlineDownloadBytes), nil
+				}
+				return tools.SuccessResult(map[string]interface{}{
+					"success":        true,
+					"payload_name":   name,
+					"size":           len(data),
+					"encoding":       "base64",
+					"content_base64": base64.StdEncoding.EncodeToString(data),
+				}), nil
 			}
 
 			// Create parent directories if needed

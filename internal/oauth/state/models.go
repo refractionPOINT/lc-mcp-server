@@ -2,8 +2,18 @@ package state
 
 import "time"
 
-// OAuthState represents OAuth authorization request state (CSRF protection)
+// OAuthState is one OAuth authorization transaction.
+//
+// It is stored under TxID, which the server generates. State is the client's
+// own "state" parameter: opaque data that is only echoed back to the client's
+// redirect URI, never used to find or key anything.
 type OAuthState struct {
+	// TxID is the server-generated transaction id (the Redis key suffix). It is
+	// empty on transactions written before transaction ids existed, which were
+	// keyed by the client's state; callers always look transactions up by the
+	// id they were handed (a provider-callback mapping or an MFA session), so
+	// those finish normally.
+	TxID                string `json:"tx_id,omitempty"`
 	State               string `json:"state"`
 	CodeChallenge       string `json:"code_challenge"`
 	CodeChallengeMethod string `json:"code_challenge_method"`
@@ -13,6 +23,13 @@ type OAuthState struct {
 	Resource            string `json:"resource"`
 	Provider            string `json:"provider"` // e.g., "google.com", "microsoft.com"
 	CreatedAt           int64  `json:"created_at"`
+	// BrowserBinding is the SHA-256 (hex) of the secret in the browser-binding
+	// cookie of the browser that went through the selection page and
+	// /authorize. The provider callback and the MFA steps only proceed from a
+	// browser presenting that secret, so an authorization URL sent to someone
+	// else cannot complete this transaction. Empty on transactions written
+	// before the binding existed; those are never completed (fail closed).
+	BrowserBinding string `json:"browser_binding,omitempty"`
 }
 
 // AuthorizationCode represents an authorization code with associated data
@@ -53,6 +70,15 @@ type AccessTokenData struct {
 	// was issued for. Empty on tokens issued before resource binding existed
 	// (legacy): they are accepted for every endpoint of this server.
 	Resource string `json:"resource,omitempty"`
+	// ClientID is the OAuth client the token was issued to. Empty on tokens
+	// issued before client binding existed (legacy).
+	ClientID string `json:"client_id,omitempty"`
+	// FamilyID identifies the grant (one sign-in) the token belongs to. Every
+	// rotation of the refresh token carries it, so revoking the family revokes
+	// every token of the grant, including ones a revoker has no name for.
+	// Empty on tokens issued before families existed (legacy): the first
+	// refresh gives the grant one.
+	FamilyID string `json:"family_id,omitempty"`
 }
 
 // RefreshTokenData represents a refresh token mapping
@@ -66,6 +92,13 @@ type RefreshTokenData struct {
 	// Resource is the canonical RFC 8707 resource the token family is bound to;
 	// it is carried over, or narrowed, on every rotation. Empty means legacy.
 	Resource string `json:"resource,omitempty"`
+	// ClientID is the OAuth client this token family is bound to; it is carried
+	// through every rotation and must be presented on refresh. Empty means a
+	// token issued before client binding existed (legacy): the first refresh
+	// that names a client binds it.
+	ClientID string `json:"client_id,omitempty"`
+	// FamilyID is the grant this token belongs to; see AccessTokenData.FamilyID.
+	FamilyID string `json:"family_id,omitempty"`
 }
 
 // ClientRegistration represents a dynamically registered OAuth client
@@ -80,7 +113,7 @@ type ClientRegistration struct {
 type MFASession struct {
 	MFAPendingCredential string  `json:"mfa_pending_credential"`
 	MFAEnrollmentID      string  `json:"mfa_enrollment_id"`
-	OAuthState           string  `json:"oauth_state"`
+	OAuthState           string  `json:"oauth_state"` // transaction id of the OAuthState this challenge belongs to
 	DisplayName          string  `json:"display_name"`
 	LocalID              string  `json:"local_id"`
 	Email                string  `json:"email"`
@@ -124,6 +157,72 @@ const (
 	MFAPrefix       = "oauth:mfa:"
 	SessionPrefix   = "oauth:session:"   // OAuth state -> Firebase state mapping
 	FBSessionPrefix = "oauth:fbsession:" // Firebase state -> session ID mapping
+
+	// RevokedTokenPrefix + sha256(token) is a tombstone left when a token is
+	// revoked. It stops an operation in flight on that token from publishing
+	// successors.
+	RevokedTokenPrefix = "oauth:revoked:tok:"
+	// RevokedFamilyPrefix + family id marks a revoked grant: none of its tokens
+	// may be written, refreshed, extended or accepted.
+	RevokedFamilyPrefix = "oauth:revoked:fam:"
+	// RefreshClaimPrefix + sha256(refresh token) holds the claim of the refresh
+	// in flight on that token: the value is the random id of the attempt that
+	// owns it (or the revocation fence, while a revocation that may not complete
+	// holds the token: see FenceFamily), and the key expires on its own
+	// (RefreshClaimTTL).
+	RefreshClaimPrefix = "oauth:refresh_claim:"
+	// FamilyPrefix + family id is the record of a grant, a Redis hash with the
+	// grant's current refresh token ("rt"), that token's sha256 ("rth", which
+	// names its claim) and its current access token ("at"). Revocation uses it
+	// to delete the current tokens without help from whichever refresh may be
+	// running.
+	FamilyPrefix = "oauth:family:"
+	// TokenFamilyPrefix + sha256(token) maps a refresh or access token to the
+	// grant it belongs to. It outlives the token's own record (it lasts as long
+	// as the token could have, and at least RotationRecordTTL after a rotation),
+	// so a token that was already rotated away, including one still accepted by
+	// the grace window, leads revocation to the grant and the tokens that
+	// replaced it.
+	TokenFamilyPrefix = "oauth:tokfam:"
+	// AttemptOverPrefix + attempt id is left when a refresh attempt gives its claim
+	// up. A copy of that attempt's claim command that arrives late (a command the
+	// network delayed past the client's retry) must not take the claim back, or
+	// it would block the token, or let a late copy of the attempt's publish
+	// through.
+	AttemptOverPrefix = "oauth:attempt_over:"
+	// RotationPrefix + sha256(refresh token) records the outcome of that token's
+	// rotation: the owner of the claim, the successors it published and the
+	// resource the old token was bound to. A publish that runs twice (a lost
+	// reply, retried by the client library) finds it and answers like the first
+	// run, and a retry of the rotated token within RotationRecordTTL is answered
+	// with the same successors.
+	RotationPrefix = "oauth:rotation:"
+)
+
+// Lifetimes of the revocation records and the in-flight claim.
+const (
+	// RefreshClaimTTL bounds how long a refresh may hold a claim; a crashed
+	// pod's claim expires on its own. A refresh that is still running when its
+	// claim expires can no longer publish (the publish checks the claim is its
+	// own).
+	RefreshClaimTTL = 120 * time.Second
+	// RevokedTokenTTL covers any refresh that can be in flight when its token is
+	// revoked (RefreshClaimTTL plus slack).
+	RevokedTokenTTL = time.Hour
+	// RevokedFamilyTTL outlives every token a family can hold when it is
+	// revoked: a refresh token (RefreshTTL) or an access token with its grace
+	// period.
+	RevokedFamilyTTL = (RefreshTTL + TokenTTL + TokenGracePeriod) * time.Second
+	// AttemptOverTTL is how long a finished attempt is remembered: longer than a
+	// packet can be delayed and retransmitted by TCP.
+	AttemptOverTTL = 15 * time.Minute
+	// RotationRecordTTL is how long a rotation's outcome is kept. It serves two
+	// readers: a publish repeated by the Redis client library after a lost reply
+	// (seconds), and the refresh grace window, in which the client that never
+	// got the reply of a committed rotation presents the same refresh token again
+	// and is handed the same successors (RotationSuccessors). The record also
+	// names the grant, so revocation can still find it from the rotated token.
+	RotationRecordTTL = 2 * time.Minute
 )
 
 // Token validation result

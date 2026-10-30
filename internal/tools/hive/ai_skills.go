@@ -57,7 +57,7 @@ func RegisterListAiSkills() {
 					return BriefData(d, aiSkillIndexFields...)
 				}
 			}
-			resp, err := ListRecords(lc.NewHiveClient(org), aiSkillHive, org.GetOID(), "ai_skills", listReq, briefFn)
+			resp, err := ListRecords(NewClient(org), aiSkillHive, org.GetOID(), "ai_skills", listReq, briefFn)
 			if err != nil {
 				return tools.ErrorResultf("failed to list AI skills: %v", err), nil
 			}
@@ -92,7 +92,7 @@ func RegisterGetAiSkill() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 			skill, err := hive.Get(lc.HiveArgs{
 				HiveName:     aiSkillHive,
 				PartitionKey: org.GetOID(),
@@ -219,7 +219,7 @@ func RegisterDeleteAiSkill() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 			_, err = hive.Remove(lc.HiveArgs{
 				HiveName:     aiSkillHive,
 				PartitionKey: org.GetOID(),

@@ -41,7 +41,7 @@ func RegisterListCloudSensors() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := ListRecords(lc.NewHiveClient(org), "cloud_sensor", org.GetOID(), "cloud_sensors", listReq, nil)
+			resp, err := ListRecords(NewClient(org), "cloud_sensor", org.GetOID(), "cloud_sensors", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list cloud sensors: %v", err), nil
 			}
@@ -77,7 +77,7 @@ func RegisterGetCloudSensor() {
 			}
 
 			// Create hive client for cloud sensors
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get cloud sensor
 			cloudSensor, err := hive.Get(lc.HiveArgs{
@@ -197,7 +197,7 @@ func RegisterDeleteCloudSensor() {
 			}
 
 			// Create hive client for cloud sensors
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete cloud sensor
 			_, err = hive.Remove(lc.HiveArgs{

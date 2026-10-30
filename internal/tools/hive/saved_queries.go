@@ -43,7 +43,7 @@ func RegisterListSavedQueries() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			resp, err := ListRecords(lc.NewHiveClient(org), "query", org.GetOID(), "queries", listReq, nil)
+			resp, err := ListRecords(NewClient(org), "query", org.GetOID(), "queries", listReq, nil)
 			if err != nil {
 				return tools.ErrorResultf("failed to list saved queries: %v", err), nil
 			}
@@ -79,7 +79,7 @@ func RegisterGetSavedQuery() {
 			}
 
 			// Create hive client for saved queries
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get saved query
 			query, err := hive.Get(lc.HiveArgs{
@@ -211,7 +211,7 @@ func RegisterDeleteSavedQuery() {
 			}
 
 			// Create hive client for saved queries
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Delete saved query
 			_, err = hive.Remove(lc.HiveArgs{
@@ -264,7 +264,7 @@ func RegisterRunSavedQuery() {
 			}
 
 			// Create hive client to get the saved query
-			hive := lc.NewHiveClient(org)
+			hive := NewClient(org)
 
 			// Get saved query
 			savedQuery, err := hive.Get(lc.HiveArgs{

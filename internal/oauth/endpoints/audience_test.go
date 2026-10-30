@@ -36,9 +36,10 @@ func audAuthorize(t *testing.T, h *Handlers, extra url.Values) *httptest.Respons
 	for k, vs := range extra {
 		params[k] = vs
 	}
-	w := httptest.NewRecorder()
-	h.HandleAuthorize(w, httptest.NewRequest(http.MethodGet, "/authorize?"+params.Encode(), nil))
-	return w
+	if params.Get("provider") != "" {
+		return browserAuthorize(t, h, params)
+	}
+	return authorizeRequest(h, params)
 }
 
 func audPostToken(t *testing.T, h *Handlers, form url.Values) *httptest.ResponseRecorder {
@@ -96,6 +97,7 @@ func audRefreshForm(refresh string, resource ...string) url.Values {
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", refresh)
+	form.Set("client_id", "test-client") // public clients identify themselves on refresh
 	for _, r := range resource {
 		form.Add("resource", r)
 	}
@@ -116,14 +118,13 @@ func TestAuthorize_InvalidResourceIsInvalidTarget(t *testing.T) {
 		"not-a-uri",
 	} {
 		t.Run(resource, func(t *testing.T) {
-			handlers, sm, _, _ := testHandlers(t)
+			handlers, sm, _, mr := testHandlers(t)
 			w := audAuthorize(t, handlers, url.Values{"resource": {resource}})
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Empty(t, w.Header().Get("Location"), "the error is returned locally, not by redirect")
 			assert.Equal(t, ErrInvalidTarget, audDecode(t, w)["error"])
-			stored, _ := sm.GetOAuthState(context.Background(), "client-state-123")
-			assert.Nil(t, stored, "nothing is stored for a rejected request")
+			assert.Empty(t, storedTxs(t, sm, mr), "nothing is stored for a rejected request")
 		})
 	}
 }
@@ -148,7 +149,7 @@ func TestAuthorize_StoresCanonicalResource(t *testing.T) {
 	}
 	for in, want := range cases {
 		t.Run(in, func(t *testing.T) {
-			handlers, sm, _, _ := testHandlers(t)
+			handlers, sm, _, mr := testHandlers(t)
 			extra := url.Values{}
 			if in != "" {
 				extra.Set("resource", in)
@@ -156,38 +157,33 @@ func TestAuthorize_StoresCanonicalResource(t *testing.T) {
 			w := audAuthorize(t, handlers, extra)
 			require.Equal(t, http.StatusFound, w.Code)
 
-			stored, err := sm.GetOAuthState(context.Background(), "client-state-123")
-			require.NoError(t, err)
-			require.NotNil(t, stored)
+			_, stored := onlyTx(t, sm, mr)
 			assert.Equal(t, want, stored.Resource)
 		})
 	}
 }
 
 func TestAuthorize_ProviderSelectionCarriesCanonicalResource(t *testing.T) {
-	handlers, sm, _, _ := testHandlers(t)
+	handlers, sm, _, mr := testHandlers(t)
 	w := audAuthorize(t, handlers, url.Values{"provider": {""}, "resource": {testIssuer + "/mcp/v1/all/"}})
 	require.Equal(t, http.StatusFound, w.Code)
 
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
 	assert.Equal(t, "/oauth/select-provider", loc.Path)
-	params, err := sm.ConsumeSelectionSession(context.Background(), loc.Query().Get("session"))
+	session := loc.Query().Get("session")
+	params, err := sm.GetSelectionSession(context.Background(), session)
 	require.NoError(t, err)
 	assert.Equal(t, audProfile, params["resource"])
 
 	// The selection page sends these on to /authorize with the provider.
-	q := url.Values{}
-	for k, v := range params {
-		q.Set(k, v)
-	}
-	q.Set("provider", "google")
-	w2 := httptest.NewRecorder()
-	handlers.HandleAuthorize(w2, httptest.NewRequest(http.MethodGet, "/authorize?"+q.Encode(), nil))
-	require.Equal(t, http.StatusFound, w2.Code)
-	stored, err := sm.GetOAuthState(context.Background(), "client-state-123")
+	picked, held := completeSelection(t, handlers, session, "google")
+	require.Equal(t, http.StatusFound, picked.Code)
+	back, err := url.Parse(picked.Header().Get("Location"))
 	require.NoError(t, err)
-	require.NotNil(t, stored)
+	w2 := authorizeRequest(handlers, back.Query(), held...)
+	require.Equal(t, http.StatusFound, w2.Code)
+	_, stored := onlyTx(t, sm, mr)
 	assert.Equal(t, audProfile, stored.Resource)
 }
 
@@ -207,9 +203,11 @@ func TestResourceFlow_AuthorizeToTokenToRefresh(t *testing.T) {
 	w := audAuthorize(t, handlers, url.Values{"resource": {testIssuer + "/mcp/v1/all"}})
 	require.Equal(t, http.StatusFound, w.Code)
 
-	// Provider callback (the mock Firebase client uses state "firebase-state-123").
+	// Provider callback (the mock Firebase client uses state "firebase-state-123"),
+	// in the browser that started the flow.
+	cookies := w.Result().Cookies()
 	w = httptest.NewRecorder()
-	handlers.HandleCallback(w, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=x", nil))
+	handlers.HandleCallback(w, withCookies(httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=x", nil), cookies...))
 	require.Equal(t, http.StatusFound, w.Code)
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
@@ -409,13 +407,11 @@ func TestCallback_StateResource(t *testing.T) {
 			handlers, sm, _, _ := testHandlers(t)
 			ctx := context.Background()
 			oauthState := state.NewOAuthState("st-1", "challenge", "S256", "https://app.example.com/callback", "test-client", "openid", tc.state, "google.com")
-			require.NoError(t, sm.StoreOAuthState(ctx, oauthState))
-			sm.StoreSelectionSession(ctx, "oauth:session:st-1", map[string]string{"firebase_state": "fb-st-1"})
-			sm.StoreSelectionSession(ctx, "oauth:state:fb-st-1", map[string]string{"oauth_state": "st-1"})
-			sm.StoreSelectionSession(ctx, "oauth:fbsession:fb-st-1", map[string]string{"session_id": "sess-1"})
+			txID := mustCreateTx(t, sm, oauthState)
+			seedMappings(t, sm, "fb-st-1", txID, "sess-1")
 
 			w := httptest.NewRecorder()
-			handlers.HandleCallback(w, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=fb-st-1&code=x", nil))
+			handlers.HandleCallback(w, withBrowser(handlers, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=fb-st-1&code=x", nil)))
 			require.Equal(t, http.StatusFound, w.Code)
 			loc, err := url.Parse(w.Header().Get("Location"))
 			require.NoError(t, err)
@@ -477,14 +473,14 @@ func TestMFAVerify_CodeCarriesResource(t *testing.T) {
 			handlers, sm, _, _ := testHandlers(t)
 			ctx := context.Background()
 			oauthState := state.NewOAuthState("st-mfa", "challenge", "S256", "https://app.example.com/callback", "test-client", "openid", tc.stored, "google.com")
-			require.NoError(t, sm.StoreOAuthState(ctx, oauthState))
-			mfaSession := state.NewMFASession("pending", "enrollment", "st-mfa", "User", "test-uid-123", "user@test.com", nil)
+			txID := mustCreateTx(t, sm, oauthState)
+			mfaSession := state.NewMFASession("pending", "enrollment", txID, "User", "test-uid-123", "user@test.com", nil)
 			sessionID, err := sm.GenerateMFASessionID()
 			require.NoError(t, err)
 			require.NoError(t, sm.StoreMFASession(ctx, sessionID, mfaSession))
 
 			w := httptest.NewRecorder()
-			handlers.HandleMFAVerify(w, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil), sessionID, "123456")
+			handlers.HandleMFAVerify(w, withBrowser(handlers, httptest.NewRequest(http.MethodPost, "/oauth/mfa-verify", nil)), sessionID, "123456")
 			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 
 			resp := audDecode(t, w)

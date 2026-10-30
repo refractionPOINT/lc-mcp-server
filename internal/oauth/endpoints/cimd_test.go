@@ -15,6 +15,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/cimd"
+	"github.com/refractionpoint/lc-mcp-go/internal/oauth/metadata"
 	"github.com/refractionpoint/lc-mcp-go/internal/oauth/state"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -134,7 +135,7 @@ func (e *cimdEnv) postProvider(session, provider string, cookies ...*http.Cookie
 
 // clickProvider loads the selection page and picks a provider from the same
 // browser, returning the /authorize request the browser is redirected to (with
-// the cookies it was given).
+// the cookies it holds then: the page's and the pick's).
 func (e *cimdEnv) clickProvider(t *testing.T, session, provider string) (url.Values, []*http.Cookie) {
 	t.Helper()
 	page := e.selectionPage(t, session)
@@ -144,7 +145,7 @@ func (e *cimdEnv) clickProvider(t *testing.T, session, provider string) (url.Val
 	loc, err := url.Parse(w.Header().Get("Location"))
 	require.NoError(t, err)
 	require.Equal(t, "/authorize", loc.Path)
-	return loc.Query(), w.Result().Cookies()
+	return loc.Query(), mergeCookies(page.Result().Cookies(), w.Result().Cookies())
 }
 
 // ===== /authorize =====
@@ -305,20 +306,39 @@ func TestCIMDAuthorize_DirectProviderStillShowsSelectionPage(t *testing.T) {
 	} {
 		q := e.authorizeQuery(e.clientID, cimdRedirect, "google")
 		mutate(q)
-		w := e.authorize(q, &http.Cookie{Name: selectionAckCookie, Value: "whatever"})
+		w := e.authorize(q, &http.Cookie{Name: e.h.selectionAckCookieName(), Value: "whatever"})
 		_ = sessionFromLocation(t, w) // routed to the selection page, not to the IdP
 		assert.False(t, created, name)
 	}
-	st, _ := e.sm.GetOAuthState(context.Background(), cimdTestStateP)
-	assert.Nil(t, st, "no OAuth state may be created before the selection page")
+	assert.Empty(t, storedTxs(t, e.sm, e.mr), "no OAuth state may be created before the selection page")
 }
 
-func TestCIMDAuthorize_NonCIMDClientsCanSkipSelectionPage(t *testing.T) {
+func TestAuthorize_NonCIMDClientsCannotSkipSelectionPage(t *testing.T) {
 	e := newCIMDEnv(t)
-	q := e.authorizeQuery("test-client", cimdRedirect, "google")
-	w := e.authorize(q)
-	assert.Equal(t, http.StatusFound, w.Code)
-	assert.Contains(t, w.Header().Get("Location"), "firebase.example.com")
+	created := false
+	e.h.firebaseClient.(*mockFirebaseClient).createAuthURIFunc = func(ctx context.Context, provider, continueURI string, scopes []string) (string, string, error) {
+		created = true
+		return "s", "https://firebase.example.com/auth?state=fb", nil
+	}
+	require.NoError(t, e.sm.StoreClientRegistration(context.Background(), state.NewClientRegistration(
+		"mcp_dcrclient", "DCR Client", []string{"https://dcr.example.com/cb"})))
+
+	for name, c := range map[string]struct{ clientID, redirect string }{
+		"allow-listed opaque client": {"test-client", cimdRedirect},
+		"dynamically registered":     {"mcp_dcrclient", "https://dcr.example.com/cb"},
+	} {
+		for pname, mutate := range map[string]func(q url.Values){
+			"no ack":     func(q url.Values) {},
+			"forged ack": func(q url.Values) { q.Set("selection_ack", "forged-token") },
+		} {
+			q := e.authorizeQuery(c.clientID, c.redirect, "google")
+			mutate(q)
+			w := e.authorize(q, &http.Cookie{Name: e.h.selectionAckCookieName(), Value: "whatever"})
+			_ = sessionFromLocation(t, w) // routed to the selection page, not to the IdP
+			assert.False(t, created, name+" / "+pname)
+		}
+	}
+	assert.Empty(t, storedTxs(t, e.sm, e.mr), "no OAuth state may be created before the selection page")
 }
 
 func TestCIMDSelectionAck_CookieAttributes(t *testing.T) {
@@ -326,21 +346,39 @@ func TestCIMDSelectionAck_CookieAttributes(t *testing.T) {
 	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
 	q, cookies := e.clickProvider(t, session, "google")
 	require.NotEmpty(t, q.Get("selection_ack"))
-	require.Len(t, cookies, 1)
-	ck := cookies[0]
-	assert.Equal(t, selectionAckCookie, ck.Name)
+	ck := cookieNamed(cookies, e.h.selectionAckCookieName())
+	require.NotNil(t, ck)
 	assert.True(t, ck.HttpOnly)
 	assert.True(t, ck.Secure, "server URL is https")
-	assert.Equal(t, "/authorize", ck.Path)
+	// __Host- prefix over https: browsers only accept it with Secure, Path=/ and
+	// no Domain, so a sibling subdomain cannot plant a value for it.
+	assert.True(t, strings.HasPrefix(ck.Name, "__Host-"), ck.Name)
+	assert.Equal(t, "/", ck.Path)
+	assert.Empty(t, ck.Domain)
 	assert.Equal(t, http.SameSiteStrictMode, ck.SameSite, "Lax cookies ride on cross-site top-level navigations")
 }
 
-func TestCIMDSelectionAck_NotIssuedToOpaqueClients(t *testing.T) {
+func cookieNamed(cookies []*http.Cookie, name string) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
+}
+
+func TestSelectionAck_IssuedToOpaqueClientsToo(t *testing.T) {
 	e := newCIMDEnv(t)
 	session := sessionFromLocation(t, e.authorize(e.authorizeQuery("test-client", cimdRedirect, "")))
 	q, cookies := e.clickProvider(t, session, "google")
-	assert.Empty(t, q.Get("selection_ack"))
-	assert.Empty(t, cookies)
+	assert.NotEmpty(t, q.Get("selection_ack"))
+	require.NotNil(t, cookieNamed(cookies, e.h.selectionAckCookieName()))
+
+	// ... and it carries the client to the provider exactly once.
+	w := e.authorize(q, cookies...)
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.Contains(t, w.Header().Get("Location"), "firebase.example.com")
+	_ = sessionFromLocation(t, e.authorize(q, cookies...))
 }
 
 func TestCIMDSelectionAck_MissingCookieOrChangedRequestRejected(t *testing.T) {
@@ -385,7 +423,7 @@ func TestCIMDSelectionAck_WrongCookieValueRejected(t *testing.T) {
 	e := newCIMDEnv(t)
 	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
 	q, _ := e.clickProvider(t, session, "google")
-	_ = sessionFromLocation(t, e.authorize(q, &http.Cookie{Name: selectionAckCookie, Value: "attacker-chosen"}))
+	_ = sessionFromLocation(t, e.authorize(q, &http.Cookie{Name: e.h.selectionAckCookieName(), Value: "attacker-chosen"}))
 }
 
 func TestHandleProviderSelection_ExpiredSessionPOST(t *testing.T) {
@@ -461,12 +499,15 @@ func TestCIMDSelectionPage_FailsClosedWhenDocumentNoLongerValid(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), "Sign in to LimaCharlie")
 }
 
-func TestSelectionPage_NonCIMDClientHasNoClientBlock(t *testing.T) {
+func TestSelectionPage_OpaqueClientShowsItsClientIDAndRedirectHost(t *testing.T) {
 	e := newCIMDEnv(t)
 	w := e.authorize(e.authorizeQuery("test-client", cimdRedirect, ""))
 	session := sessionFromLocation(t, w)
 	body := e.selectionPage(t, session).Body.String()
-	assert.NotContains(t, body, "client-info\"")
+	assert.Contains(t, body, "client-info\"")
+	assert.Contains(t, body, "test-client")
+	assert.Contains(t, body, "app.example.com")
+	assert.Contains(t, body, "not verified")
 	assert.Contains(t, body, "Sign in to LimaCharlie MCP")
 }
 
@@ -484,7 +525,7 @@ func TestCIMD_EndToEndTokenExchange(t *testing.T) {
 
 	// IdP callback issues our authorization code
 	cb := httptest.NewRecorder()
-	e.h.HandleCallback(cb, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil))
+	e.h.HandleCallback(cb, withCookies(httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil), w.Result().Cookies()...))
 	require.Equal(t, http.StatusFound, cb.Code)
 	loc, err := url.Parse(cb.Header().Get("Location"))
 	require.NoError(t, err)
@@ -516,9 +557,10 @@ func TestCIMD_EndToEndTokenExchange(t *testing.T) {
 	// The code was consumed by the failed attempt; run the flow again for the success case.
 	session = sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
 	q, cookies = e.clickProvider(t, session, "google")
-	require.Equal(t, http.StatusFound, e.authorize(q, cookies...).Code)
+	w = e.authorize(q, cookies...)
+	require.Equal(t, http.StatusFound, w.Code)
 	cb = httptest.NewRecorder()
-	e.h.HandleCallback(cb, httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil))
+	e.h.HandleCallback(cb, withCookies(httptest.NewRequest(http.MethodGet, "/oauth/callback?state=firebase-state-123&code=idp-code", nil), w.Result().Cookies()...))
 	require.Equal(t, http.StatusFound, cb.Code)
 	loc, _ = url.Parse(cb.Header().Get("Location"))
 	code = loc.Query().Get("code")
@@ -578,7 +620,7 @@ func TestCIMDSelection_PickingAProviderRequiresTheBrowserThatSawThePage(t *testi
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Empty(t, w.Header().Get("Location"))
 	for _, c := range w.Result().Cookies() {
-		assert.NotEqual(t, selectionAckCookie, c.Name, "no acknowledgement may be issued")
+		assert.NotEqual(t, e.h.selectionAckCookieName(), c.Name, "no acknowledgement may be issued")
 	}
 	// The session is spent: the same link can't be retried.
 	w = e.postProvider(session, "google")
@@ -598,7 +640,7 @@ func TestCIMDSelection_PageSeenInAnotherBrowserDoesNotCount(t *testing.T) {
 
 	session = sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
 	_ = e.selectionPage(t, session)
-	w = e.postProvider(session, "google", &http.Cookie{Name: selectionBindCookie, Value: "attacker-guess"})
+	w = e.postProvider(session, "google", &http.Cookie{Name: e.h.selectionBindCookieName(), Value: "attacker-guess"})
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
@@ -626,14 +668,17 @@ func TestCIMDSelection_BindingCookieAttributes(t *testing.T) {
 	page := e.selectionPage(t, session)
 	var bind *http.Cookie
 	for _, c := range page.Result().Cookies() {
-		if c.Name == selectionBindCookie {
+		if c.Name == e.h.selectionBindCookieName() {
 			bind = c
 		}
 	}
 	require.NotNil(t, bind)
 	assert.True(t, bind.HttpOnly)
 	assert.Equal(t, http.SameSiteStrictMode, bind.SameSite, "Lax cookies ride on cross-site top-level navigations")
-	assert.Equal(t, "/oauth/select-provider", bind.Path)
+	assert.True(t, strings.HasPrefix(bind.Name, "__Host-"), bind.Name)
+	assert.Equal(t, "/", bind.Path, "__Host- cookies must be Path=/")
+	assert.True(t, bind.Secure)
+	assert.Empty(t, bind.Domain)
 	assert.NotEmpty(t, bind.Value)
 
 	// The binding hash never reaches /authorize.
@@ -641,10 +686,17 @@ func TestCIMDSelection_BindingCookieAttributes(t *testing.T) {
 	assert.Empty(t, q.Get(selectionBindKey))
 }
 
-func TestSelection_NonCIMDClientsNeedNoBinding(t *testing.T) {
+func TestSelection_NonCIMDClientsNeedTheBindingToo(t *testing.T) {
 	e := newCIMDEnv(t)
 	session := sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
-	w := e.postProvider(session, "google")
+	w := e.postProvider(session, "google") // a browser that was never shown the page
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	// The session is gone: the link is single-use whoever tried it.
+	session = sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
+	page := e.selectionPage(t, session)
+	require.Equal(t, http.StatusOK, page.Code)
+	w = e.postProvider(session, "google", page.Result().Cookies()...)
 	assert.Equal(t, http.StatusFound, w.Code, w.Body.String())
 }
 
@@ -689,7 +741,7 @@ func TestCIMDSelection_ChoiceInitiatedFromAnotherSiteIsRefused(t *testing.T) {
 			assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 			assert.Empty(t, w.Header().Get("Location"))
 			for _, c := range w.Result().Cookies() {
-				assert.NotEqual(t, selectionAckCookie, c.Name, "no acknowledgement may be issued")
+				assert.NotEqual(t, e.h.selectionAckCookieName(), c.Name, "no acknowledgement may be issued")
 			}
 			// The session is spent; the legitimate click can't be replayed afterwards either.
 			w = e.getProvider(session, "google", "same-origin", page.Result().Cookies()...)
@@ -728,11 +780,22 @@ func TestCIMDSelection_CrossSitePostIsRefusedToo(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestSelection_NonCIMDClientsIgnoreFetchMetadata(t *testing.T) {
-	e := newCIMDEnv(t)
-	session := sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
-	w := e.getProvider(session, "google", "cross-site")
-	assert.Equal(t, http.StatusFound, w.Code, "behaviour for non-CIMD clients is unchanged")
+func TestSelection_NonCIMDClientsAlsoRefuseCrossSiteChoices(t *testing.T) {
+	// Every client goes through the same page, so the same cross-site
+	// protection applies to opaque (DCR/allow-listed) clients too.
+	for _, tc := range []struct {
+		site string
+		want int
+	}{{"cross-site", http.StatusBadRequest}, {"same-site", http.StatusBadRequest}, {"same-origin", http.StatusFound}} {
+		t.Run(tc.site, func(t *testing.T) {
+			e := newCIMDEnv(t)
+			session := sessionFromLocation(t, e.authorize(e.authorizeQuery("some-client", cimdRedirect, "")))
+			page := e.selectionPage(t, session)
+			require.Equal(t, http.StatusOK, page.Code)
+			w := e.getProvider(session, "google", tc.site, page.Result().Cookies()...)
+			assert.Equal(t, tc.want, w.Code, w.Body.String())
+		})
+	}
 }
 
 func TestCIMDSelectionPage_SeversTheOpener(t *testing.T) {
@@ -801,4 +864,124 @@ func TestDisplayHostPort(t *testing.T) {
 		_, ok := displayHostPort(in)
 		assert.False(t, ok, "%q", in)
 	}
+}
+
+// ===== selection cookies: __Host- names and the tie to the browser binding =====
+
+func TestSelectionCookies_AreHostPrefixedOverHTTPS(t *testing.T) {
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	page := e.selectionPage(t, session)
+	for _, name := range []string{e.h.selectionBindCookieName(), e.h.browserBindCookieName()} {
+		c := cookieNamed(page.Result().Cookies(), name)
+		require.NotNil(t, c, name)
+		assert.True(t, strings.HasPrefix(c.Name, "__Host-"), c.Name)
+		assert.Equal(t, "/", c.Path)
+		assert.True(t, c.Secure)
+		assert.Empty(t, c.Domain)
+	}
+	assert.Equal(t, "__Host-lc_oauth_selection", e.h.selectionAckCookieName())
+	assert.Equal(t, "__Host-lc_oauth_selection_view", e.h.selectionBindCookieName())
+}
+
+func TestSelectionCookies_PlainNamesOverHTTP(t *testing.T) {
+	e := newCIMDEnv(t)
+	t.Setenv("MCP_SERVER_URL", "http://localhost:8080")
+	e.h.metadataProvider = metadata.NewProvider(testLogger())
+
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	page := e.selectionPage(t, session)
+	bind := cookieNamed(page.Result().Cookies(), "lc_oauth_selection_view")
+	require.NotNil(t, bind, "a __Host- cookie cannot exist without https")
+	assert.Equal(t, "/oauth/select-provider", bind.Path)
+	assert.False(t, bind.Secure)
+	assert.Equal(t, http.SameSiteStrictMode, bind.SameSite)
+	require.NotNil(t, cookieNamed(page.Result().Cookies(), "lc_oauth_browser"))
+
+	q, cookies := e.clickProvider(t, session, "google")
+	ack := cookieNamed(cookies, "lc_oauth_selection")
+	require.NotNil(t, ack)
+	assert.Equal(t, "/authorize", ack.Path)
+	assert.Equal(t, http.SameSiteStrictMode, ack.SameSite)
+	assert.Equal(t, http.StatusFound, e.authorize(q, cookies...).Code)
+	assert.Contains(t, e.authorize(q, cookies...).Header().Get("Location"), "select-provider", "single use")
+}
+
+func TestSelectionPage_IssuesTheBrowserBindingAndReusesIt(t *testing.T) {
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	first := cookieNamed(e.selectionPage(t, session).Result().Cookies(), e.h.browserBindCookieName())
+	require.NotNil(t, first)
+
+	// A browser that already holds a secret keeps it.
+	session = sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	req := httptest.NewRequest(http.MethodGet, "/oauth/select-provider?session="+session, nil)
+	req.AddCookie(first)
+	w := httptest.NewRecorder()
+	e.h.HandleProviderSelection(w, req, session)
+	again := cookieNamed(w.Result().Cookies(), e.h.browserBindCookieName())
+	require.NotNil(t, again)
+	assert.Equal(t, first.Value, again.Value)
+}
+
+// Attack: a party on a sibling host plants an acknowledgement cookie whose value
+// it knows in the victim's browser, then walks the victim through the
+// attacker's own /authorize request carrying the attacker's acknowledgement
+// token. Without the tie to the browser binding, /authorize would accept the
+// pair, issue the victim a fresh binding and send the victim to the provider
+// for the attacker's client.
+func TestCIMDSelectionAck_PlantedAckOfAnotherBrowserIsRejected(t *testing.T) {
+	e := newCIMDEnv(t)
+	created := false
+	e.h.firebaseClient.(*mockFirebaseClient).createAuthURIFunc = func(ctx context.Context, provider, continueURI string, scopes []string) (string, string, error) {
+		created = true
+		return "s", "https://firebase.example.com/auth?state=fb", nil
+	}
+
+	attack := func() (url.Values, []*http.Cookie) {
+		session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+		return e.clickProvider(t, session, "google")
+	}
+	victimOwn := &http.Cookie{Name: e.h.browserBindCookieName(), Value: strings.Repeat("v", 43)}
+
+	for name, victim := range map[string]func(attackerAck, attackerBrowser *http.Cookie) []*http.Cookie{
+		"a victim with no browser binding yet": func(ack, _ *http.Cookie) []*http.Cookie { return []*http.Cookie{ack} },
+		"a victim with a binding of their own": func(ack, _ *http.Cookie) []*http.Cookie { return []*http.Cookie{ack, victimOwn} },
+	} {
+		q, attackerCookies := attack()
+		ack := cookieNamed(attackerCookies, e.h.selectionAckCookieName())
+		browser := cookieNamed(attackerCookies, e.h.browserBindCookieName())
+		require.NotNil(t, ack)
+		require.NotNil(t, browser)
+
+		w := e.authorize(q, victim(ack, browser)...)
+		_ = sessionFromLocation(t, w) // back to the selection page, not to the provider
+		assert.False(t, created, name)
+		assert.Empty(t, storedTxs(t, e.sm, e.mr), name)
+		assert.Nil(t, cookieNamed(w.Result().Cookies(), e.h.browserBindCookieName()), "%s: no binding is issued to the victim for the attacker's request", name)
+	}
+
+	// Control: the browser the acknowledgement was issued to gets through.
+	q, cookies := attack()
+	w := e.authorize(q, cookies...)
+	require.Equal(t, http.StatusFound, w.Code)
+	assert.Contains(t, w.Header().Get("Location"), "firebase.example.com")
+	assert.True(t, created)
+}
+
+func TestCIMDSelection_PickingWithoutABrowserBindingIsRefused(t *testing.T) {
+	e := newCIMDEnv(t)
+	session := sessionFromLocation(t, e.authorize(e.authorizeQuery(e.clientID, cimdRedirect, "")))
+	page := e.selectionPage(t, session)
+	// The page's cookies, minus the browser-binding secret.
+	var cookies []*http.Cookie
+	for _, c := range page.Result().Cookies() {
+		if c.Name != e.h.browserBindCookieName() {
+			cookies = append(cookies, c)
+		}
+	}
+	w := e.postProvider(session, "google", cookies...)
+	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Empty(t, w.Header().Get("Location"))
+	assert.Nil(t, cookieNamed(w.Result().Cookies(), e.h.selectionAckCookieName()), "no acknowledgement is issued")
 }

@@ -197,7 +197,7 @@
         }
 
 
-        /* Client identity (Client ID Metadata Document clients) */
+        /* Who is asking (shown for every client) */
         .client-info {
             margin: 0 0 24px;
             padding: 16px;
@@ -310,7 +310,12 @@
             {{if .Client}}
             <div class="client-info" id="client-info">
                 <div><span class="client-name">{{.Client.Name}}</span> is requesting access to your LimaCharlie account.</div>
+                {{if .Client.ClientIDHost}}
                 <div class="client-detail">Application: <code>{{.Client.ClientIDHost}}</code> (<code>{{.Client.ClientID}}</code>)</div>
+                {{end}}
+                {{if .Client.SelfReported}}
+                <div class="client-detail">This name was provided by the application itself; LimaCharlie has not verified it.</div>
+                {{end}}
                 <div class="client-detail">After you sign in, you will be sent to: <code>{{.Client.RedirectHost}}</code></div>
                 {{if .Client.Localhost}}
                 <div class="client-warning" role="alert">

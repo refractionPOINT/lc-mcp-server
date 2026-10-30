@@ -134,7 +134,7 @@ func TestResourceIsBoundOnIssueAndRotation(t *testing.T) {
 	ctx := context.Background()
 	const mcp, profile = "https://mcp.example.com/mcp", "https://mcp.example.com/mcp/all"
 
-	issued, err := manager.CreateTokenResponse(ctx, "user", "fb-id", "fb-refresh", time.Now().Add(time.Hour).Unix(), "openid", mcp)
+	issued, err := manager.CreateTokenResponse(ctx, "user", "fb-id", "fb-refresh", time.Now().Add(time.Hour).Unix(), "openid", mcp, "")
 	require.NoError(t, err)
 	at, _ := sm.GetAccessTokenData(ctx, issued.AccessToken)
 	rt, _ := sm.GetRefreshTokenData(ctx, issued.RefreshToken)
@@ -144,7 +144,7 @@ func TestResourceIsBoundOnIssueAndRotation(t *testing.T) {
 	assert.Equal(t, mcp, rt.Resource)
 
 	t.Run("nil resolver keeps the resource", func(t *testing.T) {
-		got, err := manager.RefreshAccessToken(ctx, issued.RefreshToken, nil)
+		got, err := manager.RefreshAccessToken(ctx, issued.RefreshToken, "", nil)
 		require.NoError(t, err)
 		at, _ := sm.GetAccessTokenData(ctx, got.AccessToken)
 		rt, _ := sm.GetRefreshTokenData(ctx, got.RefreshToken)
@@ -157,7 +157,7 @@ func TestResourceIsBoundOnIssueAndRotation(t *testing.T) {
 
 	t.Run("resolver sees the bound resource and chooses the new one", func(t *testing.T) {
 		var authorized string
-		got, err := manager.RefreshAccessToken(ctx, issued.RefreshToken, func(a string) (string, error) {
+		got, err := manager.RefreshAccessToken(ctx, issued.RefreshToken, "", func(a string) (string, error) {
 			authorized = a
 			return profile, nil
 		})
@@ -173,7 +173,7 @@ func TestResourceIsBoundOnIssueAndRotation(t *testing.T) {
 	})
 
 	t.Run("a refused resource leaves the refresh token usable", func(t *testing.T) {
-		got, err := manager.RefreshAccessToken(ctx, issued.RefreshToken, func(string) (string, error) {
+		got, err := manager.RefreshAccessToken(ctx, issued.RefreshToken, "", func(string) (string, error) {
 			return "", ErrInvalidTarget
 		})
 		assert.Nil(t, got)
@@ -186,7 +186,7 @@ func TestResourceIsBoundOnIssueAndRotation(t *testing.T) {
 		legacy := state.NewRefreshTokenData("legacy-rt", "legacy-at", "user", "fb-refresh", "openid")
 		require.NoError(t, sm.StoreRefreshToken(ctx, legacy))
 
-		got, err := manager.RefreshAccessToken(ctx, "legacy-rt", nil)
+		got, err := manager.RefreshAccessToken(ctx, "legacy-rt", "", nil)
 		require.NoError(t, err)
 		at, _ := sm.GetAccessTokenData(ctx, got.AccessToken)
 		require.NotNil(t, at)
