@@ -652,167 +652,29 @@ func TestSetXXKeepTTL(t *testing.T) {
 	assert.Equal(t, 90*time.Second, mr.TTL("k"), "the expiry is kept")
 }
 
-func TestGuardedWrites(t *testing.T) {
+func TestRun(t *testing.T) {
 	client, mr := setupTestRedis(t)
 	ctx := context.Background()
+	script := NewScript(`
+		local old = redis.call('GET', KEYS[1])
+		redis.call('SET', KEYS[1], ARGV[1])
+		return {old or '', tonumber(ARGV[2]) + 1}
+	`)
 
-	t.Run("create-only", func(t *testing.T) {
-		res, err := client.CreateUnlessGuarded(ctx, "c", "v1", time.Minute)
-		require.NoError(t, err)
-		assert.Equal(t, WriteDone, res)
-		assert.Equal(t, time.Minute, mr.TTL("c"))
-
-		res, err = client.CreateUnlessGuarded(ctx, "c", "v2", time.Minute)
-		require.NoError(t, err)
-		assert.Equal(t, WriteConflict, res)
-		v, _ := client.Get(ctx, "c")
-		assert.Equal(t, "v1", v, "an existing key is not overwritten")
-	})
-
-	t.Run("update-only never creates", func(t *testing.T) {
-		res, err := client.UpdateUnlessGuarded(ctx, "gone", "v", time.Minute)
-		require.NoError(t, err)
-		assert.Equal(t, WriteConflict, res)
-		assert.False(t, mr.Exists("gone"))
-
-		require.NoError(t, client.Set(ctx, "u", "old", time.Hour))
-		res, err = client.UpdateUnlessGuarded(ctx, "u", "new", 90*time.Second)
-		require.NoError(t, err)
-		assert.Equal(t, WriteDone, res)
-		v, _ := client.Get(ctx, "u")
-		assert.Equal(t, "new", v)
-		assert.Equal(t, 90*time.Second, mr.TTL("u"), "the intended TTL is applied")
-	})
-
-	t.Run("a guard blocks both", func(t *testing.T) {
-		require.NoError(t, client.Set(ctx, "guard", "1", time.Minute))
-		require.NoError(t, client.Set(ctx, "g-existing", "old", time.Minute))
-
-		res, err := client.UpdateUnlessGuarded(ctx, "g-existing", "new", time.Minute, "other", "guard")
-		require.NoError(t, err)
-		assert.Equal(t, WriteBlocked, res)
-		v, _ := client.Get(ctx, "g-existing")
-		assert.Equal(t, "old", v)
-
-		res, err = client.CreateUnlessGuarded(ctx, "g-new", "v", time.Minute, "guard")
-		require.NoError(t, err)
-		assert.Equal(t, WriteBlocked, res)
-		assert.False(t, mr.Exists("g-new"))
-	})
-
-	t.Run("expiration must be positive", func(t *testing.T) {
-		_, err := client.UpdateUnlessGuarded(ctx, "u", "v", 0)
-		assert.Error(t, err)
-		_, err = client.CreateUnlessGuarded(ctx, "x", "v", -time.Second)
-		assert.Error(t, err)
-	})
-}
-
-func TestCreateAllUnlessGuarded(t *testing.T) {
-	client, mr := setupTestRedis(t)
-	ctx := context.Background()
-	entries := []Entry{{Key: "a", Value: "1", TTL: time.Minute}, {Key: "b", Value: "2", TTL: 2 * time.Minute}}
-
-	require.NoError(t, client.Set(ctx, "old", "x", time.Minute))
-	res, err := client.CreateAllUnlessGuarded(ctx, entries, []string{"old"}, []string{"guard"})
+	res, err := client.Run(ctx, script, []string{"k"}, "first", 41)
 	require.NoError(t, err)
-	assert.Equal(t, WriteDone, res)
-	assert.Equal(t, time.Minute, mr.TTL("a"))
-	assert.Equal(t, 2*time.Minute, mr.TTL("b"))
-	assert.False(t, mr.Exists("old"), "the delete key is removed with the writes")
+	assert.Equal(t, []interface{}{"", int64(42)}, res)
+	v, _ := mr.Get("k")
+	assert.Equal(t, "first", v)
 
-	// An entry that exists: nothing changes.
-	require.NoError(t, client.Set(ctx, "old2", "x", time.Minute))
-	res, err = client.CreateAllUnlessGuarded(ctx, []Entry{{Key: "c", Value: "3", TTL: time.Minute}, {Key: "a", Value: "9", TTL: time.Minute}}, []string{"old2"}, nil)
+	res, err = client.Run(ctx, script, []string{"k"}, "second", 1)
 	require.NoError(t, err)
-	assert.Equal(t, WriteConflict, res)
-	assert.False(t, mr.Exists("c"), "all or nothing")
-	assert.True(t, mr.Exists("old2"))
+	assert.Equal(t, []interface{}{"first", int64(2)}, res)
 
-	// A guard: nothing changes.
-	require.NoError(t, client.Set(ctx, "guard", "1", time.Minute))
-	res, err = client.CreateAllUnlessGuarded(ctx, []Entry{{Key: "d", Value: "4", TTL: time.Minute}}, []string{"old2"}, []string{"nope", "guard"})
+	// A failover or restart empties the server's script cache; Run loads the
+	// script again instead of failing.
+	require.NoError(t, client.client.ScriptFlush(ctx).Err())
+	res, err = client.Run(ctx, script, []string{"k"}, "third", 2)
 	require.NoError(t, err)
-	assert.Equal(t, WriteBlocked, res)
-	assert.False(t, mr.Exists("d"))
-	assert.True(t, mr.Exists("old2"))
-}
-
-func TestClaimAndDelete(t *testing.T) {
-	client, mr := setupTestRedis(t)
-	ctx := context.Background()
-
-	_, _, found, err := client.ClaimAndDelete(ctx, "k", "k:claim", time.Minute)
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.False(t, mr.Exists("k:claim"), "nothing claimed, no marker")
-
-	require.NoError(t, client.Set(ctx, "k", "value", time.Hour))
-	v, remaining, found, err := client.ClaimAndDelete(ctx, "k", "k:claim", time.Minute)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, "value", v)
-	assert.InDelta(t, time.Hour.Seconds(), remaining.Seconds(), 5)
-	assert.False(t, mr.Exists("k"))
-	assert.Equal(t, time.Minute, mr.TTL("k:claim"))
-
-	_, _, found, err = client.ClaimAndDelete(ctx, "k", "k:claim", time.Minute)
-	require.NoError(t, err)
-	assert.False(t, found, "a second claim finds nothing")
-}
-
-func TestClaimAndDelete_ExactlyOneWinner(t *testing.T) {
-	client, _ := setupTestRedis(t)
-	ctx := context.Background()
-	require.NoError(t, client.Set(ctx, "k", "value", time.Hour))
-
-	const n = 32
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	winners := 0
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, _, found, err := client.ClaimAndDelete(ctx, "k", "k:claim", time.Minute)
-			assert.NoError(t, err)
-			if found {
-				mu.Lock()
-				winners++
-				mu.Unlock()
-			}
-		}()
-	}
-	wg.Wait()
-	assert.Equal(t, 1, winners)
-}
-
-func TestGetDeleteAndTombstone(t *testing.T) {
-	client, mr := setupTestRedis(t)
-	ctx := context.Background()
-
-	t.Run("an existing key is deleted and tombstoned", func(t *testing.T) {
-		require.NoError(t, client.Set(ctx, "k", "value", time.Hour))
-		v, found, err := client.GetDeleteAndTombstone(ctx, "k", "k:claim", "k:tomb", time.Hour)
-		require.NoError(t, err)
-		assert.True(t, found)
-		assert.Equal(t, "value", v)
-		assert.False(t, mr.Exists("k"))
-		assert.True(t, mr.Exists("k:tomb"))
-	})
-
-	t.Run("a claimed key is tombstoned", func(t *testing.T) {
-		require.NoError(t, client.Set(ctx, "c:claim", "1", time.Minute))
-		_, found, err := client.GetDeleteAndTombstone(ctx, "c", "c:claim", "c:tomb", time.Hour)
-		require.NoError(t, err)
-		assert.False(t, found)
-		assert.True(t, mr.Exists("c:tomb"))
-	})
-
-	t.Run("an unknown key leaves nothing behind", func(t *testing.T) {
-		_, found, err := client.GetDeleteAndTombstone(ctx, "nope", "nope:claim", "nope:tomb", time.Hour)
-		require.NoError(t, err)
-		assert.False(t, found)
-		assert.False(t, mr.Exists("nope:tomb"))
-	})
+	assert.Equal(t, []interface{}{"second", int64(3)}, res)
 }

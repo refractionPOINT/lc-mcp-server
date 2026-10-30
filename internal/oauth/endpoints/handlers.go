@@ -539,9 +539,15 @@ func (h *Handlers) HandleRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.tokenManager.RevokeToken(r.Context(), token, tokenTypeHint)
+	// RFC 7009: 200 whether the token was revoked or was never valid, so an
+	// unknown token is no error. A backend failure is: the token may still be
+	// live, and 200 would tell the client it is dead.
+	if err := h.tokenManager.RevokeToken(r.Context(), token, tokenTypeHint); err != nil {
+		h.logger.Error("Token revocation failed", "error", err)
+		WriteOAuthError(w, NewOAuthError(ErrServerError, "Revocation failed; retry later", http.StatusInternalServerError))
+		return
+	}
 
-	// Always return 200 OK per OAuth spec
 	w.WriteHeader(http.StatusOK)
 }
 

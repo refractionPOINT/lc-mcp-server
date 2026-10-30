@@ -313,15 +313,27 @@ func TestExtensionRace_NormalExtensionStillWorks(t *testing.T) {
 
 // ===== /revoke =====
 
-func TestRevoke_AccessTokenOnlyRevokesThatToken(t *testing.T) {
+// Revoking an access token ends its grant, like revoking the refresh token
+// does: the grant is found from either token, and leaving the refresh token
+// alive would let whoever holds it mint the access token again. (This replaces
+// TestRevoke_AccessTokenOnlyRevokesThatToken, which asserted the opposite.)
+func TestRevoke_AccessTokenRevokesTheWholeGrant(t *testing.T) {
 	m, sm, _ := setupTestManager(t)
 	ctx := context.Background()
 	issued := issueFor(t, m, clientA)
+	rt, _ := sm.GetRefreshTokenData(ctx, issued.RefreshToken)
+	require.NotNil(t, rt)
+	family := rt.FamilyID
 
 	require.NoError(t, m.RevokeToken(ctx, issued.AccessToken, "access_token"))
 	assert.False(t, usable(t, m, issued.AccessToken))
-	rt, _ := sm.GetRefreshTokenData(ctx, issued.RefreshToken)
-	assert.NotNil(t, rt, "the refresh token keeps working, as before")
+	rt, _ = sm.GetRefreshTokenData(ctx, issued.RefreshToken)
+	assert.Nil(t, rt, "the refresh token goes with the access token")
+	revoked, err := sm.IsFamilyRevoked(ctx, family)
+	require.NoError(t, err)
+	assert.True(t, revoked)
+	_, err = m.RefreshAccessToken(ctx, issued.RefreshToken, clientA, nil)
+	assert.Error(t, err)
 }
 
 // An unauthenticated /revoke of made-up tokens must not leave records behind.

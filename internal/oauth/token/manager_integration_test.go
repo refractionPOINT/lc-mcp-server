@@ -577,7 +577,10 @@ func TestRevokeToken_DoesNotLogToken(t *testing.T) {
 	manager.WithJWTExchange(mockJWTExchange("mock-limacharlie-jwt", nil))
 	ctx := context.Background()
 
-	tokens, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
+	// Revoking either token ends its grant, so each case needs a grant of its own.
+	access, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
+	require.NoError(t, err)
+	refresh, err := manager.CreateTokenResponse(ctx, "user-123", "fb-id", "fb-refresh", time.Now().Add(1*time.Hour).Unix(), "openid", "", "")
 	require.NoError(t, err)
 
 	cases := []struct {
@@ -586,10 +589,10 @@ func TestRevokeToken_DoesNotLogToken(t *testing.T) {
 		hint  string
 		msg   string
 	}{
-		{"access token", tokens.AccessToken, "access_token", "Revoked access token"},
-		{"refresh token", tokens.RefreshToken, "refresh_token", "Revoked refresh token"},
-		// The state manager's delete succeeds for an unknown token too, so only
-		// check that the token is absent.
+		{"access token", access.AccessToken, "access_token", "Revoked access token"},
+		{"refresh token", refresh.RefreshToken, "refresh_token", "Revoked refresh token"},
+		// Nothing is stored for an unknown token, so only check that the token
+		// is absent from the log.
 		{"unknown token, no hint", "unknown-token-value", "", ""},
 	}
 	for _, tc := range cases {

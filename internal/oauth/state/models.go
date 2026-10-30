@@ -158,22 +158,47 @@ const (
 	SessionPrefix   = "oauth:session:"   // OAuth state -> Firebase state mapping
 	FBSessionPrefix = "oauth:fbsession:" // Firebase state -> session ID mapping
 
-	// RevokedTokenPrefix + sha256(token) is a tombstone left when a refresh
-	// token is revoked. It stops an operation in flight on that token from
-	// restoring it or publishing successors.
+	// RevokedTokenPrefix + sha256(token) is a tombstone left when a token is
+	// revoked. It stops an operation in flight on that token from publishing
+	// successors.
 	RevokedTokenPrefix = "oauth:revoked:tok:"
 	// RevokedFamilyPrefix + family id marks a revoked grant: none of its tokens
 	// may be written, refreshed, extended or accepted.
 	RevokedFamilyPrefix = "oauth:revoked:fam:"
-	// RefreshClaimPrefix + sha256(token) exists while a refresh of that token is
-	// in flight.
+	// RefreshClaimPrefix + sha256(refresh token) holds the claim of the refresh
+	// in flight on that token: the value is the random id of the attempt that
+	// owns it, and the key expires on its own (RefreshClaimTTL).
 	RefreshClaimPrefix = "oauth:refresh_claim:"
+	// FamilyPrefix + family id is the record of a grant, a Redis hash with the
+	// grant's current refresh token ("rt"), that token's sha256 ("rth", which
+	// names its claim) and its current access token ("at"). Revocation uses it
+	// to delete the current tokens without help from whichever refresh may be
+	// running.
+	FamilyPrefix = "oauth:family:"
+	// TokenFamilyPrefix + sha256(token) maps a refresh or access token to the
+	// grant it belongs to. It outlives the token's own record (it lasts as long
+	// as the token could have), so a token that was already rotated away still
+	// leads revocation to the grant, and with it to the tokens that replaced it.
+	TokenFamilyPrefix = "oauth:tokfam:"
+	// AttemptOverPrefix + attempt id is left when a refresh attempt gives its claim
+	// up. A copy of that attempt's claim command that arrives late (a command the
+	// network delayed past the client's retry) must not take the claim back, or
+	// it would block the token, or let a late copy of the attempt's publish
+	// through.
+	AttemptOverPrefix = "oauth:attempt_over:"
+	// RotationPrefix + sha256(refresh token) records the outcome of that token's
+	// rotation: the owner of the claim and the successors it published. A
+	// publish that runs twice (a lost reply, retried by the client library)
+	// finds it and answers like the first run.
+	RotationPrefix = "oauth:rotation:"
 )
 
-// Lifetimes of the revocation records and the in-flight marker.
+// Lifetimes of the revocation records and the in-flight claim.
 const (
 	// RefreshClaimTTL bounds how long a refresh may hold a claim; a crashed
-	// pod's claim expires on its own.
+	// pod's claim expires on its own. A refresh that is still running when its
+	// claim expires can no longer publish (the publish checks the claim is its
+	// own).
 	RefreshClaimTTL = 120 * time.Second
 	// RevokedTokenTTL covers any refresh that can be in flight when its token is
 	// revoked (RefreshClaimTTL plus slack).
@@ -182,6 +207,12 @@ const (
 	// revoked: a refresh token (RefreshTTL) or an access token with its grace
 	// period.
 	RevokedFamilyTTL = (RefreshTTL + TokenTTL + TokenGracePeriod) * time.Second
+	// AttemptOverTTL is how long a finished attempt is remembered: longer than a
+	// packet can be delayed and retransmitted by TCP.
+	AttemptOverTTL = 15 * time.Minute
+	// RotationRecordTTL is how long a rotation's outcome is kept for a retried
+	// publish to find; it only has to outlast the client library's retries.
+	RotationRecordTTL = 5 * time.Minute
 )
 
 // Token validation result

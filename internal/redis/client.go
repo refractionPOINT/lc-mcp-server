@@ -18,10 +18,6 @@ type Client struct {
 	atomicGetAndDelete      *redis.Script
 	atomicMultiGetAndDelete *redis.Script
 	incrWithWindow          *redis.Script
-	claim                   *redis.Script
-	getDeleteTombstone      *redis.Script
-	writeUnlessGuarded      *redis.Script
-	createAllUnlessGuarded  *redis.Script
 }
 
 // Config holds Redis configuration
@@ -118,77 +114,6 @@ func (c *Client) loadScripts() {
 		return n
 	`)
 
-	// Claim: take a record out of circulation and mark it claimed, in one step.
-	// Returns {value, remaining ttl in ms}, or nothing when the key is absent,
-	// so exactly one caller can claim a given record.
-	c.claim = redis.NewScript(`
-		local v = redis.call('GET', KEYS[1])
-		if not v then
-			return false
-		end
-		local ttl = redis.call('PTTL', KEYS[1])
-		redis.call('DEL', KEYS[1])
-		redis.call('SET', KEYS[2], '1', 'PX', ARGV[1])
-		return {v, ttl}
-	`)
-
-	// Get-delete-tombstone: delete a record and leave a tombstone when there was
-	// a record to delete, or when it is currently claimed by an operation in
-	// flight (KEYS[2] exists). A token that never existed leaves nothing behind,
-	// so unauthenticated callers cannot fill Redis with tombstones.
-	c.getDeleteTombstone = redis.NewScript(`
-		local v = redis.call('GET', KEYS[1])
-		if v then
-			redis.call('DEL', KEYS[1])
-		end
-		if v or redis.call('EXISTS', KEYS[2]) == 1 then
-			redis.call('SET', KEYS[3], '1', 'PX', ARGV[1])
-		end
-		return v
-	`)
-
-	// Guarded single-key write: KEYS[1] is written (NX or XX per ARGV[3]) unless
-	// any of the guard keys KEYS[2..] exists. Returns 1 written, 0 the NX/XX
-	// condition failed, -1 blocked by a guard.
-	c.writeUnlessGuarded = redis.NewScript(`
-		for i = 2, #KEYS do
-			if redis.call('EXISTS', KEYS[i]) == 1 then
-				return -1
-			end
-		end
-		if redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2], ARGV[3]) then
-			return 1
-		end
-		return 0
-	`)
-
-	// Guarded multi-key create: KEYS is guards, then entries, then keys to
-	// delete; ARGV[1] and ARGV[2] are the guard and entry counts, followed by a
-	// value and a ttl in ms per entry. All entries are created (create-only) and
-	// the delete keys removed, or nothing changes. Returns 1 done, 0 an entry
-	// already exists, -1 blocked by a guard.
-	c.createAllUnlessGuarded = redis.NewScript(`
-		local ng = tonumber(ARGV[1])
-		local ne = tonumber(ARGV[2])
-		for i = 1, ng do
-			if redis.call('EXISTS', KEYS[i]) == 1 then
-				return -1
-			end
-		end
-		for i = 1, ne do
-			if redis.call('EXISTS', KEYS[ng + i]) == 1 then
-				return 0
-			end
-		end
-		for i = 1, ne do
-			redis.call('SET', KEYS[ng + i], ARGV[1 + 2 * i], 'PX', ARGV[2 + 2 * i])
-		end
-		for i = ng + ne + 1, #KEYS do
-			redis.call('DEL', KEYS[i])
-		end
-		return 1
-	`)
-
 	c.logger.Debug("Loaded atomic Redis Lua scripts")
 }
 
@@ -230,143 +155,27 @@ func (c *Client) SetXXKeepTTL(ctx context.Context, key string, value interface{}
 	return res == "OK", nil
 }
 
-// WriteResult is the outcome of a guarded write.
-type WriteResult int
-
-const (
-	// WriteDone means the write happened.
-	WriteDone WriteResult = iota
-	// WriteConflict means the key was in the wrong state: it already existed
-	// for a create-only write, or was missing for an update-only write.
-	WriteConflict
-	// WriteBlocked means a guard key (a revocation marker) exists.
-	WriteBlocked
-)
-
-func writeResultFrom(n int64) (WriteResult, error) {
-	switch n {
-	case 1:
-		return WriteDone, nil
-	case 0:
-		return WriteConflict, nil
-	case -1:
-		return WriteBlocked, nil
-	}
-	return WriteConflict, fmt.Errorf("unexpected script result %d", n)
+// Script is a Lua script that Redis runs atomically. Callers that build key
+// names inside the script (instead of receiving every key in KEYS) need a
+// standalone or primary/replica Redis, not a cluster.
+type Script struct {
+	script *redis.Script
 }
 
-func ttlMillis(d time.Duration) (int64, error) {
-	ms := d.Milliseconds()
-	if ms < 1 {
-		return 0, fmt.Errorf("expiration must be positive")
-	}
-	return ms, nil
+// NewScript prepares a Lua script for Run.
+func NewScript(src string) *Script {
+	return &Script{script: redis.NewScript(src)}
 }
 
-// CreateUnlessGuarded stores value under key only if the key is free and none
-// of the guard keys exists, in one atomic step. The expiration must be positive.
-func (c *Client) CreateUnlessGuarded(ctx context.Context, key, value string, expiration time.Duration, guards ...string) (WriteResult, error) {
-	return c.writeGuarded(ctx, "NX", key, value, expiration, guards)
-}
-
-// UpdateUnlessGuarded overwrites key, with the given expiration, only if it
-// still exists and none of the guard keys exists, in one atomic step. A record
-// that was deleted (revoked) or expired in the meantime is never re-created.
-// The expiration must be positive.
-func (c *Client) UpdateUnlessGuarded(ctx context.Context, key, value string, expiration time.Duration, guards ...string) (WriteResult, error) {
-	return c.writeGuarded(ctx, "XX", key, value, expiration, guards)
-}
-
-func (c *Client) writeGuarded(ctx context.Context, mode, key, value string, expiration time.Duration, guards []string) (WriteResult, error) {
-	ms, err := ttlMillis(expiration)
-	if err != nil {
-		return WriteConflict, err
-	}
-	keys := append([]string{key}, guards...)
-	n, err := c.writeUnlessGuarded.Run(ctx, c.client, keys, value, ms, mode).Int64()
-	if err != nil {
-		return WriteConflict, err
-	}
-	return writeResultFrom(n)
-}
-
-// Entry is a key/value to create with an expiration.
-type Entry struct {
-	Key   string
-	Value string
-	TTL   time.Duration
-}
-
-// CreateAllUnlessGuarded atomically creates every entry (create-only) and
-// deletes the delete keys, unless a guard key exists or an entry already
-// exists, in which case nothing changes.
-func (c *Client) CreateAllUnlessGuarded(ctx context.Context, entries []Entry, deleteKeys []string, guards []string) (WriteResult, error) {
-	keys := make([]string, 0, len(guards)+len(entries)+len(deleteKeys))
-	keys = append(keys, guards...)
-	args := []interface{}{len(guards), len(entries)}
-	for _, e := range entries {
-		ms, err := ttlMillis(e.TTL)
-		if err != nil {
-			return WriteConflict, err
-		}
-		keys = append(keys, e.Key)
-		args = append(args, e.Value, ms)
-	}
-	keys = append(keys, deleteKeys...)
-	n, err := c.createAllUnlessGuarded.Run(ctx, c.client, keys, args...).Int64()
-	if err != nil {
-		return WriteConflict, err
-	}
-	return writeResultFrom(n)
-}
-
-// ClaimAndDelete atomically takes key out of circulation: it returns its value
-// and remaining TTL, deletes it, and sets markerKey for markerTTL, so a single
-// caller wins. found is false when the key did not exist.
-func (c *Client) ClaimAndDelete(ctx context.Context, key, markerKey string, markerTTL time.Duration) (value string, remaining time.Duration, found bool, err error) {
-	ms, err := ttlMillis(markerTTL)
-	if err != nil {
-		return "", 0, false, err
-	}
-	res, err := c.claim.Run(ctx, c.client, []string{key, markerKey}, ms).Result()
-	if err == redis.Nil {
-		return "", 0, false, nil
-	}
-	if err != nil {
-		return "", 0, false, err
-	}
-	arr, ok := res.([]interface{})
-	if !ok || len(arr) != 2 {
-		return "", 0, false, fmt.Errorf("unexpected claim result")
-	}
-	v, ok := arr[0].(string)
-	ttl, ok2 := arr[1].(int64)
-	if !ok || !ok2 {
-		return "", 0, false, fmt.Errorf("unexpected claim result")
-	}
-	return v, time.Duration(ttl) * time.Millisecond, true, nil
-}
-
-// GetDeleteAndTombstone deletes key and returns its value (found=false if it did
-// not exist). It sets tombstoneKey for tombstoneTTL when the key existed, or
-// when claimMarkerKey exists (the record is being operated on right now).
-func (c *Client) GetDeleteAndTombstone(ctx context.Context, key, claimMarkerKey, tombstoneKey string, tombstoneTTL time.Duration) (value string, found bool, err error) {
-	ms, err := ttlMillis(tombstoneTTL)
-	if err != nil {
-		return "", false, err
-	}
-	res, err := c.getDeleteTombstone.Run(ctx, c.client, []string{key, claimMarkerKey, tombstoneKey}, ms).Result()
-	if err == redis.Nil {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	v, ok := res.(string)
-	if !ok {
-		return "", false, nil
-	}
-	return v, true, nil
+// Run executes the script (EVALSHA, falling back to EVAL when the server has
+// not loaded it yet) and returns the raw reply: int64, string or []interface{}.
+//
+// A command that fails on the network is retried by the client with the same
+// arguments, and the failed attempt may already have been executed. Scripts must
+// therefore be safe to run twice with the same arguments and answer the second
+// run like the first.
+func (c *Client) Run(ctx context.Context, s *Script, keys []string, args ...interface{}) (interface{}, error) {
+	return s.script.Run(ctx, c.client, keys, args...).Result()
 }
 
 // SetEX stores a value with expiration time
