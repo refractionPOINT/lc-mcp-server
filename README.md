@@ -224,6 +224,10 @@ MCP OAuth access tokens carry the scopes they were granted and are enforced on e
 
 Scopes are hierarchical (`admin` > `write` > `read`), and a token granted no scope gets the server default (`read` + `write`). For `lc_call_tool` the target tool decides which scope is needed. A call the token's scopes do not cover is answered with HTTP 403 and `WWW-Authenticate: Bearer error="insufficient_scope", scope="<needed scope>", resource_metadata="..."` (MCP authorization spec, "Runtime Insufficient Scope Errors"), so a client can step up. API keys, LimaCharlie JWTs and the server-wide credentials are not OAuth-scoped and are not restricted by this. `tools/list` is not narrowed by scope; each tool's `readOnlyHint` is in the listing.
 
+### Tool annotations
+
+Every tool lists explicit `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` values. They come from one table, `internal/tools/annotations_table.go`, which overrides whatever a tool declares and is the source the scope policy reads. A new tool must add an entry (a test fails otherwise). `readOnlyHint` is true only for tools that change nothing; `destructiveHint` is true for deletes, overwrites, revocations and anything that can disrupt (false for additive writes, and always false for read-only tools); `openWorldHint` is true only when the call itself reaches beyond the organization (tasks an endpoint, creates or changes an output, or actively calls a third-party system).
+
 ### Optional Configuration
 
 ```bash
