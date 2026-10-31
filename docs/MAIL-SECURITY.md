@@ -79,6 +79,10 @@ mailbox. A refused login names the mailbox; other mailboxes in the record keep
 working. Limits to tell the user about:
 
 - IMAP cannot send mail, so reporter auto-replies are unavailable.
+- Warning banners are refused on personal Gmail mailboxes for now (HTTP 400, not
+  retryable); other IMAP hosts support them.
+- Gmail needs 2-Step Verification and an app password, which Google does not
+  offer under Advanced Protection.
 - Mail that a user's own filter moves straight out of the Inbox (for example a
   Gmail filter with "Skip the Inbox") is not covered.
 - Each IMAP mailbox counts as one protected mailbox toward the organization's
