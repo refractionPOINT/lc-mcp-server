@@ -7,10 +7,10 @@ package tools
 // A new tool MUST add an entry here (TestEveryRegisteredToolIsClassified).
 var toolAnnotations = map[string]Annotation{
 	// --- admin ---
-	"add_group_member":       write().Idem(),   // group.AddMember adds an email to members; re-adding is a no-op; invite_missing emails LC invite
-	"add_group_owner":        write().Idem(),   // group.AddOwner adds an owner (additive, repeat is no-op); invite_missing sends LC invite
+	"add_group_member":       write().Open(),   // group.AddMember adds an email to members; invite_missing emails an LC invite to an arbitrary external address on every call (no dedupe), so not idempotent and open-world; an existing member is left unchanged by the backend (no role overwrite)
+	"add_group_owner":        write().Open(),   // group.AddOwner adds an owner; invite_missing emails an LC invite to an arbitrary external address on every call (no dedupe), so not idempotent and open-world; an existing member is left unchanged by the backend (no role overwrite)
 	"add_org_to_group":       write().Idem(),   // group.AddOrg links an org to a group (additive; repeat is no-op)
-	"add_org_user":           write().Idem(),   // org.AddUser POST orgs/{oid}/users with role; additive, invite_missing emails an LC invite; may re-set role of existing user
+	"add_org_user":           write().Open(),   // org.AddUser POST orgs/{oid}/users with role; invite_missing emails an LC invite to an arbitrary external address on every call (no dedupe), so not idempotent and open-world; an existing member is left unchanged by the backend (no role overwrite)
 	"add_user_permission":    write().Idem(),   // org.AddUserPermission appends one permission (additive, repeat is no-op)
 	"create_api_key":         write(),          // org.CreateAPIKeyWithOptions mints a new key each call (new key_hash); additive
 	"create_group":           write(),          // client.CreateGroup mints a new gid each call; additive
@@ -43,12 +43,12 @@ var toolAnnotations = map[string]Annotation{
 	"upgrade_sensors":        destroy().Idem(), // POST modules/{oid} sets org-wide sensor version (specific/latest/fallback downgrade/is_sleep dormant); endpoints update later
 	// --- ai ---
 	"delete_ai_memory":           destroy().Idem(), // org.DeleteAIMemory sends null to drop one named memory entry in ai_memory hive record; irreversible
-	"generate_detection_summary": read(),           // Returns text from Anthropic via claudeResponse (in-process memo cache only); persists nothing
-	"generate_dr_rule_detection": read(),           // Claude text gen + org.ValidateDRRule (validate only); persists nothing
-	"generate_dr_rule_respond":   read(),           // Claude text gen + org.ValidateDRRule (validate only); persists nothing
-	"generate_lcql_query":        read(),           // Claude text gen + org.ValidateLCQLQuery and schema reads; persists nothing; does not run the query
-	"generate_python_playbook":   read(),           // Claude text gen only; returns playbook source, nothing saved
-	"generate_sensor_selector":   read(),           // Claude text gen only; returns a selector expression, nothing saved
+	"generate_detection_summary": read().Open(),    // Sends caller/org-supplied data to api.anthropic.com (claudeResponse), a third-party model API; returns text and persists nothing. Returns text from Anthropic via claudeResponse (in-process memo cache only); persists nothing
+	"generate_dr_rule_detection": read().Open(),    // Sends caller/org-supplied data to api.anthropic.com (claudeResponse), a third-party model API; returns text and persists nothing. Claude text gen + org.ValidateDRRule (validate only); persists nothing
+	"generate_dr_rule_respond":   read().Open(),    // Sends caller/org-supplied data to api.anthropic.com (claudeResponse), a third-party model API; returns text and persists nothing. Claude text gen + org.ValidateDRRule (validate only); persists nothing
+	"generate_lcql_query":        read().Open(),    // Sends caller/org-supplied data to api.anthropic.com (claudeResponse), a third-party model API; returns text and persists nothing. Claude text gen + org.ValidateLCQLQuery and schema reads; persists nothing; does not run the query
+	"generate_python_playbook":   read().Open(),    // Sends caller/org-supplied data to api.anthropic.com (claudeResponse), a third-party model API; returns text and persists nothing. Claude text gen only; returns playbook source, nothing saved
+	"generate_sensor_selector":   read().Open(),    // Sends caller/org-supplied data to api.anthropic.com (claudeResponse), a third-party model API; returns text and persists nothing. Claude text gen only; returns a selector expression, nothing saved
 	"get_ai_chat":                read(),           // org.AI().GetUserSession GET only
 	"get_ai_chat_history":        read(),           // org.AI().GetUserSessionHistory GET only
 	"get_ai_session":             read(),           // org.AI().GetSession GET only
@@ -350,7 +350,7 @@ var toolAnnotations = map[string]Annotation{
 	"mailsec_reopen_report":           write().Idem(),          // POST reports/{id}/reopen toggles report back to open; already-open succeeds, no extra effect; org-internal
 	"mailsec_resolve_report":          destroy().Idem(),        // POST reports/{id}/resolve sets disposition on report; already_resolved is a no-op on repeat; does not remediate mail
 	"mailsec_revise_verdict":          destroy().Idem(),        // POST messages/{uuid}/verdict overwrites the message verdict and appends audited revision; applied:false when unchanged
-	"mailsec_test_connection":         write().Idem().Open(),   // POST connections/{record}/test probes provider (Google/M365); include_watch=true establishes/replaces a real push watch
+	"mailsec_test_connection":         destroy().Idem().Open(), // POST connections/{record}/test probes provider (Google/M365); include_watch=true replaces a real push watch at the provider (overwrite of third-party state)
 	"mailsec_validate_rule":           read(),                  // POST rules/validate checks candidate rule without saving
 	// --- payloads ---
 	"create_payload": destroy().Idem(), // org.CreatePayloadFromReader POSTs payload/{oid}/{name} then PUTs; no exists check so it overwrites a same-named payload
@@ -367,7 +367,7 @@ var toolAnnotations = map[string]Annotation{
 	"delete_sensor":                 destroy().Idem(),        // sensor.Delete DELETE /{sid}: permanently removes sensor from org; irreversible
 	"isolate_network":               destroy().Idem().Open(), // sensor.IsolateFromNetwork POST {sid}/isolation: cuts endpoint network access; state-set so idempotent; acts on real endpoint
 	"list_reliable_tasks":           read(),                  // ext-reliable-tasking 'list' read of pending tasks; LC-internal
-	"list_velociraptor_artifacts":   read(),                  // ext-velociraptor 'list' read of artifact catalog (LC-hosted extension); description mentions external triage.velocidex.com source
+	"list_velociraptor_artifacts":   read().Open(),           // ext-velociraptor list may fetch https://triage.velocidex.com/sitemap.xml live (external artifact discovery); changes nothing
 	"mass_add_tag":                  write().Idem(),          // org.MassTag adds tag to all sensors matching selector; additive but fleet-wide, can drive tag-based D&R; re-add idempotent
 	"mass_remove_tag":               destroy().Idem(),        // org.MassUntag removes tag from all sensors matching selector; fleet-wide, idempotent
 	"memory_dump_sensor":            write().Open(),          // org.ServiceRequest 'dumper' triggers full memory dump on endpoint and uploads artifact; additive collection, new dump per call
@@ -375,7 +375,7 @@ var toolAnnotations = map[string]Annotation{
 	"reliable_tasking":              destroy().Open(),        // ext-reliable-tasking 'task' queues arbitrary sensor command (sid/tag/selector '*') with retries; each call queues new tasks
 	"remove_tag":                    destroy().Idem(),        // sensor.RemoveTag DELETE {sid}/tags; removes tag (can change D&R/selector targeting); idempotent
 	"seal_sensor":                   write().Idem().Open(),   // sensor.Seal POST {sid}/seal: tamper-protection, blocks uninstall/config change; state-set; reversible via unseal
-	"show_velociraptor_artifact":    read(),                  // ext-velociraptor 'show' returns artifact YAML; read-only
+	"show_velociraptor_artifact":    read().Open(),           // ext-velociraptor show downloads an external artifact ZIP from the internet; changes nothing
 	"task_sensor":                   destroy().Open(),        // sensor.Task / SimpleRequest sends arbitrary command (e.g. run --shell-command) to endpoint; each call sends a new task
 	"unseal_sensor":                 destroy().Idem().Open(), // sensor.Unseal DELETE {sid}/seal removes tamper protection (access/safeguard revocation); state-set idempotent
 	// --- rules ---

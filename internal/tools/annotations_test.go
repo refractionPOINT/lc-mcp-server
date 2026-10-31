@@ -2,6 +2,8 @@ package tools_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -142,12 +144,21 @@ func TestHighRiskToolClassification(t *testing.T) {
 		"dir_list":                {true, false, false, true, "Read"},
 		"get_network_connections": {true, false, false, true, "Read"},
 		// Deletes.
-		"delete_sensor":        {false, true, true, false, "Sensitive write"},
-		"delete_org":           {false, true, true, false, "Sensitive write"},
-		"delete_rule":          {false, true, true, false, "Sensitive write"},
-		"delete_secret":        {false, true, true, false, "Sensitive write"},
-		"delete_output":        {false, true, true, false, "Sensitive write"},
-		"mailsec_purge_tenant": {false, true, true, true, "Sensitive write"},
+		"delete_sensor":           {false, true, true, false, "Sensitive write"},
+		"delete_org":              {false, true, true, false, "Sensitive write"},
+		"delete_rule":             {false, true, true, false, "Sensitive write"},
+		"delete_secret":           {false, true, true, false, "Sensitive write"},
+		"delete_output":           {false, true, true, false, "Sensitive write"},
+		"mailsec_purge_tenant":    {false, true, true, true, "Sensitive write"},
+		"mailsec_test_connection": {false, true, true, true, "Sensitive write"},
+		// invite_missing emails an invite to an external address on every call.
+		"add_org_user":     {false, false, false, true, "Write"},
+		"add_group_member": {false, false, false, true, "Write"},
+		"set_user_role":    {false, true, true, false, "Sensitive write"},
+		// Third-party model API / internet fetches: read-only but open world.
+		"generate_lcql_query":         {true, false, false, true, "Read"},
+		"list_velociraptor_artifacts": {true, false, false, true, "Read"},
+		"resolve_arl":                 {true, false, false, true, "Read"},
 		// Outputs send org data to third-party destinations.
 		"add_output": {false, true, true, true, "Sensitive write"},
 		// Overwrites.
@@ -173,5 +184,36 @@ func TestHighRiskToolClassification(t *testing.T) {
 		assert.Equal(t, w.idempotent, a.Idempotent, "%s idempotent", name)
 		assert.Equal(t, w.openWorld, a.OpenWorld, "%s openWorld", name)
 		assert.Equal(t, w.muse, a.MuseClass(), "%s Muse class", name)
+	}
+}
+
+// TestEveryRegisteredToolIsClassified only sees tools whose package this file
+// imports. Fail when a tool package exists that either this test or the server
+// binary does not import, so a new package cannot dodge the classification check.
+func TestAllToolPackagesAreImported(t *testing.T) {
+	self, err := os.ReadFile("annotations_test.go")
+	require.NoError(t, err)
+	server, err := os.ReadFile(filepath.Join("..", "..", "cmd", "server", "main.go"))
+	require.NoError(t, err)
+
+	entries, err := os.ReadDir(".")
+	require.NoError(t, err)
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == "testutil" {
+			continue
+		}
+		goFiles, _ := filepath.Glob(filepath.Join(e.Name(), "*.go"))
+		hasCode := false
+		for _, f := range goFiles {
+			if !strings.HasSuffix(f, "_test.go") {
+				hasCode = true
+			}
+		}
+		if !hasCode {
+			continue
+		}
+		pkg := "internal/tools/" + e.Name() + `"`
+		assert.Contains(t, string(self), pkg, "annotations_test.go must blank-import tool package %s", e.Name())
+		assert.Contains(t, string(server), pkg, "cmd/server/main.go does not import tool package %s", e.Name())
 	}
 }
