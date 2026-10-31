@@ -2,6 +2,8 @@ package tools_test
 
 import (
 	"encoding/json"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -157,6 +159,7 @@ func TestHighRiskToolClassification(t *testing.T) {
 		"set_user_role":    {false, true, true, false, "Sensitive write"},
 		// Third-party model API / internet fetches: read-only but open world.
 		"generate_lcql_query":         {true, false, false, true, "Read"},
+		"start_ai_session":            {false, true, false, true, "Sensitive write"},
 		"list_velociraptor_artifacts": {true, false, false, true, "Read"},
 		"resolve_arl":                 {true, false, false, true, "Read"},
 		// Outputs send org data to third-party destinations.
@@ -188,21 +191,29 @@ func TestHighRiskToolClassification(t *testing.T) {
 }
 
 // TestEveryRegisteredToolIsClassified only sees tools whose package this file
-// imports. Fail when a tool package exists that either this test or the server
-// binary does not import, so a new package cannot dodge the classification check.
+// imports. Fail when a tool package (at any depth under internal/tools) exists
+// that either this test or the server binary does not actually import, so a new
+// package cannot dodge the classification check.
 func TestAllToolPackagesAreImported(t *testing.T) {
-	self, err := os.ReadFile("annotations_test.go")
-	require.NoError(t, err)
-	server, err := os.ReadFile(filepath.Join("..", "..", "cmd", "server", "main.go"))
-	require.NoError(t, err)
+	const modPrefix = "github.com/refractionpoint/lc-mcp-go/internal/tools"
 
-	entries, err := os.ReadDir(".")
-	require.NoError(t, err)
-	for _, e := range entries {
-		if !e.IsDir() || e.Name() == "testutil" {
-			continue
+	imported := func(file string) map[string]bool {
+		f, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
+		require.NoError(t, err, file)
+		out := map[string]bool{}
+		for _, imp := range f.Imports {
+			out[strings.Trim(imp.Path.Value, `"`)] = true
 		}
-		goFiles, _ := filepath.Glob(filepath.Join(e.Name(), "*.go"))
+		return out
+	}
+	inTest := imported("annotations_test.go")
+	inServer := imported(filepath.Join("..", "..", "cmd", "server", "main.go"))
+
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || path == "." || d.Name() == "testutil" {
+			return err
+		}
+		goFiles, _ := filepath.Glob(filepath.Join(path, "*.go"))
 		hasCode := false
 		for _, f := range goFiles {
 			if !strings.HasSuffix(f, "_test.go") {
@@ -210,10 +221,12 @@ func TestAllToolPackagesAreImported(t *testing.T) {
 			}
 		}
 		if !hasCode {
-			continue
+			return nil
 		}
-		pkg := "internal/tools/" + e.Name() + `"`
-		assert.Contains(t, string(self), pkg, "annotations_test.go must blank-import tool package %s", e.Name())
-		assert.Contains(t, string(server), pkg, "cmd/server/main.go does not import tool package %s", e.Name())
-	}
+		pkg := modPrefix + "/" + filepath.ToSlash(path)
+		assert.True(t, inTest[pkg], "annotations_test.go must blank-import tool package %s", pkg)
+		assert.True(t, inServer[pkg], "cmd/server/main.go must import tool package %s", pkg)
+		return nil
+	})
+	require.NoError(t, err)
 }

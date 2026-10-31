@@ -58,7 +58,7 @@ var toolAnnotations = map[string]Annotation{
 	"list_ai_sessions":           read(),           // org.AI().ListSessions GET only
 	"list_ai_usage":              read(),           // org.AI().ListUsageIdentities GET only
 	"set_ai_memory":              destroy().Idem(), // org.SetAIMemory creates/replaces one named memory entry on an agent record (overwrite); same args repeat is no-op
-	"start_ai_session":           destroy(),        // org.AI().StartSession launches an agent (spends budget; permission_mode/allowed_tools overrides let it act on org); new session each call
+	"start_ai_session":           destroy().Open(), // org.AI().StartSession launches an agent (spends budget; permission_mode/allowed_tools overrides let it act on org) that sends the prompt and org data to a third-party model API (model override); new session each call
 	"terminate_ai_session":       destroy().Idem(), // org.AI().TerminateSession cancels a running session; repeat is no-op
 	// --- api ---
 	"lc_call_tool": destroy().Open(), // Dispatcher via tools.CallTool to any registered tool; per-target scope check but worst case mutating+open world
