@@ -79,8 +79,15 @@ mailbox. A refused login names the mailbox; other mailboxes in the record keep
 working. Limits to tell the user about:
 
 - IMAP cannot send mail, so reporter auto-replies are unavailable.
-- Warning banners are refused on personal Gmail mailboxes for now (HTTP 400, not
-  retryable); other IMAP hosts support them.
+- Warning banners work on Gmail IMAP mailboxes too. Email Security saves a copy
+  of the message with the warning at the top, keeps the original's labels and
+  star, and moves the original to Gmail's Trash (it is never deleted by us; Gmail
+  empties Trash after 30 days). Removing the banner moves the original back out
+  of Trash and trashes the bannered copy; if the original is no longer in Trash,
+  it is rebuilt from the copy. On a Gmail mailbox with many labels, applying or
+  removing a banner can take up to about a minute. Other IMAP hosts keep the
+  same behaviour as before: a copy with the banner is added and the original is
+  deleted once the copy is confirmed.
 - Gmail needs 2-Step Verification and an app password, which Google does not
   offer under Advanced Protection.
 - Mail that a user's own filter moves straight out of the Inbox (for example a
