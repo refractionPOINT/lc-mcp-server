@@ -977,7 +977,16 @@ func (reg *ToolRegistration) ToolName() string {
 }
 
 // ToolSchema returns the tool's MCP schema.
+//
+// The behaviour hints (readOnly, destructive, idempotent, openWorld) always come
+// from the central classification table; see Annotation.
 func (reg *ToolRegistration) ToolSchema() mcp.Tool {
+	return withAnnotations(reg.declaredSchema(), reg.ToolName())
+}
+
+// declaredSchema returns the schema exactly as the tool declares it, before the
+// central annotation table is applied.
+func (reg *ToolRegistration) declaredSchema() mcp.Tool {
 	if reg.Tool != nil {
 		return reg.Tool.Schema()
 	}
