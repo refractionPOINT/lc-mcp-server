@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"sort"
@@ -191,6 +192,27 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	// Generate request ID for tracking
 	requestID := fmt.Sprintf("req_%d", time.Now().UnixNano())
 	startTime := time.Now()
+	completionTool := "unknown"
+	outcome, errorClass := "error", "invalid_params"
+	// One completion for every invocation, including validation/auth failures.
+	// Classes are fixed labels; never include error text or tool content.
+	defer func() {
+		panicked := recover()
+		if panicked != nil {
+			outcome, errorClass = "error", "panic"
+		}
+		level := slog.LevelInfo
+		if outcome == "error" {
+			level = slog.LevelWarn
+		}
+		s.logger.Log(r.Context(), level, "Tool call completed",
+			"request_id", requestID, "tool", completionTool,
+			"outcome", outcome, "error_class", errorClass,
+			"total_duration_ms", time.Since(startTime).Milliseconds())
+		if panicked != nil {
+			panic(panicked) // Preserve the handler's panic behavior.
+		}
+	}()
 
 	var params struct {
 		Name      *string         `json:"name"`
@@ -227,6 +249,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 
 	resolved, authErr := s.resolveRequestAuth(r, requestID)
 	if authErr != nil {
+		errorClass = "authentication"
 		authErr.write(s, w, r, id)
 		return
 	}
@@ -265,9 +288,14 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	// Handle OID switching if tool requires it and OID is provided
 	tool, ok := tools.GetTool(toolName)
 	if !ok {
+		errorClass = "unknown_tool"
 		s.writeJSONRPCError(w, id, rpcInvalidParams, fmt.Sprintf("Unknown tool: %s", toolName), "")
 		return
 	}
+
+	// Only registry-confirmed names may enter the completion log. Before this
+	// lookup, even a name on a rejected request can contain arbitrary content.
+	completionTool = tool.Name
 
 	// The profile (or X-MCP-Tools allowlist) must bound what can be CALLED, not
 	// merely what tools/list advertises. Otherwise a caller that deliberately
@@ -276,10 +304,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	// an agent operator chose that endpoint to get.
 	allowedTools, err := s.getToolsForRequest(r)
 	if err != nil {
+		errorClass = "invalid_tool_selection"
 		s.writeJSONRPCError(w, id, -32000, "Invalid request", err.Error())
 		return
 	}
 	if !slices.Contains(allowedTools, toolName) {
+		errorClass = "tool_not_allowed"
 		s.logger.Warn("Rejected tool call outside the request's allowed set",
 			"request_id", requestID,
 			"tool", toolName,
@@ -302,6 +332,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	// scopes cover. Checked before any org is resolved or switched, so a refused
 	// call has no side effects. Other credentials are not OAuth-scoped.
 	if err := auth.CheckScope(ctx, toolName, tool.TransportScope()); err != nil {
+		errorClass = "insufficient_scope"
 		s.writeInsufficientScope(w, r, id, err)
 		return
 	}
@@ -314,6 +345,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 		var effectiveOID, toolErr string
 		ctx, effectiveOID, toolErr = s.resolveToolOID(ctx, toolName, arguments, resolved)
 		if toolErr != "" {
+			errorClass = "invalid_oid"
 			// Reported as a tool execution error so the model can correct the
 			// argument and retry.
 			s.writeToolError(w, call, toolErr)
@@ -325,6 +357,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 		// for genuinely org-less contexts (the call fails downstream anyway).
 		if effectiveOID != "" && !tool.SkipsAIAgentPermissionCheck() {
 			if err := s.checkAIAgentPermission(ctx, effectiveOID); err != nil {
+				errorClass = "permission_denied"
 				s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
 				return
 			}
@@ -342,10 +375,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 		// step up and retry.
 		var scopeErr *auth.InsufficientScopeError
 		if errors.As(err, &scopeErr) {
+			errorClass = "insufficient_scope"
 			s.writeInsufficientScope(w, r, id, scopeErr)
 			return
 		}
-		s.logger.Info("Tool execution failed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds(), "error", err.Error())
+		errorClass = "handler_error"
+		s.logger.Info("Tool execution failed", "request_id", requestID, "tool", toolName, "duration_ms", toolDuration.Milliseconds())
 		// A failure inside the tool is a tool execution error (isError), not
 		// a protocol error, so the model sees the reason and can adapt.
 		s.writeToolError(w, call, err.Error())
@@ -361,11 +396,12 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 	// Wrap large results with GCS if available
 	wrappedResult := gcs.WrapMCPResult(ctx, result, toolName)
 
-	totalDuration := time.Since(startTime)
-	s.logger.Info("Tool call completed successfully", "request_id", requestID, "tool", toolName, "total_duration_ms", totalDuration.Milliseconds())
-
 	// Return success response
 	s.writeRPCResult(w, call, wrappedResult, false)
+	outcome, errorClass = "success", "none"
+	if result != nil && result.IsError {
+		outcome, errorClass = "error", "tool_error"
+	}
 }
 
 // resolveToolOID picks the organization an org-scoped tool call runs against:

@@ -27,3 +27,11 @@ func toolCallAttrs(ctx context.Context, extra ...any) []any {
 func logGeneratorCall(ctx context.Context, tool string, query string) {
 	slog.Info("Tool called: "+tool, toolCallAttrs(ctx, "query_len", len(query))...)
 }
+
+// logGeneratorFailure records a terminal generator failure. Call sites supply
+// fixed classes only: never forward provider, validation or filesystem errors.
+// Keep the global logger: installing the HTTP logger as the default would also
+// enable unrelated debug logs containing user content.
+func logGeneratorFailure(ctx context.Context, tool, errorClass string) {
+	slog.Info("AI generator failed", toolCallAttrs(ctx, "tool", tool, "outcome", "error", "error_class", errorClass)...)
+}

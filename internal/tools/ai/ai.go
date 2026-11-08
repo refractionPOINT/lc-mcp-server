@@ -41,6 +41,7 @@ func RegisterGenerateLCQLQuery() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
+				logGeneratorFailure(ctx, "generate_lcql_query", "invalid_query")
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
@@ -48,6 +49,7 @@ func RegisterGenerateLCQLQuery() {
 
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_lcql_query", "organization")
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
@@ -56,6 +58,7 @@ func RegisterGenerateLCQLQuery() {
 			// Get the prompt template
 			promptTemplate, err := getPromptTemplate("gen_lcql")
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_lcql_query", "prompt_template")
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
@@ -84,6 +87,7 @@ func RegisterGenerateLCQLQuery() {
 				// Get the generated query
 				response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 				if err != nil {
+					logGeneratorFailure(ctx, "generate_lcql_query", "provider_response")
 					return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 				}
 
@@ -131,6 +135,7 @@ func RegisterGenerateLCQLQuery() {
 			elapsed := time.Since(startTime)
 			slog.Info("Failed to generate valid LCQL query", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error_len", len(lastError))
 
+			logGeneratorFailure(ctx, "generate_lcql_query", "validation_exhausted")
 			return tools.ErrorResultf("Failed to generate valid LCQL query after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
 	})
@@ -154,6 +159,7 @@ func RegisterGenerateDRRuleDetection() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
+				logGeneratorFailure(ctx, "generate_dr_rule_detection", "invalid_query")
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
@@ -161,6 +167,7 @@ func RegisterGenerateDRRuleDetection() {
 
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_dr_rule_detection", "organization")
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
@@ -169,6 +176,7 @@ func RegisterGenerateDRRuleDetection() {
 			// Get the prompt template
 			promptTemplate, err := getPromptTemplate("gen_dr_detect")
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_dr_rule_detection", "prompt_template")
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
@@ -197,6 +205,7 @@ func RegisterGenerateDRRuleDetection() {
 				// Get the generated detection
 				response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 				if err != nil {
+					logGeneratorFailure(ctx, "generate_dr_rule_detection", "provider_response")
 					return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 				}
 
@@ -269,6 +278,7 @@ func RegisterGenerateDRRuleDetection() {
 			elapsed := time.Since(startTime)
 			slog.Info("Failed to generate valid D&R detection", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error_len", len(lastError))
 
+			logGeneratorFailure(ctx, "generate_dr_rule_detection", "validation_exhausted")
 			return tools.ErrorResultf("Failed to generate valid D&R detection after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
 	})
@@ -292,6 +302,7 @@ func RegisterGenerateDRRuleRespond() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
+				logGeneratorFailure(ctx, "generate_dr_rule_respond", "invalid_query")
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
@@ -299,6 +310,7 @@ func RegisterGenerateDRRuleRespond() {
 
 			org, err := tools.GetOrganization(ctx)
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_dr_rule_respond", "organization")
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
@@ -307,6 +319,7 @@ func RegisterGenerateDRRuleRespond() {
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_dr_respond")
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_dr_rule_respond", "prompt_template")
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
@@ -331,6 +344,7 @@ func RegisterGenerateDRRuleRespond() {
 				// Get the generated respond
 				response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 				if err != nil {
+					logGeneratorFailure(ctx, "generate_dr_rule_respond", "provider_response")
 					return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 				}
 
@@ -406,6 +420,7 @@ func RegisterGenerateDRRuleRespond() {
 			elapsed := time.Since(startTime)
 			slog.Info("Failed to generate valid D&R respond", "iterations", maxIterations, "duration_ms", elapsed.Milliseconds(), "last_error_len", len(lastError))
 
+			logGeneratorFailure(ctx, "generate_dr_rule_respond", "validation_exhausted")
 			return tools.ErrorResultf("Failed to generate valid D&R respond after %d attempts. Last error: %s", maxIterations, lastError), nil
 		},
 	})
@@ -429,6 +444,7 @@ func RegisterGenerateSensorSelector() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
+				logGeneratorFailure(ctx, "generate_sensor_selector", "invalid_query")
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
@@ -438,6 +454,7 @@ func RegisterGenerateSensorSelector() {
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_sensor_selector")
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_sensor_selector", "prompt_template")
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
@@ -453,6 +470,7 @@ func RegisterGenerateSensorSelector() {
 
 			response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_sensor_selector", "provider_response")
 				return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 			}
 
@@ -490,6 +508,7 @@ func RegisterGeneratePythonPlaybook() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
+				logGeneratorFailure(ctx, "generate_python_playbook", "invalid_query")
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
@@ -499,6 +518,7 @@ func RegisterGeneratePythonPlaybook() {
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_playbook")
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_python_playbook", "prompt_template")
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
@@ -514,6 +534,7 @@ func RegisterGeneratePythonPlaybook() {
 
 			response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_python_playbook", "provider_response")
 				return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 			}
 
@@ -551,6 +572,7 @@ func RegisterGenerateDetectionSummary() {
 		Handler: func(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
 			query, ok := args["query"].(string)
 			if !ok || query == "" {
+				logGeneratorFailure(ctx, "generate_detection_summary", "invalid_query")
 				return tools.ErrorResult("query parameter is required"), nil
 			}
 
@@ -560,6 +582,7 @@ func RegisterGenerateDetectionSummary() {
 			// Get the prompt template
 			prompt, err := getPromptTemplate("gen_det_summary")
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_detection_summary", "prompt_template")
 				return tools.ErrorResultf("failed to load prompt template: %v", err), nil
 			}
 
@@ -575,6 +598,7 @@ func RegisterGenerateDetectionSummary() {
 
 			response, err := claudeResponse(ctx, messages, prompt, DefaultModel, 0.0)
 			if err != nil {
+				logGeneratorFailure(ctx, "generate_detection_summary", "provider_response")
 				return tools.ErrorResultf("failed to get Claude response: %v", err), nil
 			}
 
