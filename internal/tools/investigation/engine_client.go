@@ -26,9 +26,14 @@ const maxResponseBytes = 16 << 20
 // maxRequestBytes bounds a request body. A plan template is a few KB to a few tens of KB.
 const maxRequestBytes = 1 << 20
 
-// requestTimeout is the longest one gateway call may take. The slowest route is a long poll: wait (at most 10
-// seconds) plus the gateway's margin.
-const requestTimeout = 45 * time.Second
+// requestTimeout is how long an ordinary gateway call may take. The slowest ordinary route is a long poll: wait
+// (at most 10 seconds) plus the gateway's margin. A call that asks the engine to hold the answer (a run's
+// wait_seconds, a wave's deadline_ms) sets engineCall.timeout to that wait plus a margin instead, so the client
+// never gives up on a request the engine is still serving: the run or the wave would go on, unseen.
+var requestTimeout = 45 * time.Second
+
+// waitMargin is what a held call is allowed on top of the wait it asked for.
+var waitMargin = 20 * time.Second
 
 // engineCall is one call to the Investigation Engine through the gateway.
 type engineCall struct {
@@ -37,6 +42,8 @@ type engineCall struct {
 	suffix string
 	query  url.Values
 	body   map[string]interface{}
+	// timeout overrides requestTimeout for a call that asks the engine to hold the answer.
+	timeout time.Duration
 }
 
 // call sends the request as the authenticated caller and decodes the JSON object the engine answered. A
@@ -61,7 +68,11 @@ func call(ctx context.Context, c engineCall) (map[string]interface{}, error) {
 	if len(c.query) > 0 {
 		target += "?" + c.query.Encode()
 	}
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	timeout := requestTimeout
+	if c.timeout > timeout {
+		timeout = c.timeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if org.GetCurrentJWT() == "" {
 		org.RefreshJWT(0)

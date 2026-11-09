@@ -193,6 +193,13 @@ func (a *accumulator) terminal() bool {
 func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	t := a.latest
 	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary")
+	if sum, ok := out["summary"].(map[string]interface{}); ok {
+		sum = pickAll(sum)
+		if c, ok := sum["cost"].(map[string]interface{}); ok {
+			sum["cost"] = compactCost(c)
+		}
+		out["summary"] = sum
+	}
 	out["done"] = a.terminal()
 	if p, ok := t["policy"].(map[string]interface{}); ok {
 		out["policy_clamped"] = p["clamped"]
@@ -239,15 +246,34 @@ func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	return out
 }
 
+// verdictUndecided is a sample the plan could not settle: no verdict, or an inconclusive one.
 func verdictUndecided(r map[string]interface{}) bool {
 	v, ok := r["verdict"].(map[string]interface{})
-	return ok && v["decided"] == false
+	return ok && (v["decided"] == false || v["label"] == "inconclusive")
+}
+
+// compactCost keeps the cost figures an author weighs: the engine's usage object has some thirty scheduling
+// counters that mean nothing to the author of a plan.
+func compactCost(c map[string]interface{}) map[string]interface{} {
+	return pick(c, "steps", "steps_by_class", "search_events", "llm_tokens", "llm_usd", "cost_basis", "wall_ms")
+}
+
+// pickAll is a shallow copy.
+func pickAll(m map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // compactResult keeps what the author acts on. The steps that succeeded are dropped unless asked for: they
 // are the bulk, and only the ones that did not succeed explain an unknown.
 func compactResult(r map[string]interface{}, includeSteps bool) map[string]interface{} {
-	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "cost", "wall_ms")
+	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms")
+	if c, ok := r["cost"].(map[string]interface{}); ok {
+		out["cost"] = compactCost(c)
+	}
 	if w, ok := r["would_propose"].([]interface{}); ok && len(w) > 0 {
 		out["would_propose"] = w
 	}

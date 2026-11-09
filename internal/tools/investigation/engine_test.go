@@ -46,6 +46,9 @@ type gateway struct {
 	writes []map[string]any
 	// engineCalls records "METHOD suffix?query".
 	engineCalls []string
+	// onMtdRead runs when the hive's metadata of a record is read (the first step of SetRecord), before the
+	// answer is computed: a test uses it to change the record between this tool's checks and its write.
+	onMtdRead func()
 }
 
 func newGateway(t *testing.T) *gateway {
@@ -80,6 +83,9 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(path, "/v1/hive/"), "/")
 	if len(parts) == 4 && parts[0] == planHive && parts[1] == testOID {
 		key, kind := parts[2], parts[3]
+		if kind == "mtd" && r.Method == http.MethodGet && g.onMtdRead != nil {
+			g.onMtdRead()
+		}
 		rec, exists := g.records[key]
 		switch {
 		case r.Method == http.MethodGet && !exists:
@@ -263,6 +269,12 @@ func TestOperatorsFilterAndBrief(t *testing.T) {
 	assert.Equal(t, "denied by policy", row["why"])
 	assert.NotContains(t, row, "args", "brief keeps only the index fields")
 	assert.EqualValues(t, 1, body["count"])
+
+	_, body = run(t, "investigate_operators", map[string]interface{}{"names": []interface{}{"entity.resolve"}})
+	rows = body["operators"].([]any)
+	require.Len(t, rows, 1)
+	assert.Contains(t, rows[0], "args", "names returns the full row")
+	assert.Equal(t, "entity.resolve", rows[0].(map[string]any)["name"])
 }
 
 func TestValidatePlanSendsTheYAMLAndReturnsTheReport(t *testing.T) {
@@ -511,13 +523,27 @@ func TestSavePlanWritesADraftAndReadsItBack(t *testing.T) {
 	data := writes[0]["data"].(map[string]any)
 	assert.Equal(t, "draft", data["status"], "the stored record is a draft")
 	assert.Equal(t, "Test plan", data["description"])
-	assert.NotContains(t, writes[0], "etag", "a new record is written without a precondition")
+	assert.Equal(t, createOnlyETag, writes[0]["etag"], "a new record is written on the condition that none exists")
 	usr, _ := writes[0]["usr_mtd"].(map[string]any)
 	assert.Equal(t, "10 samples, agreement 0.9", usr["comment"])
 	assert.Equal(t, []any{"ai-draft"}, usr["tags"])
 
 	// What the engine validated is what was stored, status included.
 	assert.Contains(t, validated["yaml"], "status: draft")
+}
+
+func TestDraftRecordKeepsDatesAsWritten(t *testing.T) {
+	data, normalized, err := draftRecord("description: d\nfacts:\n  a: {op: x, args: {since: 2026-01-01, n: 5, ok: true, ratio: 0.5, list: [a, 2]}}\n")
+	require.NoError(t, err)
+	args := data["facts"].(map[string]interface{})["a"].(map[string]interface{})["args"].(map[string]interface{})
+	assert.Equal(t, "2026-01-01", args["since"], "an unquoted date stays the text the author wrote, not a time.Time")
+	assert.EqualValues(t, 5, args["n"])
+	assert.Equal(t, true, args["ok"])
+	assert.Equal(t, 0.5, args["ratio"])
+	assert.Equal(t, []interface{}{"a", 2}, args["list"])
+	assert.Contains(t, normalized, "status: draft")
+	_, err = json.Marshal(data)
+	require.NoError(t, err, "the record must encode as JSON")
 }
 
 func TestSavePlanNeverWritesActive(t *testing.T) {
@@ -545,11 +571,11 @@ func TestSavePlanRefusesManagedActiveAndExistingNames(t *testing.T) {
 	g.records["my-draft"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true, "comment": "keep"}}
 
 	for name, wantReason := range map[string]string{
-		"managed-one": "platform-managed",
-		"live-one":    "active",
+		"managed-one":   "platform-managed",
+		"live-one":      "active",
 		"hand-promoted": "active",
-		"my-draft":    "overwrite=true",
-		"old-draft":   "", // listed by the engine as a draft, no hive record: allowed
+		"my-draft":      "overwrite=true",
+		"old-draft":     "", // listed by the engine as a draft, no hive record: allowed
 	} {
 		res, body := run(t, "investigate_save_plan", saveArgs(name))
 		if wantReason == "" {
@@ -661,4 +687,77 @@ func TestNowIsTheClockOfThePollingLoop(t *testing.T) {
 	assert.Equal(t, false, body["done"])
 	assert.NotZero(t, polls)
 	assert.Less(t, polls, 10)
+}
+
+func TestSavePlanCreateDoesNotOverwriteARecordThatAppearedMeanwhile(t *testing.T) {
+	g := savePlanGateway(t)
+	// A person creates the active template between this tool's existence check and its write.
+	g.onMtdRead = func() {
+		g.records["raced"] = map[string]any{"data": map[string]any{"status": "active", "description": "mine"}, "sys_mtd": map[string]any{"etag": "e9"}, "usr_mtd": map[string]any{"enabled": true}}
+	}
+	res, _ := run(t, "investigate_save_plan", saveArgs("raced"))
+	require.True(t, res.IsError, "the hive refuses the conditional create: %s", text(res))
+	assert.Equal(t, "mine", g.records["raced"]["data"].(map[string]any)["description"], "the person's record is untouched")
+	assert.Equal(t, "active", g.records["raced"]["data"].(map[string]any)["status"])
+}
+
+func TestSaveOverwriteReplacesOnlyDraftsAndKeepsAPersonsTags(t *testing.T) {
+	g := savePlanGateway(t)
+	g.records["odd"] = map[string]any{"data": map[string]any{"status": "Active"}, "sys_mtd": map[string]any{"etag": "e1"}, "usr_mtd": map[string]any{"enabled": true}}
+	g.records["legacy"] = map[string]any{"data": map[string]any{"description": "no status"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true, "tags": []any{"reviewed", "ai-draft"}, "comment": "old"}}
+	g.records["mine"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e3"}, "usr_mtd": map[string]any{"enabled": true, "tags": []any{"team-a"}}}
+
+	args := saveArgs("odd")
+	args["overwrite"] = true
+	res, body := run(t, "investigate_save_plan", args)
+	require.True(t, res.IsError)
+	assert.Contains(t, body["reason"], `status "Active"`, "a status this tool does not know is not a draft")
+	assert.Empty(t, g.hiveWrites())
+
+	for name, want := range map[string][]any{"legacy": {"reviewed", "ai-draft"}, "mine": {"team-a", "ai-draft"}} {
+		args := saveArgs(name)
+		args["overwrite"] = true
+		res, _ := run(t, "investigate_save_plan", args)
+		require.False(t, res.IsError, name+": "+text(res))
+		assert.Equal(t, want, g.records[name]["usr_mtd"].(map[string]any)["tags"], name)
+	}
+}
+
+// A call that asks the engine to hold the answer is given that long, not the ordinary timeout: abandoning it
+// would leave a run or a wave going on, unseen.
+func TestHeldCallsOutliveTheOrdinaryTimeout(t *testing.T) {
+	g := newGateway(t)
+	slow := func(answer any) func(*http.Request, []byte) (int, any) {
+		return func(*http.Request, []byte) (int, any) { time.Sleep(300 * time.Millisecond); return 200, answer }
+	}
+	g.on("POST runs", slow(map[string]any{"run": map[string]any{"run_id": "r1"}}))
+	g.on("POST waves", slow(map[string]any{"results": []any{}}))
+	g.on("GET templates", slow(map[string]any{"templates": []any{}}))
+
+	origTimeout, origMargin := requestTimeout, waitMargin
+	t.Cleanup(func() { requestTimeout, waitMargin = origTimeout, origMargin })
+	requestTimeout, waitMargin = 100*time.Millisecond, 0
+
+	res, _ := run(t, "investigate_start", map[string]interface{}{"template": "t", "detection_id": "d", "wait_seconds": float64(2)})
+	assert.False(t, res.IsError, "wait_seconds 2 holds the call: %s", text(res))
+	res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": []interface{}{map[string]interface{}{"id": "a", "op": "x"}}, "deadline_ms": float64(2000)})
+	assert.False(t, res.IsError, "deadline_ms 2000 holds the call: %s", text(res))
+	res, _ = run(t, "investigate_list_templates", nil)
+	assert.True(t, res.IsError, "an ordinary call still times out at requestTimeout")
+}
+
+func TestTestPlanCompactsCostsAndFlagsInconclusiveSamples(t *testing.T) {
+	g := newGateway(t)
+	r := sampleResult(0, "none", true)
+	r["verdict"] = map[string]any{"label": "inconclusive", "decided": true}
+	r["cost"] = map[string]any{"steps": 4, "llm_usd": 0.01, "usage_version": 2, "speculation_efficiency": 0.5, "span_ms": 9}
+	obj := testObject("done", true, 1, r)
+	obj["summary"] = map[string]any{"samples": 1, "cost": map[string]any{"steps": 4, "concurrency": 0.9, "work_ms": 3}}
+	g.reply("POST test-plan", 200, obj)
+	_, body := run(t, "investigate_test_plan", map[string]interface{}{"template": "t", "samples": []interface{}{map[string]interface{}{"case_id": "1"}}})
+	assert.Equal(t, []any{float64(0)}, body["undecided"], "an inconclusive verdict is undecided even when the engine says decided")
+	cost := body["results"].([]any)[0].(map[string]any)["cost"].(map[string]any)
+	assert.EqualValues(t, 4, cost["steps"])
+	assert.NotContains(t, cost, "speculation_efficiency")
+	assert.NotContains(t, body["summary"].(map[string]any)["cost"], "concurrency")
 }

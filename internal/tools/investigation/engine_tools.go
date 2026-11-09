@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
@@ -23,17 +24,22 @@ const authoringLoop = "Plan authoring loop: (1) investigate_authoring_kit once; 
 	"past alerts, then read the disagreements, unknowns and costs and refine (back to 3); (6) investigate_save_plan, " +
 	"which always saves a DRAFT. A person promotes a draft to active in the console; no tool can."
 
+// maxWaveDeadlineMS bounds a wave's deadline: the call holds its connection for that long.
+const maxWaveDeadlineMS = 300000
+
 var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true}
 
 func init() {
 	register("investigate_operators",
 		"List the operators a plan template can call in this org: per operator its class, cost class, arguments "+
 			"(`args`: name, type, required) and the shape of the fact it produces (`output`), and whether this org may use it "+
-			"(`available`, `why`). The authoring kit already contains this list; call this to re-read or filter it. "+
+			"(`available`, `why`). The authoring kit already contains this list, but all at once it is large (about 14k tokens): "+
+			"call this with `brief` for the index, then with `names` for the full rows of the operators you will use. "+
 			"Requires investigation.get and insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("filter", mcp.Description("Keep only operators whose name, class or description contains this text (case-insensitive), for example `search` or `entity`.")),
-			mcp.WithBoolean("brief", mcp.Description("Keep only name, class, description, available and why for each operator: a quick index. Call again with `filter` for the full row of one operator.")),
+			mcp.WithArray("names", mcp.WithStringItems(), mcp.Description("Keep only these operators (exact names, for example [\"detection.get\", \"ioc.prevalence\"]): their full rows, args and output fields included.")),
+			mcp.WithBoolean("brief", mcp.Description("Keep only name, class, description, available and why for each operator: a quick index. Then call again with `names` for the full rows of the operators you will use.")),
 		}, handleOperators)
 
 	register("investigate_authoring_kit",
@@ -41,8 +47,11 @@ func init() {
 			"guide (how facts, signals, proofs, evidence, respond and report work, when a result is unknown or complete, the "+
 			"common mistakes), the org's typed operator catalog (the fields each operator produces, which operators the org "+
 			"may use), the platform's managed templates as examples, the org's effective policy and budgets, and every "+
-			"validation code with its usual fix. Call it FIRST, once, and keep it: the full kit is about 25-30k tokens. Later, "+
-			"pass `sections` to re-read only part of it. `size` says what was returned. Requires investigation.get and "+
+			"validation code with its usual fix. Call it FIRST and keep what it says. The whole kit is about 33k tokens, more "+
+			"than many clients accept in one tool result, so fetch it in pieces: sections=\"guide,policy,codes\" (read "+
+			"first), then sections=\"schema,examples\". The operators section alone is about 14k tokens and also too large "+
+			"for some clients: get the operator index with investigate_operators (brief), then the full rows of the ones you "+
+			"use with investigate_operators (names). `size` says what was returned. Requires investigation.get and "+
 			"insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithArray("sections", mcp.WithStringItems(), mcp.Description("Optional. Any of schema, guide, operators, examples, policy, codes. Omit for the whole kit.")),
@@ -190,21 +199,32 @@ func handleOperators(ctx context.Context, args map[string]interface{}) (*mcp.Cal
 	if err != nil {
 		return fail(err)
 	}
+	names, err := stringList(args, "names")
+	if err != nil {
+		return fail(err)
+	}
 	out, err := call(ctx, engineCall{method: http.MethodGet, suffix: "operators"})
 	if err != nil {
 		return fail(err)
 	}
-	return tools.SuccessResult(shapeOperators(out, filter, brief)), nil
+	return tools.SuccessResult(shapeOperators(out, filter, names, brief)), nil
 }
 
 // shapeOperators applies the filter and brief options to the engine's operator list.
-func shapeOperators(out map[string]interface{}, filter string, brief bool) map[string]interface{} {
+func shapeOperators(out map[string]interface{}, filter string, names []string, brief bool) map[string]interface{} {
 	rows, _ := out["operators"].([]interface{})
 	needle := strings.ToLower(filter)
+	want := map[string]bool{}
+	for _, n := range names {
+		want[n] = true
+	}
 	kept := make([]interface{}, 0, len(rows))
 	for _, r := range rows {
 		row, ok := r.(map[string]interface{})
 		if !ok {
+			continue
+		}
+		if len(want) > 0 && !want[str(row["name"])] {
 			continue
 		}
 		if needle != "" {
@@ -356,7 +376,7 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	if wait > 0 {
 		body["wait_seconds"] = wait
 	}
-	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "runs", body: body})
+	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "runs", body: body, timeout: time.Duration(wait)*time.Second + waitMargin})
 	if err != nil {
 		return fail(err)
 	}
@@ -426,15 +446,15 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 	}
 	body := map[string]interface{}{"steps": steps}
 	if given {
-		if deadline <= 0 || deadline > 600000 {
-			return tools.ErrorResult("deadline_ms must be between 1 and 600000"), nil
+		if deadline <= 0 || deadline > maxWaveDeadlineMS {
+			return tools.ErrorResultf("deadline_ms must be between 1 and %d", maxWaveDeadlineMS), nil
 		}
 		body["deadline_ms"] = deadline
 	}
 	if inputs != nil {
 		body["inputs"] = inputs
 	}
-	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "waves", body: body})
+	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "waves", body: body, timeout: time.Duration(deadline)*time.Millisecond + waitMargin})
 	if err != nil {
 		return fail(err)
 	}

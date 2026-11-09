@@ -22,6 +22,9 @@ const (
 	maxTestSummaryRunes = 2000
 	// aiDraftTag marks a record this tool wrote, so a reviewer can find the drafts an agent made.
 	aiDraftTag = "ai-draft"
+	// createOnlyETag is sent with the write of a record that did not exist: it matches no stored etag, so the
+	// hive refuses the write if the record exists by then.
+	createOnlyETag = "create-only: the record must not exist"
 )
 
 // planNameRe is the shape of a template name this tool will create: the record key of the hive and the name
@@ -88,22 +91,35 @@ func handleSavePlan(ctx context.Context, args map[string]interface{}) (*mcp.Call
 	}
 	client := hive.NewClient(org)
 	existing, err := client.Get(lc.HiveArgs{HiveName: planHive, PartitionKey: oid, Key: name})
-	etag := ""
+	var etag string
+	tags := []string{aiDraftTag}
 	switch {
 	case err == nil:
-		if str(existing.Data["status"]) == statusActive {
+		// Only a record that says it is a draft, or says nothing (a draft by the engine's default), is replaced:
+		// "active" and any value this tool does not know are left alone.
+		switch status := str(existing.Data["status"]); status {
+		case statusDraft, "":
+		case statusActive:
 			return refuseOrFail(refusal(fmt.Sprintf("template %q is active: this tool never overwrites an active template. Save your version under a new name; a person decides in the console whether it replaces the active one.", name)))
+		default:
+			return refuseOrFail(refusal(fmt.Sprintf("the record %q has status %q, which is not draft: this tool only replaces drafts. Save under another name.", name, status)))
 		}
 		if !overwrite {
 			return refuseOrFail(refusal(fmt.Sprintf("a draft named %q already exists: pass overwrite=true to replace it, or save under another name", name)))
 		}
 		etag = existing.SysMtd.Etag
+		// A person's tags on the draft stay.
+		tags = mergeTags(existing.UsrMtd.Tags, aiDraftTag)
 	case hive.IsRecordNotFound(err):
+		// No record yet: the write must create it. The hive refuses a conditional write whose etag differs
+		// from the stored one, and no stored etag equals this one, so a record created (or promoted)
+		// between the check above and the write is not overwritten.
+		etag = createOnlyETag
 	default:
 		return tools.ErrorResultf("could not check whether %q exists: %v", name, err), nil
 	}
 
-	overrides := hive.MetadataOverrides{Tags: []string{aiDraftTag}}
+	overrides := hive.MetadataOverrides{Tags: tags}
 	if summary != "" {
 		overrides.Comment = &summary
 	}
@@ -120,13 +136,17 @@ func handleSavePlan(ctx context.Context, args map[string]interface{}) (*mcp.Call
 	if str(stored.Data["status"]) != statusDraft {
 		return tools.ErrorResultf("the record %q was written but its status reads %q, not draft: have a person check it in the console", name, str(stored.Data["status"])), nil
 	}
+	warnings := report["warnings"]
+	if warnings == nil {
+		warnings = []interface{}{}
+	}
 	out := map[string]interface{}{
 		"saved":       true,
 		"name":        name,
 		"status":      statusDraft,
 		"last_author": stored.SysMtd.LastAuthor,
 		"etag":        stored.SysMtd.Etag,
-		"warnings":    report["warnings"],
+		"warnings":    warnings,
 		"next_step":   "The draft cannot run on its own. A person reviews it in the console (Investigations, Templates) and promotes it to active. Until then it runs only through investigate_test_plan or a run a person starts, with autonomy capped at suggest.",
 	}
 	if warning != "" {
@@ -142,13 +162,21 @@ func draftRecord(src string) (map[string]interface{}, string, error) {
 	if strings.TrimSpace(src) == "" {
 		return nil, "", fmt.Errorf("yaml is required")
 	}
-	var data map[string]interface{}
-	if err := yaml.Unmarshal([]byte(src), &data); err != nil {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(src), &doc); err != nil {
 		return nil, "", fmt.Errorf("the template is not valid YAML: %v", err)
 	}
-	if data == nil {
+	if len(doc.Content) == 0 {
 		return nil, "", fmt.Errorf("the template is empty")
 	}
+	if doc.Content[0].Kind != yaml.MappingNode {
+		return nil, "", fmt.Errorf("the template must be a YAML mapping (description, applies_to, facts, ...)")
+	}
+	value, err := nodeValue(doc.Content[0])
+	if err != nil {
+		return nil, "", fmt.Errorf("the template is not valid YAML: %v", err)
+	}
+	data := value.(map[string]interface{})
 	if v, ok := data["status"]; ok {
 		s, isString := v.(string)
 		switch {
@@ -168,6 +196,49 @@ func draftRecord(src string) (map[string]interface{}, string, error) {
 		return nil, "", fmt.Errorf("cannot encode the template: %v", err)
 	}
 	return data, string(out), nil
+}
+
+// nodeValue converts a YAML node to plain JSON-compatible values. Unlike yaml.Unmarshal into an interface{}, it
+// keeps an unquoted date or timestamp as the text the author wrote: the engine reads it as that text, and a
+// time.Time would be stored as a different string.
+func nodeValue(n *yaml.Node) (interface{}, error) {
+	switch n.Kind {
+	case yaml.AliasNode:
+		return nodeValue(n.Alias)
+	case yaml.MappingNode:
+		m := make(map[string]interface{}, len(n.Content)/2)
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i]
+			if k.Kind != yaml.ScalarNode {
+				return nil, fmt.Errorf("line %d: a mapping key must be a plain value", k.Line)
+			}
+			v, err := nodeValue(n.Content[i+1])
+			if err != nil {
+				return nil, err
+			}
+			m[k.Value] = v
+		}
+		return m, nil
+	case yaml.SequenceNode:
+		l := make([]interface{}, 0, len(n.Content))
+		for _, c := range n.Content {
+			v, err := nodeValue(c)
+			if err != nil {
+				return nil, err
+			}
+			l = append(l, v)
+		}
+		return l, nil
+	default:
+		if n.Tag == "!!timestamp" {
+			return n.Value, nil
+		}
+		var v interface{}
+		if err := n.Decode(&v); err != nil {
+			return nil, err
+		}
+		return v, nil
+	}
 }
 
 // refuseIfLoaded refuses a name that the engine already serves as a managed template or as an active one.
@@ -204,6 +275,25 @@ func refuseOrFail(err error) (*mcp.CallToolResult, error) {
 		return notSaved(map[string]interface{}{"saved": false, "reason": string(r)}), nil
 	}
 	return tools.ErrorResult(err.Error()), nil
+}
+
+// mergeTags is the existing tags plus add, in order, without duplicates.
+func mergeTags(existing []string, add string) []string {
+	out := make([]string, 0, len(existing)+1)
+	seen := false
+	for _, t := range existing {
+		if t == add {
+			if seen {
+				continue
+			}
+			seen = true
+		}
+		out = append(out, t)
+	}
+	if !seen {
+		out = append(out, add)
+	}
+	return out
 }
 
 func hasItems(v interface{}) bool {
