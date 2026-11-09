@@ -204,7 +204,9 @@ func draftRecord(src string) (map[string]interface{}, string, error) {
 func nodeValue(n *yaml.Node) (interface{}, error) {
 	switch n.Kind {
 	case yaml.AliasNode:
-		return nodeValue(n.Alias)
+		// yaml.v3 only guards against self-referencing and exponentially expanding aliases when it decodes
+		// into a value, not into a yaml.Node, and a template has no use for them.
+		return nil, fmt.Errorf("line %d: YAML anchors and aliases are not supported in a template; write the value out", n.Line)
 	case yaml.MappingNode:
 		m := make(map[string]interface{}, len(n.Content)/2)
 		for i := 0; i+1 < len(n.Content); i += 2 {

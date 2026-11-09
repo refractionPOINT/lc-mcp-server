@@ -761,3 +761,23 @@ func TestTestPlanCompactsCostsAndFlagsInconclusiveSamples(t *testing.T) {
 	assert.NotContains(t, cost, "speculation_efficiency")
 	assert.NotContains(t, body["summary"].(map[string]any)["cost"], "concurrency")
 }
+
+func TestDraftRecordRefusesYAMLAliases(t *testing.T) {
+	bomb := "a: &a [x, x, x, x, x, x, x, x, x]\nb: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a]\nc: &c [*b, *b, *b, *b, *b, *b, *b, *b, *b]\nd: [*c, *c, *c, *c, *c, *c, *c, *c, *c]\n"
+	for name, src := range map[string]string{
+		"self reference":    "a: &x [*x]\n",
+		"expanding aliases": bomb,
+		"plain alias":       "a: &x 1\nb: *x\n",
+		"merge key":         "base: &base {op: x}\nfacts:\n  f:\n    <<: *base\n",
+	} {
+		done := make(chan error, 1)
+		go func() { _, _, err := draftRecord(src); done <- err }()
+		select {
+		case err := <-done:
+			require.Error(t, err, name)
+			assert.Contains(t, err.Error(), "aliases", name)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: draftRecord did not return", name)
+		}
+	}
+}
