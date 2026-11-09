@@ -120,6 +120,9 @@ type RecordWrite struct {
 	Key          string
 	Data         lc.Dict
 	Overrides    MetadataOverrides
+	// ETag, when set, makes the write conditional: the hive refuses it when the record changed since the
+	// caller read it with this etag.
+	ETag string
 }
 
 // SetRecord writes a record's content while preserving the metadata the caller
@@ -181,7 +184,7 @@ func SetRecord(org *lc.Organization, w RecordWrite) (warning string, err error) 
 		warning = fmt.Sprintf("could not read the current metadata of '%s' in hive '%s' (%v); the content was written without touching usr_mtd, so if this call created the record it is disabled until enabled with set_hive_record_enabled", w.Key, w.HiveName, mtdErr)
 	}
 
-	if err := postRecordData(org, w.HiveName, partitionKey, w.Key, w.Data, usrMtd); err != nil {
+	if err := postRecordData(org, w.HiveName, partitionKey, w.Key, w.Data, usrMtd, w.ETag); err != nil {
 		return "", err
 	}
 	return warning, nil
@@ -191,7 +194,7 @@ func SetRecord(org *lc.Organization, w RecordWrite) (warning string, err error) 
 // usr_mtd only when one is given. The payload rides in gzdata (gzip+base64) so
 // large records are not capped by the gateway's 10MB form limit, matching what
 // the SDK's HiveClient.Add does.
-func postRecordData(org *lc.Organization, hiveName, partitionKey, key string, data lc.Dict, usrMtd *lc.UsrMtd) error {
+func postRecordData(org *lc.Organization, hiveName, partitionKey, key string, data lc.Dict, usrMtd *lc.UsrMtd, etag string) error {
 	// The key goes into the request path below.
 	if err := tools.ValidateHiveRecordKey(key); err != nil {
 		return err
@@ -212,6 +215,9 @@ func postRecordData(org *lc.Organization, hiveName, partitionKey, key string, da
 	req := lc.Dict{"gzdata": zDat.String()}
 	if usrMtd != nil {
 		req["usr_mtd"] = *usrMtd
+	}
+	if etag != "" {
+		req["etag"] = etag
 	}
 
 	resp := lc.Dict{}
@@ -267,6 +273,9 @@ func SetRecordMetadata(org *lc.Organization, hiveName, partitionKey, key string,
 func isRecordNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "RECORD_NOT_FOUND")
 }
+
+// IsRecordNotFound is isRecordNotFound for other tool packages.
+func IsRecordNotFound(err error) bool { return isRecordNotFound(err) }
 
 // BriefData keeps only the given index fields of a record payload, which is
 // what makes a listing usable as an index instead of a dump of every document

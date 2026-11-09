@@ -164,6 +164,8 @@ The server organizes tools into profiles for different use cases:
 | **cloud_security_readonly** | Read-only Cloud Security | CloudSec reads; local scanning and writes excluded |
 | **email_security** | MailSec | Messages, campaigns, analysis, actions and onboarding diagnostics |
 | **email_security_readonly** | MailSec reads | Messages, coverage and history using mailsec.get; privileged diagnostics and raw EML excluded |
+| **investigation_engine** | Investigation Engine plans and runs | Write investigation plan templates (saved as drafts), dry-run them on past alerts, start and read runs; see [docs/INVESTIGATION-ENGINE.md](docs/INVESTIGATION-ENGINE.md) |
+| **investigation_engine_readonly** | Investigation Engine reads | Authoring kit, operator catalog, plan validation, templates and runs |
 | **all** | All profiles combined | Full platform access |
 
 ## Configuration

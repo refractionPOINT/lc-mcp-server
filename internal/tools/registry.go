@@ -716,6 +716,27 @@ var ProfileDefinitions = map[string][]string{
 		"cloudsec_entity_sightings",
 		"cloudsec_entity_activity",
 	},
+	"investigation_engine": {
+		// Investigation Engine: write plan templates (always saved as drafts), dry-run them on past alerts,
+		// start and read runs.
+		"investigate_operators",
+		"investigate_authoring_kit",
+		"investigate_validate_plan",
+		"investigate_test_plan",
+		"investigate_save_plan",
+		"investigate_list_templates",
+		"investigate_start",
+		"investigate_get",
+		"investigate_wave",
+	},
+	"investigation_engine_readonly": {
+		// Investigation Engine reads: the authoring kit, operators, validation, templates and runs.
+		"investigate_operators",
+		"investigate_authoring_kit",
+		"investigate_validate_plan",
+		"investigate_list_templates",
+		"investigate_get",
+	},
 }
 
 // RegisterTool adds a tool to the registry
