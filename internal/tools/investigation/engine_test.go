@@ -574,17 +574,41 @@ func TestWaveShowsTheEnginesCodedErrors(t *testing.T) {
 	assert.Contains(t, text(res), "did you mean ioc.prevalence")
 }
 
-func TestPacksListsAllOrOne(t *testing.T) {
+func TestPacksIndexByDefaultFullForOneOrAll(t *testing.T) {
 	g := newGateway(t)
-	g.reply("GET packs", 200, map[string]any{"packs": []any{map[string]any{"name": "host_context", "exports": []any{map[string]any{"name": "hostname", "ref": "<id>__card.display_name"}}}}})
+	pack := map[string]any{
+		"name": "host_context", "description": "Who a sensor is.", "steps": 3, "cost_class": "free", "version": 1, "managed": true,
+		"facts": []any{"resolve"}, "operators": []any{"entity.resolve"},
+		"params":  []any{map[string]any{"name": "sid", "type": "string", "required": true, "description": "Sensor id."}},
+		"exports": []any{map[string]any{"name": "hostname", "ref": "<id>__card.display_name", "description": "Host name.", "fact": "card", "path": "display_name"}},
+	}
+	g.on("GET packs", func(r *http.Request, _ []byte) (int, any) { return 200, map[string]any{"packs": []any{pack}} })
+
+	// The index keeps what is needed to pick and call a pack, and drops the rest.
 	res, body := run(t, "investigate_packs", nil)
 	require.False(t, res.IsError, text(res))
-	assert.Equal(t, "host_context", body["packs"].([]any)[0].(map[string]any)["name"])
-	_, _ = run(t, "investigate_packs", map[string]interface{}{"name": " host_context "})
-	assert.Equal(t, []string{"GET packs", "GET packs?name=host_context"}, g.calls())
+	row := body["packs"].([]any)[0].(map[string]any)
+	assert.Equal(t, "host_context", row["name"])
+	assert.Equal(t, "Who a sensor is.", row["description"])
+	assert.NotContains(t, row, "facts")
+	assert.NotContains(t, row, "operators")
+	assert.Equal(t, []any{map[string]any{"name": "sid", "type": "string", "required": true}}, row["params"])
+	assert.Equal(t, []any{map[string]any{"name": "hostname", "ref": "<id>__card.display_name"}}, row["exports"])
+
+	// One pack, or all with full: the engine's rows untouched.
+	for _, args := range []map[string]interface{}{{"name": " host_context "}, {"full": true}} {
+		_, body = run(t, "investigate_packs", args)
+		row = body["packs"].([]any)[0].(map[string]any)
+		assert.Contains(t, row, "operators")
+		assert.Contains(t, row["exports"].([]any)[0], "description")
+	}
+	assert.Equal(t, []string{"GET packs", "GET packs?name=host_context", "GET packs"}, g.calls())
+
 	res, _ = run(t, "investigate_packs", map[string]interface{}{"name": float64(3)})
 	assert.True(t, res.IsError)
-	assert.Len(t, g.calls(), 2, "a malformed name is refused before any request")
+	res, _ = run(t, "investigate_packs", map[string]interface{}{"full": "yes"})
+	assert.True(t, res.IsError)
+	assert.Len(t, g.calls(), 3, "a malformed argument is refused before any request")
 }
 
 func TestKitAcceptsThePacksSection(t *testing.T) {

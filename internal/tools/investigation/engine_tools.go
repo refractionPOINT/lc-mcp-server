@@ -209,13 +209,14 @@ func init() {
 
 	register("investigate_packs",
 		"List the fact packs: named, versioned, tested bundles of questions that keep coming back in investigations, "+
-			"written once. Per pack: `description`, `params` (name, type, required), `exports` (each with a description and "+
-			"a `ref` form to use in `stop_when` or in another step's argument, `<id>` standing for the id of the step that "+
-			"uses the pack), the operators it runs, its step count and `cost_class` (free, llm, billed). Use a pack in "+
-			"investigate_wave as {id, use: <pack>, args: {...}, select: [<export names>]}. Pass `name` for one pack. "+
-			"Requires investigation.get and insight.evt.get. "+waveLoop,
+			"written once. By default an INDEX: per pack its `description`, `params` (name, type, required), `exports` (name "+
+			"and `ref`, the form to use in `stop_when` or in another step's argument, `<id>` standing for the id of the step "+
+			"that uses the pack), `steps` and `cost_class` (free, llm, billed). Pass `name` for one pack's full row (every "+
+			"description, the operators it runs), or `full: true` for every full row (large). Use a pack in investigate_wave "+
+			"as {id, use: <pack>, args: {...}, select: [<export names>]}. Requires investigation.get and insight.evt.get. "+waveLoop,
 		[]mcp.ToolOption{
-			mcp.WithString("name", mcp.Description("Optional. Return only this pack, for example host_context.")),
+			mcp.WithString("name", mcp.Description("Optional. Return only this pack, in full, for example host_context.")),
+			mcp.WithBoolean("full", mcp.Description("Return the full row of every pack instead of the index. Default false.")),
 		}, handlePacks)
 }
 
@@ -568,15 +569,59 @@ func handlePacks(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	if err != nil {
 		return fail(err)
 	}
+	full, err := optBool(args, "full")
+	if err != nil {
+		return fail(err)
+	}
 	query := url.Values{}
-	if name = strings.TrimSpace(name); name != "" {
+	name = strings.TrimSpace(name)
+	if name != "" {
 		query.Set("name", name)
 	}
 	out, err := call(ctx, engineCall{method: http.MethodGet, suffix: "packs", query: query})
 	if err != nil {
 		return fail(err)
 	}
+	if name == "" && !full {
+		out = packIndex(out)
+	}
 	return tools.SuccessResult(out), nil
+}
+
+// packIndex cuts each pack to what an agent needs to choose and call one: the descriptions of every export and the
+// facts and operators behind them are left for the pack's full row.
+func packIndex(out map[string]interface{}) map[string]interface{} {
+	rows, _ := out["packs"].([]interface{})
+	index := make([]interface{}, 0, len(rows))
+	for _, r := range rows {
+		row, ok := r.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		short := pick(row, "name", "description", "steps", "cost_class")
+		params := []interface{}{}
+		for _, p := range asList(row["params"]) {
+			if m, ok := p.(map[string]interface{}); ok {
+				params = append(params, pick(m, "name", "type", "required"))
+			}
+		}
+		short["params"] = params
+		exports := []interface{}{}
+		for _, e := range asList(row["exports"]) {
+			if m, ok := e.(map[string]interface{}); ok {
+				exports = append(exports, pick(m, "name", "ref"))
+			}
+		}
+		short["exports"] = exports
+		index = append(index, short)
+	}
+	out["packs"] = index
+	return out
+}
+
+func asList(v interface{}) []interface{} {
+	l, _ := v.([]interface{})
+	return l
 }
 
 func str(v interface{}) string {
