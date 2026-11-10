@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -27,14 +28,22 @@ const authoringLoop = "Plan authoring loop: (1) investigate_authoring_kit once; 
 
 // waveLoop is the loop a novel investigation follows with waves and fact packs. investigate_wave and
 // investigate_packs both teach it.
-const waveLoop = "Investigation loop (no template needed): (1) investigate_packs once to see the fact packs, the " +
-	"bundles of questions that keep coming back (host context, process tree, hash spread, sender or domain " +
-	"reputation, ...) with their arguments and exports; (2) investigate_wave with one step per pack or operator " +
-	"you need, each with `select` naming only the fields you will read; (3) set `stop_when` to the expressions that " +
-	"would settle the question, so the engine cancels the rest the moment one is true; (4) read the compact facts " +
-	"(`status`, `complete`, `value`, `stopped_by`, `usage`) and plan the next wave from them; (5) stop when the " +
-	"question is answered. A step that is `unknown` or not `complete` established nothing: it is never an absence. " +
-	"Do not set `full` unless a compact value hides something you need."
+const waveLoop = "Investigation loop (no template needed): (1) investigate_packs once: its index is enough to write the waves " +
+	"(parameters, exports, reference forms), you do not need investigate_operators for it; (2) investigate_wave with one " +
+	"step per pack or operator you need, each with `select` naming only the fields you will read; (3) set `stop_when` " +
+	"to the expressions that would settle the question, so the engine cancels the rest the moment one is true; (4) read " +
+	"the compact facts (`status`, `complete`, `value`, `stopped_by`, `usage`) and plan the next wave from them; (5) stop " +
+	"when the question is answered. A step that is `unknown` or not `complete` established nothing: it is never an " +
+	"absence. Do not set `full` unless a compact value hides something you need. Who and what is in the org: the " +
+	"`org_roster` pack lists the machines (offline ones included) and their owners."
+
+// preferWaves opens the description of the tools that run waves: when the same questions can be asked with the
+// per-call read tools of this server, a wave is the way for any question that needs more than one check.
+const preferWaves = "PREFER THIS for any question that needs more than one check (who and what is affected, what a host or a " +
+	"user did, how widespread an indicator is): send all the checks in ONE investigate_wave instead of calling " +
+	"list_sensors, get_historic_events, run_lcql_query, the mailsec_* and cloudsec_entity_* tools one at a time. The " +
+	"engine runs them in parallel and returns compact answers; use the single read tools only for one lookup or for a " +
+	"detail a wave did not return. "
 
 // maxStopWhen is how many stop_when expressions a wave may carry.
 const maxStopWhen = 8
@@ -48,7 +57,8 @@ func init() {
 	register("investigate_operators",
 		"List the operators a plan template can call in this org: per operator its class, cost class, arguments "+
 			"(`args`: name, type, required) and the shape of the fact it produces (`output`), and whether this org may use it "+
-			"(`available`, `why`). The authoring kit already contains this list, but all at once it is large (about 14k tokens): "+
+			"(`available`, `why`). You only need this for a custom `op` step, or when drafting a plan template: waves that use "+
+			"fact packs (investigate_packs) never need it. The authoring kit already contains this list, but all at once it is large (about 14k tokens): "+
 			"call this with `brief` for the index, then with `names` for the full rows of the operators you will use. "+
 			"Requires investigation.get and insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
@@ -168,7 +178,7 @@ func init() {
 		}, handleGet)
 
 	register("investigate_wave",
-		"Hand the engine a whole batch of questions at once and get compact, typed answers. The engine runs every ready "+
+		preferWaves+"Hands the engine a whole batch of questions at once and gets compact, typed answers. The engine runs every ready "+
 			"step in parallel with YOUR token (no plan, no verdict, nothing stored), reuses what it already knows, and can "+
 			"stop as soon as the answer is known. `steps` is a list of {id, op|use, args, select, limit}: `op` is an "+
 			"operator (investigate_operators), `use` a fact pack (investigate_packs) with its parameters in `args`; "+
@@ -208,12 +218,15 @@ func init() {
 		}, handleWave)
 
 	register("investigate_packs",
-		"List the fact packs: named, versioned, tested bundles of questions that keep coming back in investigations, "+
-			"written once. By default an INDEX: per pack its `description`, `params` (name, type, required), `exports` (name "+
-			"and `ref`, the form to use in `stop_when` or in another step's argument, `<id>` standing for the id of the step "+
-			"that uses the pack), `steps` and `cost_class` (free, llm, billed). Pass `name` for one pack's full row (every "+
-			"description, the operators it runs), or `full: true` for every full row (large). Use a pack in investigate_wave "+
-			"as {id, use: <pack>, args: {...}, select: [<export names>]}. Requires investigation.get and insight.evt.get. "+waveLoop,
+		"Call this FIRST for a multi-check question, then answer it with investigate_wave (see its description: waves "+
+			"replace many single read-tool calls). Lists the fact packs: named, versioned, tested bundles of questions "+
+			"(host context, process tree, hash spread, domain and sender reputation, a user's activity, a message's "+
+			"outcome, and `org_roster`: the org's machines and the people who own them). By default a compact INDEX that is "+
+			"enough on its own to write the waves: per pack what it does, its args with types (* required, =default) and "+
+			"its exports with type, reference form (for `stop_when` and other steps' args) and a few words of meaning. "+
+			"You do NOT need investigate_operators for pack-driven work; it is only for a custom `op` step. Pass `name` for "+
+			"one pack's full row (every description, the operators it runs), or `full: true` for every full row (large). "+
+			"Requires investigation.get and insight.evt.get. "+waveLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("name", mcp.Description("Optional. Return only this pack, in full, for example host_context.")),
 			mcp.WithBoolean("full", mcp.Description("Return the full row of every pack instead of the index. Default false.")),
@@ -590,8 +603,26 @@ func handlePacks(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	return tools.SuccessResult(out), nil
 }
 
-// packIndex cuts each pack to what an agent needs to choose and call one: the descriptions of every export and the
-// facts and operators behind them are left for the pack's full row.
+// packIndexHow is said once at the top of the index: how to read an entry and use a reference.
+const packIndexHow = "Use a pack as a wave step {id, use: <name>, args: {<params>}, select: [<export names>]}. " +
+	"args: name:type, * = required, =value is the default (types: str num bool int list obj any). exports are grouped " +
+	"by the fact that holds them: <fact>: [name:type meaning]. In stop_when or another step's args an export is " +
+	"<step id>__<fact>.<name>, e.g. step h on host_context: h__resolve.resolved; `name:type @path` means the path " +
+	"after the fact is <path> instead of <name>; exports under `select_only` have no such form. This index is enough " +
+	"to write the waves: investigate_operators is only needed for a custom `op` step. {name} returns one pack's full row."
+
+var typeAbbrev = map[string]string{"string": "str", "number": "num", "boolean": "bool", "integer": "int", "array": "list", "object": "obj"}
+
+func abbrevType(t string) string {
+	if a, ok := typeAbbrev[t]; ok {
+		return a
+	}
+	return t
+}
+
+// packIndex turns the engine's pack rows into an index that is enough on its own to choose and call a pack: per pack a
+// one-line meaning, its params with types, and its exports with type, reference form and a few words of meaning. The
+// operators, facts and long descriptions stay in the pack's full row.
 func packIndex(out map[string]interface{}) map[string]interface{} {
 	rows, _ := out["packs"].([]interface{})
 	index := make([]interface{}, 0, len(rows))
@@ -600,25 +631,72 @@ func packIndex(out map[string]interface{}) map[string]interface{} {
 		if !ok {
 			continue
 		}
-		short := pick(row, "name", "description", "steps", "cost_class")
-		params := []interface{}{}
+		entry := map[string]interface{}{"name": row["name"], "does": firstNonEmpty(str(row["brief"]), str(row["description"]))}
+		var args []string
 		for _, p := range asList(row["params"]) {
 			if m, ok := p.(map[string]interface{}); ok {
-				params = append(params, pick(m, "name", "type", "required"))
+				args = append(args, paramLine(m))
 			}
 		}
-		short["params"] = params
-		exports := []interface{}{}
+		entry["args"] = strings.Join(args, ", ")
+		groups := map[string][]interface{}{}
 		for _, e := range asList(row["exports"]) {
 			if m, ok := e.(map[string]interface{}); ok {
-				exports = append(exports, pick(m, "name", "ref"))
+				group, line := exportLine(m)
+				groups[group] = append(groups[group], line)
 			}
 		}
-		short["exports"] = exports
-		index = append(index, short)
+		entry["exports"] = groups
+		if c := str(row["cost_class"]); c != "" && c != "free" {
+			entry["cost"] = c
+		}
+		index = append(index, entry)
 	}
-	out["packs"] = index
-	return out
+	return map[string]interface{}{"how": packIndexHow, "packs": index}
+}
+
+// paramLine is `name:type*` (required) or `name:type=default`.
+func paramLine(p map[string]interface{}) string {
+	line := str(p["name"]) + ":" + abbrevType(str(p["type"]))
+	if req, _ := p["required"].(bool); req {
+		line += "*"
+	}
+	if d, ok := p["default"]; ok && d != nil {
+		b, _ := json.Marshal(d)
+		line += "=" + string(b)
+	}
+	return line
+}
+
+// exportLine is the group of an export (the fact that holds it, or select_only when no expression can read it) and its
+// line `name:type [@path] meaning`.
+func exportLine(e map[string]interface{}) (group, line string) {
+	name := str(e["name"])
+	line = name + ":" + abbrevType(str(e["type"]))
+	group = "select_only"
+	if ref := strings.TrimPrefix(str(e["ref"]), "<id>__"); ref != "" {
+		group = ref
+		path := ""
+		if i := strings.IndexAny(ref, ".["); i >= 0 {
+			group, path = ref[:i], strings.TrimPrefix(ref[i:], ".")
+		}
+		if path != name {
+			line += " @" + path
+		}
+	}
+	if b := firstNonEmpty(str(e["brief"]), str(e["description"])); b != "" {
+		line += " " + b
+	}
+	return group, line
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func asList(v interface{}) []interface{} {

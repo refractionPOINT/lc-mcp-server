@@ -257,6 +257,22 @@ func TestWaveToolsTeachTheInvestigationLoop(t *testing.T) {
 	}
 }
 
+// When the plain read tools are offered next to the engine's, the descriptions tell the agent to put a multi-check
+// question in one wave, to read the pack index first, and that the operator catalog is only for custom op steps.
+func TestWaveToolsPreferWavesAndKeepTheCatalogOptional(t *testing.T) {
+	wave, _ := tools.GetTool("investigate_wave")
+	packs, _ := tools.GetTool("investigate_packs")
+	ops, _ := tools.GetTool("investigate_operators")
+	assert.True(t, strings.HasPrefix(wave.Description, "PREFER THIS for any question that needs more than one check"))
+	for _, plain := range []string{"list_sensors", "get_historic_events", "run_lcql_query", "mailsec_", "cloudsec_entity_"} {
+		assert.Contains(t, wave.Description, plain, "the wave names the single calls it replaces")
+	}
+	assert.True(t, strings.HasPrefix(packs.Description, "Call this FIRST for a multi-check question"))
+	assert.Contains(t, packs.Description, "org_roster")
+	assert.Contains(t, packs.Description, "do NOT need investigate_operators")
+	assert.Contains(t, ops.Description, "only need this for a custom `op` step")
+}
+
 func TestKitPassesSectionsAndRefusesUnknownOnes(t *testing.T) {
 	g := newGateway(t)
 	g.reply("GET authoring-kit", 200, map[string]any{"kit_version": 1, "guide": "g"})
@@ -595,23 +611,32 @@ func TestWaveShowsTheEnginesCodedErrors(t *testing.T) {
 func TestPacksIndexByDefaultFullForOneOrAll(t *testing.T) {
 	g := newGateway(t)
 	pack := map[string]any{
-		"name": "host_context", "description": "Who a sensor is.", "steps": 3, "cost_class": "free", "version": 1, "managed": true,
+		"name": "host_context", "brief": "Who a sensor is", "description": "Who a sensor is, in many words.", "steps": 3, "cost_class": "free", "version": 1, "managed": true,
 		"facts": []any{"resolve"}, "operators": []any{"entity.resolve"},
-		"params":  []any{map[string]any{"name": "sid", "type": "string", "required": true, "description": "Sensor id."}},
-		"exports": []any{map[string]any{"name": "hostname", "ref": "<id>__card.display_name", "description": "Host name.", "fact": "card", "path": "display_name"}},
+		"params": []any{
+			map[string]any{"name": "sid", "type": "string", "required": true, "description": "Sensor id."},
+			map[string]any{"name": "window", "type": "array", "default": []any{"-7d", "now"}, "description": "Range."},
+		},
+		"exports": []any{
+			map[string]any{"name": "resolved", "type": "boolean", "ref": "<id>__resolve.resolved", "brief": "maps to one entity", "description": "Long.", "fact": "resolve", "path": "resolved"},
+			map[string]any{"name": "hostname", "type": "string", "ref": "<id>__card.display_name", "brief": "host name", "description": "Host name.", "fact": "card", "path": "display_name"},
+			map[string]any{"name": "ids", "type": "array", "ref": "", "brief": "all ids", "description": "Every id.", "fact": "card", "path": "rows[*].id"},
+		},
 	}
 	g.on("GET packs", func(r *http.Request, _ []byte) (int, any) { return 200, map[string]any{"packs": []any{pack}} })
 
-	// The index keeps what is needed to pick and call a pack, and drops the rest.
+	// The index is enough to call the pack: what it does, args with types, exports with type, reference form and meaning.
 	res, body := run(t, "investigate_packs", nil)
 	require.False(t, res.IsError, text(res))
+	assert.Contains(t, body["how"], "investigate_operators is only needed for a custom `op` step")
 	row := body["packs"].([]any)[0].(map[string]any)
-	assert.Equal(t, "host_context", row["name"])
-	assert.Equal(t, "Who a sensor is.", row["description"])
-	assert.NotContains(t, row, "facts")
-	assert.NotContains(t, row, "operators")
-	assert.Equal(t, []any{map[string]any{"name": "sid", "type": "string", "required": true}}, row["params"])
-	assert.Equal(t, []any{map[string]any{"name": "hostname", "ref": "<id>__card.display_name"}}, row["exports"])
+	assert.Equal(t, map[string]any{
+		"name": "host_context", "does": "Who a sensor is", "args": "sid:str*, window:list=[\"-7d\",\"now\"]",
+		"exports": map[string]any{
+			"resolve":     []any{"resolved:bool maps to one entity"},
+			"card":        []any{"hostname:str @display_name host name"},
+			"select_only": []any{"ids:list all ids"},
+		}}, row)
 
 	// One pack, or all with full: the engine's rows untouched.
 	for _, args := range []map[string]interface{}{{"name": " host_context "}, {"full": true}} {
@@ -627,6 +652,34 @@ func TestPacksIndexByDefaultFullForOneOrAll(t *testing.T) {
 	res, _ = run(t, "investigate_packs", map[string]interface{}{"full": "yes"})
 	assert.True(t, res.IsError)
 	assert.Len(t, g.calls(), 3, "a malformed argument is refused before any request")
+}
+
+// The managed packs of the engine (a fixture generated from its list_packs) keep a small index: every entry carries
+// args, exports and meanings, and the whole index stays under a ceiling so a pack cannot grow it unnoticed.
+func TestPackIndexOfTheManagedPacksStaysSmall(t *testing.T) {
+	raw, err := os.ReadFile("testdata/managed_packs.json")
+	require.NoError(t, err)
+	var full map[string]any
+	require.NoError(t, json.Unmarshal(raw, &full))
+	g := newGateway(t)
+	g.on("GET packs", func(r *http.Request, _ []byte) (int, any) { return 200, full })
+	res, body := run(t, "investigate_packs", nil)
+	require.False(t, res.IsError, text(res))
+	assert.LessOrEqual(t, len(text(res)), 7000, "the default index of the managed packs")
+	assert.Less(t, len(text(res)), len(raw)/3, "the index is a fraction of the full rows")
+	packs := body["packs"].([]any)
+	require.GreaterOrEqual(t, len(packs), 9)
+	names := map[string]bool{}
+	for _, p := range packs {
+		row := p.(map[string]any)
+		names[row["name"].(string)] = true
+		b, _ := json.Marshal(row)
+		assert.LessOrEqual(t, len(b), 1000, row["name"])
+		assert.NotEmpty(t, row["does"], row["name"])
+		assert.NotEmpty(t, row["exports"], row["name"])
+		assert.NotContains(t, string(b), "<id>", "the prefix is said once, in how")
+	}
+	assert.True(t, names["org_roster"], "the roster pack is in the index")
 }
 
 func TestKitAcceptsThePacksSection(t *testing.T) {
