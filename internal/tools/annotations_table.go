@@ -328,11 +328,12 @@ var toolAnnotations = map[string]Annotation{
 	"investigate_get":            read(),           // GET runs/{id}[/steps|/events|/case]; events long-poll is still a read
 	"investigate_list_templates": read(),           // GET templates
 	"investigate_operators":      read(),           // GET operators
+	"investigate_packs":          read(),           // GET packs: the managed fact packs; nothing changes
 	"investigate_save_plan":      destroy().Idem(), // writes the investigation_plan hive record, always status draft; replaces an existing DRAFT only with overwrite=true, never an active or managed template; same input => same state
 	"investigate_start":          destroy().Open(), // POST runs: an active template's run may act on endpoints or mail as the org's policy allows (approval by default); a draft's is capped at suggest
 	"investigate_test_plan":      write().Open(),   // POST test-plan: dry run of read-only operators with the caller's token (some task live endpoints); nothing but the 24h test record is written; new test per call
 	"investigate_validate_plan":  read(),           // POST plans/validate: type-checks the template, runs nothing, stores nothing
-	"investigate_wave":           write().Open(),   // POST waves: runs a batch of read-only operators now with the caller's token (some task live endpoints); no plan, no verdict, nothing stored
+	"investigate_wave":           write().Open(),   // POST waves: runs a batch of read-only operators and fact packs now with the caller's token (some task live endpoints); no plan, no verdict, nothing stored; validate_only runs nothing
 	// --- mailsec ---
 	"mailsec_act_on_campaign":         destroy().Idem().Open(), // POST campaigns/{id}/actions with confirm runs quarantine/trash/etc. on member mail at M365/Google; idempotent per member+attempt
 	"mailsec_act_on_message":          destroy().Idem().Open(), // POST messages/{id}/actions executes provider action (quarantine/trash/move_to_spam/banner/crawl_link); same attempt token is deduped

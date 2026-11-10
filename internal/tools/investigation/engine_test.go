@@ -196,7 +196,7 @@ facts:
 
 var allTools = []string{
 	"investigate_operators", "investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan",
-	"investigate_save_plan", "investigate_list_templates", "investigate_start", "investigate_get", "investigate_wave",
+	"investigate_save_plan", "investigate_list_templates", "investigate_start", "investigate_get", "investigate_wave", "investigate_packs",
 }
 
 func TestToolsAreInTheEngineProfiles(t *testing.T) {
@@ -219,17 +219,38 @@ func TestToolsAreInTheEngineProfiles(t *testing.T) {
 		require.True(t, ok, n)
 		assert.True(t, a.ReadOnly, n)
 	}
+	assert.True(t, readOnly["investigate_packs"], "the packs list changes nothing")
 	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_wave"} {
 		assert.False(t, readOnly[n], "%s must not be in the read-only profile", n)
 	}
 }
 
 func TestAuthoringToolsTeachTheLoop(t *testing.T) {
-	for _, n := range []string{"investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan", "investigate_save_plan", "investigate_operators", "investigate_wave"} {
+	for _, n := range []string{"investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan", "investigate_save_plan", "investigate_operators"} {
 		reg, _ := tools.GetTool(n)
 		for _, step := range []string{"investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan", "investigate_save_plan", "DRAFT"} {
 			assert.Contains(t, reg.Description, step, "%s's description must teach the loop", n)
 		}
+	}
+}
+
+// investigate_wave keeps a pointer to plan authoring, and both it and investigate_packs teach the loop of a
+// novel investigation: packs, select only what is needed, stop_when, read the compact facts, next wave, no full.
+func TestWaveToolsTeachTheInvestigationLoop(t *testing.T) {
+	for _, n := range []string{"investigate_wave", "investigate_packs"} {
+		reg, _ := tools.GetTool(n)
+		for _, word := range []string{"investigate_packs", "investigate_wave", "select", "stop_when", "compact", "next wave", "full"} {
+			assert.Contains(t, reg.Description, word, "%s's description must teach the loop", n)
+		}
+	}
+	reg, _ := tools.GetTool("investigate_wave")
+	assert.Contains(t, reg.Description, "investigate_save_plan", "the wave tool still serves plan authoring")
+	for _, p := range []string{"stop_when", "full", "validate_only", "steps", "deadline_ms", "inputs"} {
+		assert.Contains(t, reg.Schema.InputSchema.Properties, p)
+	}
+	items, _ := reg.Schema.InputSchema.Properties["steps"].(map[string]any)["items"].(map[string]any)
+	for _, p := range []string{"id", "op", "use", "args", "select", "limit"} {
+		assert.Contains(t, items["properties"], p, "a step documents %s", p)
 	}
 }
 
@@ -483,6 +504,95 @@ func TestWaveSendsTheStepsOnly(t *testing.T) {
 
 	res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": []interface{}{}})
 	assert.True(t, res.IsError)
+}
+
+// A wave with packs, select, limit, stop_when, full and validate_only goes to the engine as it was written, and
+// its compact answer comes back as is.
+func TestWavePassesPacksSelectLimitStopWhenFullAndValidateOnly(t *testing.T) {
+	g := newGateway(t)
+	var got map[string]any
+	answer := map[string]any{
+		"results": []any{map[string]any{"id": "prev", "op": "ioc.prevalence", "status": "ok", "complete": true, "ms": 12,
+			"value": map[string]any{"hosts_30d": 412}}},
+		"stopped_by": "prev.hosts_30d >= 50", "usage": map[string]any{"steps": 2, "cancelled": 1}, "compact": true,
+	}
+	g.on("POST waves", func(_ *http.Request, b []byte) (int, any) {
+		_ = json.Unmarshal(b, &got)
+		return 200, answer
+	})
+	steps := []interface{}{
+		map[string]interface{}{"id": "host", "use": "host_context", "args": map[string]interface{}{"sid": "s-1"}, "select": []interface{}{"hostname", "os"}},
+		map[string]interface{}{"id": "prev", "op": "ioc.prevalence", "args": map[string]interface{}{"file_hash": "ab"}, "select": []interface{}{"hosts_30d"}, "limit": float64(5)},
+	}
+	stop := []interface{}{"prev.hosts_30d >= 50", "host__resolve.found == false and x in [1, 2]"}
+	res, body := run(t, "investigate_wave", map[string]interface{}{"steps": steps, "stop_when": stop, "full": true, "validate_only": true})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, steps, got["steps"], "steps are forwarded untouched")
+	assert.Equal(t, stop, got["stop_when"], "an expression with commas is not split")
+	assert.Equal(t, true, got["full"])
+	assert.Equal(t, true, got["validate_only"])
+	assert.Equal(t, "prev.hosts_30d >= 50", body["stopped_by"])
+	assert.Equal(t, true, body["compact"])
+	want, _ := json.Marshal(answer["results"])
+	have, _ := json.Marshal(body["results"])
+	assert.JSONEq(t, string(want), string(have), "the compact answer is returned as is")
+
+	// Only what was asked is sent: no stop_when, full or validate_only by default (the engine's defaults apply).
+	got = nil
+	_, _ = run(t, "investigate_wave", map[string]interface{}{"steps": steps})
+	assert.NotContains(t, got, "stop_when")
+	assert.NotContains(t, got, "full")
+	assert.NotContains(t, got, "validate_only")
+}
+
+func TestWaveRefusesMalformedNewArgumentsBeforeAnyRequest(t *testing.T) {
+	g := newGateway(t)
+	g.reply("POST waves", 200, map[string]any{"results": []any{}})
+	steps := []interface{}{map[string]interface{}{"id": "a", "op": "x"}}
+	for name, args := range map[string]map[string]interface{}{
+		"stop_when string":     {"steps": steps, "stop_when": "a.b == 1"},
+		"stop_when non-string": {"steps": steps, "stop_when": []interface{}{1}},
+		"stop_when empty":      {"steps": steps, "stop_when": []interface{}{" "}},
+		"full string":          {"steps": steps, "full": "yes"},
+		"validate_only int":    {"steps": steps, "validate_only": float64(1)},
+	} {
+		res, _ := run(t, "investigate_wave", args)
+		assert.True(t, res.IsError, name)
+	}
+	assert.Empty(t, g.calls(), "nothing malformed reaches the engine")
+}
+
+// An invalid wave is the engine's bad_request: its message, with the coded errors and suggestions, is what the
+// agent reads.
+func TestWaveShowsTheEnginesCodedErrors(t *testing.T) {
+	g := newGateway(t)
+	g.reply("POST waves", 400, map[string]any{"error": "wave is invalid: [unknown_operator] steps[0].op: no operator ioc.prevalense (did you mean ioc.prevalence)", "error_code": "bad_request",
+		"errors": []any{map[string]any{"code": "unknown_operator", "suggestion": "ioc.prevalence"}}})
+	res, _ := run(t, "investigate_wave", map[string]interface{}{"steps": []interface{}{map[string]interface{}{"id": "a", "op": "ioc.prevalense"}}})
+	require.True(t, res.IsError)
+	assert.Contains(t, text(res), "[unknown_operator] steps[0].op")
+	assert.Contains(t, text(res), "did you mean ioc.prevalence")
+}
+
+func TestPacksListsAllOrOne(t *testing.T) {
+	g := newGateway(t)
+	g.reply("GET packs", 200, map[string]any{"packs": []any{map[string]any{"name": "host_context", "exports": []any{map[string]any{"name": "hostname", "ref": "<id>__card.display_name"}}}}})
+	res, body := run(t, "investigate_packs", nil)
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, "host_context", body["packs"].([]any)[0].(map[string]any)["name"])
+	_, _ = run(t, "investigate_packs", map[string]interface{}{"name": " host_context "})
+	assert.Equal(t, []string{"GET packs", "GET packs?name=host_context"}, g.calls())
+	res, _ = run(t, "investigate_packs", map[string]interface{}{"name": float64(3)})
+	assert.True(t, res.IsError)
+	assert.Len(t, g.calls(), 2, "a malformed name is refused before any request")
+}
+
+func TestKitAcceptsThePacksSection(t *testing.T) {
+	g := newGateway(t)
+	g.reply("GET authoring-kit", 200, map[string]any{"packs": []any{}})
+	res, _ := run(t, "investigate_authoring_kit", map[string]interface{}{"sections": []interface{}{"packs"}})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, []string{"GET authoring-kit?sections=packs"}, g.calls())
 }
 
 // --- save ---

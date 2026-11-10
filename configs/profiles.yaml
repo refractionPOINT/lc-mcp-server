@@ -695,11 +695,13 @@ investigation_engine:
   - investigate_start
   - investigate_get
   - investigate_wave
+  - investigate_packs
 
 investigation_engine_readonly:
-  # Investigation Engine reads: the authoring kit, operators, validation, templates and runs.
+  # Investigation Engine reads: the authoring kit, operators, fact packs, validation, templates and runs.
   - investigate_operators
   - investigate_authoring_kit
+  - investigate_packs
   - investigate_validate_plan
   - investigate_list_templates
   - investigate_get

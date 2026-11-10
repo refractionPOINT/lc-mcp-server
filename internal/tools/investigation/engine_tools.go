@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -24,10 +25,21 @@ const authoringLoop = "Plan authoring loop: (1) investigate_authoring_kit once; 
 	"past alerts, then read the disagreements, unknowns and costs and refine (back to 3); (6) investigate_save_plan, " +
 	"which always saves a DRAFT. A person promotes a draft to active in the console; no tool can."
 
+// waveLoop is the loop a novel investigation follows with waves and fact packs. investigate_wave and
+// investigate_packs both teach it.
+const waveLoop = "Investigation loop (no template needed): (1) investigate_packs once to see the fact packs, the " +
+	"bundles of questions that keep coming back (host context, process tree, hash spread, sender or domain " +
+	"reputation, ...) with their arguments and exports; (2) investigate_wave with one step per pack or operator " +
+	"you need, each with `select` naming only the fields you will read; (3) set `stop_when` to the expressions that " +
+	"would settle the question, so the engine cancels the rest the moment one is true; (4) read the compact facts " +
+	"(`status`, `complete`, `value`, `stopped_by`, `usage`) and plan the next wave from them; (5) stop when the " +
+	"question is answered. A step that is `unknown` or not `complete` established nothing: it is never an absence. " +
+	"Do not set `full` unless a compact value hides something you need."
+
 // maxWaveDeadlineMS bounds a wave's deadline: the call holds its connection for that long.
 const maxWaveDeadlineMS = 300000
 
-var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true}
+var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true, "packs": true}
 
 func init() {
 	register("investigate_operators",
@@ -47,14 +59,14 @@ func init() {
 			"guide (how facts, signals, proofs, evidence, respond and report work, when a result is unknown or complete, the "+
 			"common mistakes), the org's typed operator catalog (the fields each operator produces, which operators the org "+
 			"may use), the platform's managed templates as examples, the org's effective policy and budgets, and every "+
-			"validation code with its usual fix. Call it FIRST and keep what it says. The whole kit is about 33k tokens, more "+
+			"validation code with its usual fix, and the fact packs a plan or a wave can use. Call it FIRST and keep what it says. The whole kit is about 33k tokens, more "+
 			"than many clients accept in one tool result, so fetch it in pieces: sections=\"guide,policy,codes\" (read "+
 			"first), then sections=\"schema,examples\". The operators section alone is about 14k tokens and also too large "+
 			"for some clients: get the operator index with investigate_operators (brief), then the full rows of the ones you "+
 			"use with investigate_operators (names). `size` says what was returned. Requires investigation.get and "+
 			"insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
-			mcp.WithArray("sections", mcp.WithStringItems(), mcp.Description("Optional. Any of schema, guide, operators, examples, policy, codes. Omit for the whole kit.")),
+			mcp.WithArray("sections", mcp.WithStringItems(), mcp.Description("Optional. Any of schema, guide, operators, examples, policy, codes, packs. Omit for the whole kit.")),
 		}, handleKit)
 
 	register("investigate_validate_plan",
@@ -153,16 +165,55 @@ func init() {
 		}, handleGet)
 
 	register("investigate_wave",
-		"Run a batch of the engine's operators NOW, with your token, and return their facts: no plan, no verdict. Use it "+
-			"while drafting a plan to see what an operator really returns for a real value before writing the plan around "+
-			"it. `steps` is a list of {id, op, args}; a step may reference another with \"$id.path\" and a name in `inputs`. "+
-			"Results come back per step with `status` (ok or unknown, and the reason), `complete` and the `value`. Bounded "+
-			"by the org's budgets. Requires investigation.set and insight.evt.get. "+authoringLoop,
+		"Hand the engine a whole batch of questions at once and get compact, typed answers. The engine runs every ready "+
+			"step in parallel with YOUR token (no plan, no verdict, nothing stored), reuses what it already knows, and can "+
+			"stop as soon as the answer is known. `steps` is a list of {id, op|use, args, select, limit}: `op` is an "+
+			"operator (investigate_operators), `use` a fact pack (investigate_packs) with its parameters in `args`; "+
+			"exactly one of them. A string argument that is a whole reference (\"$host__resolve.entity_id\", "+
+			"\"$prev.hosts_30d\") reads another step's value and the step waits for it; a name in `inputs` is read as "+
+			"$name. `select` lists the field paths of the step's value you want (`matches[*].entity_id`; for a pack, its "+
+			"export names) and is checked before anything runs; `limit` (1..1000, default 10) caps the elements of every "+
+			"list. `stop_when` is a list (at most 8) of boolean expressions over the step ids and fields "+
+			"(`prev.hosts_30d >= 50 and kids.count == 0`, `host__resolve.found == false`): as soon as one is TRUE the "+
+			"engine cancels the steps still running (`cancelled`, reason `irrelevant:stop_when`) and `stopped_by` names it. "+
+			"An unknown is never false, so a step that is `unknown` or not `complete` cannot stop the wave. The answer is "+
+			"COMPACT by default: per step `status` (ok, unknown with a `reason`, cancelled, or partial for a pack), "+
+			"`complete` (false means a lower bound, not proof of absence), `ms` and the selected `value`; plus `usage` "+
+			"(steps, cancelled, search events, wall ms). Send `full: true` only when the compact value hides something you "+
+			"need, it returns raw values and costs many more tokens. `validate_only: true` checks the wave (unknown "+
+			"operator, argument, field or reference come back with a suggestion) and runs nothing; an invalid wave is "+
+			"refused with every error listed as `[code] path: message (did you mean ...)`: fix them and send again. "+
+			"Bounded by the org's budgets. Requires investigation.set and insight.evt.get. "+waveLoop+" Also useful while "+
+			"drafting a plan template, to see what an operator returns for a real value: "+authoringLoop,
 		[]mcp.ToolOption{
-			mcp.WithArray("steps", mcp.Required(), mcp.Items(map[string]any{"type": "object"}), mcp.Description("Operator calls: objects {id, op, args}. Ids are unique.")),
+			mcp.WithArray("steps", mcp.Required(), mcp.Items(map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"id":     map[string]any{"type": "string", "description": "Unique id, letters, digits and underscore, starting with a letter; no double underscore."},
+					"op":     map[string]any{"type": "string", "description": "An operator of the catalog. Give op or use, not both."},
+					"use":    map[string]any{"type": "string", "description": "A fact pack (investigate_packs). Give op or use, not both."},
+					"args":   map[string]any{"type": "object", "description": "The operator's arguments, or the pack's parameters."},
+					"select": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Field paths of the value to return (a pack's export names for use). Default: the operator's summary."},
+					"limit":  map[string]any{"type": "integer", "description": "At most this many elements of every list (1..1000, default 10)."},
+				},
+			}), mcp.Description("Questions: objects {id, op or use, args, select, limit}. Ids are unique.")),
+			mcp.WithArray("stop_when", mcp.WithStringItems(), mcp.Description("Expressions that would settle the question, over step ids and fields, for example [\"prev.hosts_30d >= 50\"]. The wave stops as soon as one is true. At most 8.")),
+			mcp.WithBoolean("full", mcp.Description("Return the raw value of every step instead of the compact one. Default false: leave it off unless needed.")),
+			mcp.WithBoolean("validate_only", mcp.Description("Only check the wave and return its errors, warnings and expanded steps; run nothing.")),
 			mcp.WithNumber("deadline_ms", mcp.Description("Wall time allowed for the whole wave, in milliseconds. Default 30000.")),
-			mcp.WithObject("inputs", mcp.Description("Named values the steps can reference as $name.")),
+			mcp.WithObject("inputs", mcp.Description("Named values the steps and stop_when can reference as $name.")),
 		}, handleWave)
+
+	register("investigate_packs",
+		"List the fact packs: named, versioned, tested bundles of questions that keep coming back in investigations, "+
+			"written once. Per pack: `description`, `params` (name, type, required), `exports` (each with a description and "+
+			"a `ref` form to use in `stop_when` or in another step's argument, `<id>` standing for the id of the step that "+
+			"uses the pack), the operators it runs, its step count and `cost_class` (free, llm, billed). Use a pack in "+
+			"investigate_wave as {id, use: <pack>, args: {...}, select: [<export names>]}. Pass `name` for one pack. "+
+			"Requires investigation.get and insight.evt.get. "+waveLoop,
+		[]mcp.ToolOption{
+			mcp.WithString("name", mcp.Description("Optional. Return only this pack, for example host_context.")),
+		}, handlePacks)
 }
 
 // readOnlyTools are the tools that change nothing and are in the read-only profile. The authoritative
@@ -170,7 +221,7 @@ func init() {
 // test keeps the two equal.
 var readOnlyTools = map[string]bool{
 	"investigate_operators": true, "investigate_authoring_kit": true, "investigate_validate_plan": true,
-	"investigate_list_templates": true, "investigate_get": true,
+	"investigate_list_templates": true, "investigate_get": true, "investigate_packs": true,
 }
 
 func register(name, description string, options []mcp.ToolOption, h tools.ToolHandler) {
@@ -252,7 +303,7 @@ func handleKit(ctx context.Context, args map[string]interface{}) (*mcp.CallToolR
 	if len(sections) > 0 {
 		for _, s := range sections {
 			if !sectionNames[s] {
-				return tools.ErrorResultf("unknown section %q: use schema, guide, operators, examples, policy or codes", s), nil
+				return tools.ErrorResultf("unknown section %q: use schema, guide, operators, examples, policy, codes or packs", s), nil
 			}
 		}
 		query.Set("sections", strings.Join(sections, ","))
@@ -434,7 +485,7 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 		return fail(err)
 	}
 	if len(steps) == 0 {
-		return tools.ErrorResult("steps is required: a list of {id, op, args}"), nil
+		return tools.ErrorResult("steps is required: a list of {id, op or use, args, select, limit}"), nil
 	}
 	deadline, given, err := optInt(args, "deadline_ms")
 	if err != nil {
@@ -444,6 +495,20 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 	if err != nil {
 		return fail(err)
 	}
+	stopWhen, err := expressionList(args, "stop_when")
+	if err != nil {
+		return fail(err)
+	}
+	full, err := optBool(args, "full")
+	if err != nil {
+		return fail(err)
+	}
+	validateOnly, err := optBool(args, "validate_only")
+	if err != nil {
+		return fail(err)
+	}
+	// What a step, a select or an expression says is the engine's to validate: its coded errors carry
+	// suggestions, and are returned as they come.
 	body := map[string]interface{}{"steps": steps}
 	if given {
 		if deadline <= 0 || deadline > maxWaveDeadlineMS {
@@ -454,7 +519,54 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 	if inputs != nil {
 		body["inputs"] = inputs
 	}
+	if len(stopWhen) > 0 {
+		body["stop_when"] = stopWhen
+	}
+	if full {
+		body["full"] = true
+	}
+	if validateOnly {
+		body["validate_only"] = true
+	}
 	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "waves", body: body, timeout: time.Duration(deadline)*time.Millisecond + waitMargin})
+	if err != nil {
+		return fail(err)
+	}
+	return tools.SuccessResult(out), nil
+}
+
+// expressionList reads an array of expressions. Unlike stringList it never splits on commas: an expression
+// may contain them (`x in [1, 2]`).
+func expressionList(args map[string]interface{}, name string) ([]string, error) {
+	v, ok := args[name]
+	if !ok || v == nil {
+		return nil, nil
+	}
+	list, ok := v.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array of expression strings", name)
+	}
+	out := make([]string, 0, len(list))
+	for i, item := range list {
+		e, ok := item.(string)
+		if !ok || strings.TrimSpace(e) == "" {
+			return nil, fmt.Errorf("%s[%d] must be a non-empty expression string", name, i)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func handlePacks(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	name, err := optString(args, "name")
+	if err != nil {
+		return fail(err)
+	}
+	query := url.Values{}
+	if name = strings.TrimSpace(name); name != "" {
+		query.Set("name", name)
+	}
+	out, err := call(ctx, engineCall{method: http.MethodGet, suffix: "packs", query: query})
 	if err != nil {
 		return fail(err)
 	}
