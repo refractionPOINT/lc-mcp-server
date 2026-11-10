@@ -6,6 +6,12 @@ YAML document that says which facts to gather for an alert, how to weigh them an
 one by hand is long work, so the tools are built for an AI agent to author them, with a person promoting the
 result.
 
+> **Off by default.** The `investigate_*` tools and both profiles exist only when the server is started with
+> `INVESTIGATION_ENGINE_ENABLED=true` (or `1`). Without it they are not registered: they are absent from `tools/list`
+> on every endpoint including `all`, `/mcp/investigation_engine` is not a route, `MCP_PROFILE=investigation_engine` is
+> an invalid profile, and naming one in `X-MCP-Tools` is an invalid tool name. No other profile changes. The variable
+> is read once at startup.
+
 | Tool | Does | Permissions |
 |------|------|-------------|
 | `investigate_authoring_kit` | One call: template schema, authoring guide, the org's typed operator catalog, managed examples, effective policy, every validation code. `sections` re-reads part of it | `investigation.get`, `insight.evt.get` |

@@ -27,6 +27,9 @@ const testOID = "11111111-1111-4111-8111-111111111111"
 var fakeAPI *testutil.FakeAPI
 
 func TestMain(m *testing.M) {
+	// The tools are behind INVESTIGATION_ENGINE_ENABLED; these tests exercise them, so run with the gate on.
+	// The gate being off is covered by internal/http/investigation_gate_test.go.
+	tools.EnableInvestigationEngineForTest()
 	api, stop := testutil.InstallFakeAPI()
 	fakeAPI = api
 	code := m.Run()
