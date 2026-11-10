@@ -545,6 +545,20 @@ func TestWavePassesPacksSelectLimitStopWhenFullAndValidateOnly(t *testing.T) {
 	assert.NotContains(t, got, "validate_only")
 }
 
+// Exactly 8 expressions is the limit and goes through.
+func TestWaveAcceptsEightStopWhenExpressions(t *testing.T) {
+	g := newGateway(t)
+	var got map[string]any
+	g.on("POST waves", func(_ *http.Request, b []byte) (int, any) {
+		_ = json.Unmarshal(b, &got)
+		return 200, map[string]any{"results": []any{}}
+	})
+	eight := []interface{}{"a.x", "b.x", "c.x", "d.x", "e.x", "f.x", "g.x", "h.x"}
+	res, _ := run(t, "investigate_wave", map[string]interface{}{"steps": []interface{}{map[string]interface{}{"id": "a", "op": "x"}}, "stop_when": eight})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, eight, got["stop_when"])
+}
+
 func TestWaveRefusesMalformedNewArgumentsBeforeAnyRequest(t *testing.T) {
 	g := newGateway(t)
 	g.reply("POST waves", 200, map[string]any{"results": []any{}})
@@ -553,6 +567,7 @@ func TestWaveRefusesMalformedNewArgumentsBeforeAnyRequest(t *testing.T) {
 		"stop_when string":     {"steps": steps, "stop_when": "a.b == 1"},
 		"stop_when non-string": {"steps": steps, "stop_when": []interface{}{1}},
 		"stop_when empty":      {"steps": steps, "stop_when": []interface{}{" "}},
+		"stop_when too many":   {"steps": steps, "stop_when": []interface{}{"a", "b", "c", "d", "e", "f", "g", "h", "i"}},
 		"full string":          {"steps": steps, "full": "yes"},
 		"validate_only int":    {"steps": steps, "validate_only": float64(1)},
 	} {
