@@ -14,15 +14,23 @@ result.
 
 | Tool | Does | Permissions |
 |------|------|-------------|
-| `investigate_authoring_kit` | One call: template schema, authoring guide, the org's typed operator catalog, managed examples, effective policy, every validation code. `sections` re-reads part of it | `investigation.get`, `insight.evt.get` |
+| `investigate_authoring_kit` | One call: template schema, authoring guide, the org's typed operator catalog, the default template library, effective policy, every validation code. `sections` (schema, guide, operators, examples, policy, codes, packs, library) re-reads part of it | `investigation.get`, `insight.evt.get` |
 | `investigate_operators` | The operator catalog, with `filter` and `brief` | same |
 | `investigate_validate_plan` | Type-checks a template: structure, operators, references, expressions, budgets | `investigation.get` |
 | `investigate_test_plan` | Dry run on real past alerts (detections, cases, or the newest alerts of a category). Waits and polls, returns the agreement rate, disagreements, unknowns and costs. Nothing is written | `investigation.set`, `insight.evt.get` |
 | `investigate_save_plan` | Saves the template to the `investigation_plan` hive, **always as a draft** | `investigation_plan.get/set`, `investigation.get`, `insight.evt.get` |
-| `investigate_list_templates` | Templates the engine loaded: name, status (draft/active), managed | `investigation.get`, `insight.evt.get` |
+| `investigate_list_templates` | The org's templates (its `investigation_plan` records): name, status (draft/active) | `investigation.get`, `insight.evt.get` |
 | `investigate_start`, `investigate_get` | Start a run, read its state, steps, events or case | `investigation.set` / `.get`, `insight.evt.get` |
 | `investigate_wave` | Run a batch of questions (operators or fact packs) in parallel and get compact typed answers, stopping as soon as a `stop_when` expression is true. Also a way to see what an operator returns before writing a plan around it | `investigation.set`, `insight.evt.get` |
 | `investigate_packs` | The fact packs (named bundles of questions: host context, process tree, hash spread, the org's machines and owners, ...) as a compact index that is enough to write the waves: parameters with types, exports with type, reference form and a short meaning. `name` returns one pack in full | `investigation.get`, `insight.evt.get` |
+
+## Templates and the default library
+
+An org's templates are exactly its `investigation_plan` Hive records; the engine adds none on its own. The engine
+ships a default library of ready-made templates. It is content, not part of any org: read it with
+`investigate_authoring_kit` (`sections: ["library"]`) and install a template by writing it as an
+`investigation_plan/<name>` record with the Hive tools. Fact packs (`use:`) are the engine's built-in standard
+library, like operators; they are not templates.
 
 ## The authoring loop
 
@@ -59,7 +67,6 @@ A draft never runs on its own; a person promotes it to active in the console. Th
 - always writes `status: draft`, and refuses a template that sets `status: active` or any other value;
 - refuses a template that does not validate;
 - never overwrites an active template, whether the engine lists it as active or the hive record says so;
-- never touches a platform-managed template (save a copy under a new name);
 - replaces an existing draft only with `overwrite: true`, conditional on the record not having changed since it
   was read (the hive's etag);
 - fails closed: when the engine or the hive cannot say what exists under the name, nothing is written.

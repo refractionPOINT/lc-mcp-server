@@ -274,6 +274,14 @@ func TestWaveToolsPreferWavesAndKeepTheCatalogOptional(t *testing.T) {
 	assert.Contains(t, ops.Description, "only need this for a custom `op` step")
 }
 
+func TestKitAcceptsTheLibrarySection(t *testing.T) {
+	g := newGateway(t)
+	g.reply("GET authoring-kit", 200, map[string]any{"library": []any{}})
+	res, _ := run(t, "investigate_authoring_kit", map[string]interface{}{"sections": []interface{}{"library"}})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, []string{"GET authoring-kit?sections=library"}, g.calls())
+}
+
 func TestKitPassesSectionsAndRefusesUnknownOnes(t *testing.T) {
 	g := newGateway(t)
 	g.reply("GET authoring-kit", 200, map[string]any{"kit_version": 1, "guide": "g"})
@@ -345,7 +353,6 @@ func TestEngineErrorsReachTheCallerInTheEnginesWords(t *testing.T) {
 func TestListTemplatesFilters(t *testing.T) {
 	g := newGateway(t)
 	g.reply("GET templates", 200, map[string]any{"templates": []any{
-		map[string]any{"name": "managed-a", "managed": true, "status": "active"},
 		map[string]any{"name": "mine-draft"},
 		map[string]any{"name": "mine-active", "status": "active"},
 	}})
@@ -357,9 +364,9 @@ func TestListTemplatesFilters(t *testing.T) {
 		}
 		return out
 	}
-	assert.Equal(t, []string{"managed-a", "mine-draft", "mine-active"}, names(nil))
+	assert.Equal(t, []string{"mine-draft", "mine-active"}, names(nil))
 	assert.Equal(t, []string{"mine-draft"}, names(map[string]interface{}{"status": "draft"}), "a template with no status is a draft")
-	assert.Equal(t, []string{"mine-draft", "mine-active"}, names(map[string]interface{}{"include_managed": false}))
+	assert.Equal(t, []string{"mine-active"}, names(map[string]interface{}{"status": "active"}))
 }
 
 func testObject(state string, done bool, total int, results ...any) map[string]any {
@@ -697,12 +704,11 @@ func TestKitAcceptsThePacksSection(t *testing.T) {
 
 // --- save ---
 
-// savePlanGateway is a gateway where validate says valid and the org has one managed and one active template.
+// savePlanGateway is a gateway where validate says valid and the org has one active template and one draft.
 func savePlanGateway(t *testing.T) *gateway {
 	g := newGateway(t)
 	g.reply("POST plans/validate", 200, map[string]any{"valid": true, "errors": []any{}, "warnings": []any{map[string]any{"code": "unused_fact"}}})
 	g.reply("GET templates", 200, map[string]any{"templates": []any{
-		map[string]any{"name": "managed-one", "managed": true, "status": "active"},
 		map[string]any{"name": "live-one", "status": "active"},
 		map[string]any{"name": "old-draft", "status": "draft"},
 	}})
@@ -775,13 +781,12 @@ func TestSavePlanNeverWritesActive(t *testing.T) {
 	assert.Equal(t, "draft", body["status"])
 }
 
-func TestSavePlanRefusesManagedActiveAndExistingNames(t *testing.T) {
+func TestSavePlanRefusesActiveAndExistingNames(t *testing.T) {
 	g := savePlanGateway(t)
 	g.records["hand-promoted"] = map[string]any{"data": map[string]any{"status": "active"}, "sys_mtd": map[string]any{"etag": "e1"}, "usr_mtd": map[string]any{"enabled": true}}
 	g.records["my-draft"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true, "comment": "keep"}}
 
 	for name, wantReason := range map[string]string{
-		"managed-one":   "platform-managed",
 		"live-one":      "active",
 		"hand-promoted": "active",
 		"my-draft":      "overwrite=true",
