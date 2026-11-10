@@ -224,7 +224,9 @@ func init() {
 			"outcome, and `org_roster`: the org's machines and the people who own them). By default a compact INDEX that is "+
 			"enough on its own to write the waves: per pack what it does, its args with types (* required, =default) and "+
 			"its exports with type, reference form (for `stop_when` and other steps' args) and a few words of meaning. "+
-			"You do NOT need investigate_operators for pack-driven work; it is only for a custom `op` step. Pass `name` for "+
+			"You do NOT need investigate_operators for pack-driven work; it is only for a custom `op` step. (In a read-only "+
+			"profile investigate_wave is not offered: the index then only tells you which checks exist, run them with the "+
+			"single read tools.) Pass `name` for "+
 			"one pack's full row (every description, the operators it runs), or `full: true` for every full row (large). "+
 			"Requires investigation.get and insight.evt.get. "+waveLoop,
 		[]mcp.ToolOption{
@@ -608,7 +610,7 @@ const packIndexHow = "Use a pack as a wave step {id, use: <name>, args: {<params
 	"args: name:type, * = required, =value is the default (types: str num bool int list obj any). exports are grouped " +
 	"by the fact that holds them: <fact>: [name:type meaning]. In stop_when or another step's args an export is " +
 	"<step id>__<fact>.<name>, e.g. step h on host_context: h__resolve.resolved; `name:type @path` means the path " +
-	"after the fact is <path> instead of <name>; exports under `select_only` have no such form. This index is enough " +
+	"after the fact is <path> instead of <name> (`@(fact)`: the whole fact); exports under `select_only` have no such form. This index is enough " +
 	"to write the waves: investigate_operators is only needed for a custom `op` step. {name} returns one pack's full row."
 
 var typeAbbrev = map[string]string{"string": "str", "number": "num", "boolean": "bool", "integer": "int", "array": "list", "object": "obj"}
@@ -652,7 +654,12 @@ func packIndex(out map[string]interface{}) map[string]interface{} {
 		}
 		index = append(index, entry)
 	}
-	return map[string]interface{}{"how": packIndexHow, "packs": index}
+	res := map[string]interface{}{}
+	for k, v := range out { // anything else the engine returns next to the packs stays
+		res[k] = v
+	}
+	res["how"], res["packs"] = packIndexHow, index
+	return res
 }
 
 // paramLine is `name:type*` (required) or `name:type=default`.
@@ -680,7 +687,10 @@ func exportLine(e map[string]interface{}) (group, line string) {
 		if i := strings.IndexAny(ref, ".["); i >= 0 {
 			group, path = ref[:i], strings.TrimPrefix(ref[i:], ".")
 		}
-		if path != name {
+		switch {
+		case path == "":
+			line += " @(fact)" // the export is the whole fact
+		case path != name:
 			line += " @" + path
 		}
 	}

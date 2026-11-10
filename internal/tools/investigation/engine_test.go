@@ -270,6 +270,7 @@ func TestWaveToolsPreferWavesAndKeepTheCatalogOptional(t *testing.T) {
 	assert.True(t, strings.HasPrefix(packs.Description, "Call this FIRST for a multi-check question"))
 	assert.Contains(t, packs.Description, "org_roster")
 	assert.Contains(t, packs.Description, "do NOT need investigate_operators")
+	assert.Contains(t, packs.Description, "In a read-only profile investigate_wave is not offered")
 	assert.Contains(t, ops.Description, "only need this for a custom `op` step")
 }
 
@@ -620,21 +621,25 @@ func TestPacksIndexByDefaultFullForOneOrAll(t *testing.T) {
 		"exports": []any{
 			map[string]any{"name": "resolved", "type": "boolean", "ref": "<id>__resolve.resolved", "brief": "maps to one entity", "description": "Long.", "fact": "resolve", "path": "resolved"},
 			map[string]any{"name": "hostname", "type": "string", "ref": "<id>__card.display_name", "brief": "host name", "description": "Host name.", "fact": "card", "path": "display_name"},
+			map[string]any{"name": "whole", "type": "object", "ref": "<id>__card", "brief": "the card", "description": "All.", "fact": "card"},
 			map[string]any{"name": "ids", "type": "array", "ref": "", "brief": "all ids", "description": "Every id.", "fact": "card", "path": "rows[*].id"},
 		},
 	}
-	g.on("GET packs", func(r *http.Request, _ []byte) (int, any) { return 200, map[string]any{"packs": []any{pack}} })
+	g.on("GET packs", func(r *http.Request, _ []byte) (int, any) {
+		return 200, map[string]any{"packs": []any{pack}, "warning": "kept next to the index"}
+	})
 
 	// The index is enough to call the pack: what it does, args with types, exports with type, reference form and meaning.
 	res, body := run(t, "investigate_packs", nil)
 	require.False(t, res.IsError, text(res))
 	assert.Contains(t, body["how"], "investigate_operators is only needed for a custom `op` step")
+	assert.Equal(t, "kept next to the index", body["warning"], "other top-level fields of the engine's answer survive")
 	row := body["packs"].([]any)[0].(map[string]any)
 	assert.Equal(t, map[string]any{
 		"name": "host_context", "does": "Who a sensor is", "args": "sid:str*, window:list=[\"-7d\",\"now\"]",
 		"exports": map[string]any{
 			"resolve":     []any{"resolved:bool maps to one entity"},
-			"card":        []any{"hostname:str @display_name host name"},
+			"card":        []any{"hostname:str @display_name host name", "whole:obj @(fact) the card"},
 			"select_only": []any{"ids:list all ids"},
 		}}, row)
 
