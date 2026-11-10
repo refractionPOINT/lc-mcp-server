@@ -23,27 +23,44 @@ func LoadProfiles(path string) (map[string][]string, error) {
 	return profiles, nil
 }
 
+// builtinProfileDefinitions is the hardcoded set of profiles as compiled, kept so the definitions can be
+// rebuilt after the gates in featuregate.go are re-read.
+var builtinProfileDefinitions map[string][]string
+
 // init loads profiles from YAML and populates ProfileDefinitions
 func init() {
+	builtinProfileDefinitions = make(map[string][]string, len(ProfileDefinitions))
+	for name, toolNames := range ProfileDefinitions {
+		builtinProfileDefinitions[name] = toolNames
+	}
+	loadProfileDefinitions()
+}
+
+// loadProfileDefinitions sets ProfileDefinitions from the profiles file, or from the hardcoded definitions
+// when there is none, then removes the profiles of every feature whose gate is off.
+func loadProfileDefinitions() {
+	profiles := make(map[string][]string, len(builtinProfileDefinitions))
+	for name, toolNames := range builtinProfileDefinitions {
+		profiles[name] = toolNames
+	}
+
 	// Try to load profiles from YAML file
 	// Look for the file relative to the project root
-	profilePath := findProfilesFile()
-
-	if profilePath == "" {
-		// Fall back to hardcoded definitions if file not found
-		// This ensures backward compatibility and testing scenarios
-		return
+	// If it is not found, or does not load, the hardcoded definitions stand.
+	// This ensures backward compatibility and testing scenarios
+	if profilePath := findProfilesFile(); profilePath != "" {
+		loaded, err := LoadProfiles(profilePath)
+		if err != nil {
+			// Log warning but don't fail - fall back to hardcoded definitions
+			fmt.Fprintf(os.Stderr, "Warning: failed to load profiles from %s: %v\n", profilePath, err)
+			fmt.Fprintf(os.Stderr, "Using default profile definitions\n")
+		} else {
+			// Replace ProfileDefinitions with loaded profiles
+			profiles = loaded
+		}
 	}
 
-	profiles, err := LoadProfiles(profilePath)
-	if err != nil {
-		// Log warning but don't fail - fall back to hardcoded definitions
-		fmt.Fprintf(os.Stderr, "Warning: failed to load profiles from %s: %v\n", profilePath, err)
-		fmt.Fprintf(os.Stderr, "Using default profile definitions\n")
-		return
-	}
-
-	// Replace ProfileDefinitions with loaded profiles
+	applyFeatureGates(profiles)
 	ProfileDefinitions = profiles
 }
 

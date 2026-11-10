@@ -682,3 +682,27 @@ email_security_readonly:
   - cloudsec_entity_get
   - cloudsec_entity_sightings
   - cloudsec_entity_activity
+
+investigation_engine:
+  # Only defined when the server runs with INVESTIGATION_ENGINE_ENABLED=true (internal/tools/featuregate.go).
+  # Investigation Engine: write plan templates (always saved as drafts), dry-run them on past alerts,
+  # start and read runs.
+  - investigate_operators
+  - investigate_authoring_kit
+  - investigate_validate_plan
+  - investigate_test_plan
+  - investigate_save_plan
+  - investigate_list_templates
+  - investigate_start
+  - investigate_get
+  - investigate_wave
+  - investigate_packs
+
+investigation_engine_readonly:
+  # Investigation Engine reads: the authoring kit, operators, fact packs, validation, templates and runs.
+  - investigate_operators
+  - investigate_authoring_kit
+  - investigate_packs
+  - investigate_validate_plan
+  - investigate_list_templates
+  - investigate_get
