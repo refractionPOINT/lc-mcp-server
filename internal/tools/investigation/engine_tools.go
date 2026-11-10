@@ -51,7 +51,7 @@ const maxStopWhen = 8
 // maxWaveDeadlineMS bounds a wave's deadline: the call holds its connection for that long.
 const maxWaveDeadlineMS = 300000
 
-var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true, "packs": true}
+var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true, "packs": true, "library": true}
 
 func init() {
 	register("investigate_operators",
@@ -71,15 +71,18 @@ func init() {
 		"Everything needed to write an investigation plan template, in ONE call: the template JSON Schema, the authoring "+
 			"guide (how facts, signals, proofs, evidence, respond and report work, when a result is unknown or complete, the "+
 			"common mistakes), the org's typed operator catalog (the fields each operator produces, which operators the org "+
-			"may use), the platform's managed templates as examples, the org's effective policy and budgets, and every "+
-			"validation code with its usual fix, and the fact packs a plan or a wave can use. Call it FIRST and keep what it says. The whole kit is about 33k tokens, more "+
+			"may use), the default template library (ready-made templates to learn from or install), the org's effective "+
+			"policy and budgets, and every validation code with its usual fix, and the fact packs a plan or a wave can use. "+
+			"An org's templates are exactly its investigation_plan hive records; nothing is provided automatically. To install a "+
+			"library template, read it from the `library` section and write it as an `investigation_plan/<name>` record with the "+
+			"hive tools. Call it FIRST and keep what it says. The whole kit is about 33k tokens, more "+
 			"than many clients accept in one tool result, so fetch it in pieces: sections=\"guide,policy,codes\" (read "+
-			"first), then sections=\"schema,examples\". The operators section alone is about 14k tokens and also too large "+
+			"first), then sections=\"schema,library\". The operators section alone is about 14k tokens and also too large "+
 			"for some clients: get the operator index with investigate_operators (brief), then the full rows of the ones you "+
 			"use with investigate_operators (names). `size` says what was returned. Requires investigation.get and "+
 			"insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
-			mcp.WithArray("sections", mcp.WithStringItems(), mcp.Description("Optional. Any of schema, guide, operators, examples, policy, codes, packs. Omit for the whole kit.")),
+			mcp.WithArray("sections", mcp.WithStringItems(), mcp.Description("Optional. Any of schema, guide, operators, examples, policy, codes, packs, library. Omit for the whole kit.")),
 		}, handleKit)
 
 	register("investigate_validate_plan",
@@ -122,25 +125,25 @@ func init() {
 	register("investigate_save_plan",
 		"Save a plan template as a DRAFT in the org's investigation_plan hive. It always writes `status: draft`; it refuses "+
 			"a template that sets `status: active`, refuses a template that does not validate, never overwrites an active "+
-			"template and never touches a platform-managed one. An existing draft is replaced only with `overwrite: true`. A "+
+			"template. An existing draft is replaced only with `overwrite: true`. A "+
 			"draft never runs on its own: it runs only through investigate_test_plan or a run a person starts (with autonomy "+
 			"capped at suggest), and a person promotes it to active in the console. Pass `test_summary`: what you tested "+
 			"(samples, agreement rate, unknowns, cost), so the reviewer sees it with the draft. Requires "+
 			"investigation_plan.get, investigation_plan.set, investigation.get and insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
-			mcp.WithString("name", mcp.Required(), mcp.Description("The template name (the record key): lowercase letters, digits, - and _, at most 64 characters. Not the name of a managed template.")),
+			mcp.WithString("name", mcp.Required(), mcp.Description("The template name (the record key): lowercase letters, digits, - and _, at most 64 characters.")),
 			mcp.WithString("yaml", mcp.Required(), mcp.Description("The template source (YAML) that validated clean. Leave `status` out.")),
 			mcp.WithString("test_summary", mcp.Description("What the draft was tested on and how it did, up to 2000 characters. Stored as the record's comment.")),
 			mcp.WithBoolean("overwrite", mcp.Description("Replace an existing DRAFT of the same name. Never replaces an active template. Default false.")),
 		}, handleSavePlan)
 
 	register("investigate_list_templates",
-		"List the plan templates the engine has loaded for this org: name, version, description, `applies_to`, `managed` "+
-			"(shipped by the platform) and `status` (draft or active). Use it to see what already exists before drafting, and "+
-			"to pick a name that is free. Requires investigation.get and insight.evt.get.",
+		"List the plan templates of this org, which are its investigation_plan hive records: name, version, description, "+
+			"`applies_to` and `status` (draft or active). The default library is not listed here: get it with "+
+			"investigate_authoring_kit (sections=\"library\") and install a template by writing the record with the hive "+
+			"tools. Use this to see what already exists before drafting, and to pick a name that is free. Requires investigation.get and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("status", mcp.Description("Keep only draft or active templates.")),
-			mcp.WithBoolean("include_managed", mcp.Description("Include the platform-managed templates. Default true.")),
 		}, handleListTemplates)
 
 	register("investigate_start",
@@ -324,7 +327,7 @@ func handleKit(ctx context.Context, args map[string]interface{}) (*mcp.CallToolR
 	if len(sections) > 0 {
 		for _, s := range sections {
 			if !sectionNames[s] {
-				return tools.ErrorResultf("unknown section %q: use schema, guide, operators, examples, policy, codes or packs", s), nil
+				return tools.ErrorResultf("unknown section %q: use schema, guide, operators, examples, policy, codes, packs or library", s), nil
 			}
 		}
 		query.Set("sections", strings.Join(sections, ","))
@@ -359,12 +362,6 @@ func handleListTemplates(ctx context.Context, args map[string]interface{}) (*mcp
 	if status != "" && status != "draft" && status != "active" {
 		return tools.ErrorResult("status must be draft or active"), nil
 	}
-	includeManaged := true
-	if v, ok := args["include_managed"]; ok && v != nil {
-		if includeManaged, ok = v.(bool); !ok {
-			return tools.ErrorResult("include_managed must be a boolean"), nil
-		}
-	}
 	out, err := call(ctx, engineCall{method: http.MethodGet, suffix: "templates"})
 	if err != nil {
 		return fail(err)
@@ -377,9 +374,6 @@ func handleListTemplates(ctx context.Context, args map[string]interface{}) (*mcp
 			continue
 		}
 		if status != "" && templateStatus(row) != status {
-			continue
-		}
-		if !includeManaged && row["managed"] == true {
 			continue
 		}
 		kept = append(kept, row)

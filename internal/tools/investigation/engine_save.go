@@ -243,7 +243,7 @@ func nodeValue(n *yaml.Node) (interface{}, error) {
 	}
 }
 
-// refuseIfLoaded refuses a name that the engine already serves as a managed template or as an active one.
+// refuseIfLoaded refuses a name that the engine already serves as an active template.
 func refuseIfLoaded(ctx context.Context, name string) error {
 	out, err := call(ctx, engineCall{method: http.MethodGet, suffix: "templates"})
 	if err != nil {
@@ -254,9 +254,6 @@ func refuseIfLoaded(ctx context.Context, name string) error {
 		row, ok := r.(map[string]interface{})
 		if !ok || str(row["name"]) != name {
 			continue
-		}
-		if row["managed"] == true {
-			return refusal(fmt.Sprintf("%q is a platform-managed template: this tool never touches one. Save your version under a new name.", name))
 		}
 		if templateStatus(row) == statusActive {
 			return refusal(fmt.Sprintf("template %q is active: this tool never overwrites an active template. Save your version under a new name.", name))
