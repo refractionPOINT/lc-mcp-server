@@ -36,6 +36,9 @@ const waveLoop = "Investigation loop (no template needed): (1) investigate_packs
 	"question is answered. A step that is `unknown` or not `complete` established nothing: it is never an absence. " +
 	"Do not set `full` unless a compact value hides something you need."
 
+// maxStopWhen is how many stop_when expressions a wave may carry.
+const maxStopWhen = 8
+
 // maxWaveDeadlineMS bounds a wave's deadline: the call holds its connection for that long.
 const maxWaveDeadlineMS = 300000
 
@@ -545,6 +548,9 @@ func expressionList(args map[string]interface{}, name string) ([]string, error) 
 	list, ok := v.([]interface{})
 	if !ok {
 		return nil, fmt.Errorf("%s must be an array of expression strings", name)
+	}
+	if len(list) > maxStopWhen {
+		return nil, fmt.Errorf("%s has %d expressions, at most %d are allowed", name, len(list), maxStopWhen)
 	}
 	out := make([]string, 0, len(list))
 	for i, item := range list {
