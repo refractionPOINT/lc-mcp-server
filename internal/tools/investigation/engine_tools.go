@@ -173,9 +173,11 @@ var readOnlyTools = map[string]bool{
 	"investigate_list_templates": true, "investigate_get": true,
 }
 
+// register declares an Investigation Engine tool. Every tool of this package is declared through here, which is
+// what puts them all behind the INVESTIGATION_ENGINE_ENABLED gate (see tools.EnvInvestigationEngine).
 func register(name, description string, options []mcp.ToolOption, h tools.ToolHandler) {
 	opts := append([]mcp.ToolOption{mcp.WithDescription(description), mcp.WithReadOnlyHintAnnotation(readOnlyTools[name])}, options...)
-	tools.RegisterTool(&tools.ToolRegistration{
+	tools.RegisterInvestigationEngineTool(&tools.ToolRegistration{
 		Name:        name,
 		Description: description,
 		Profile:     Profile,
