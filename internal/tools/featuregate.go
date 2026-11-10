@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"strings"
+	"testing"
 )
 
 // EnvInvestigationEngine turns the Investigation Engine tools and profiles on. It is read once, when the
@@ -61,8 +62,12 @@ func HeldToolNames() []string {
 
 // EnableInvestigationEngineForTest turns the Investigation Engine gate on after init has run: it sets the
 // environment variable, registers the held tools and restores the gated profiles. For tests that need the
-// full tool catalog; the gate is otherwise fixed at process start.
+// full tool catalog; the gate is otherwise fixed at process start. It panics outside a test binary, so
+// production code cannot use it to bypass the gate.
 func EnableInvestigationEngineForTest() {
+	if !testing.Testing() {
+		panic("tools.EnableInvestigationEngineForTest called outside a test binary")
+	}
 	os.Setenv(EnvInvestigationEngine, "true")
 	for _, reg := range heldTools {
 		RegisterTool(reg)
