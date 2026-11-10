@@ -21,7 +21,8 @@ result.
 | `investigate_save_plan` | Saves the template to the `investigation_plan` hive, **always as a draft** | `investigation_plan.get/set`, `investigation.get`, `insight.evt.get` |
 | `investigate_list_templates` | Templates the engine loaded: name, status (draft/active), managed | `investigation.get`, `insight.evt.get` |
 | `investigate_start`, `investigate_get` | Start a run, read its state, steps, events or case | `investigation.set` / `.get`, `insight.evt.get` |
-| `investigate_wave` | Run operators now on real values, to see what they return before writing a plan around them | `investigation.set`, `insight.evt.get` |
+| `investigate_wave` | Run a batch of questions (operators or fact packs) in parallel and get compact typed answers, stopping as soon as a `stop_when` expression is true. Also a way to see what an operator returns before writing a plan around it | `investigation.set`, `insight.evt.get` |
+| `investigate_packs` | The fact packs (named bundles of questions: host context, process tree, hash spread, the org's machines and owners, ...) as a compact index that is enough to write the waves: parameters with types, exports with type, reference form and a short meaning. `name` returns one pack in full | `investigation.get`, `insight.evt.get` |
 
 ## The authoring loop
 
@@ -32,6 +33,24 @@ result.
 5. `investigate_test_plan` on real past alerts, including known false and true positives; read the
    disagreements and unknowns, refine, test again.
 6. `investigate_save_plan` with a `test_summary` of what was tested.
+
+## Investigating a novel case without a template
+
+For a one-off question no template covers, an agent drives waves directly. When the plain read tools (`list_sensors`,
+`get_historic_events`, the `mailsec_*` and `cloudsec_entity_*` tools) are offered too, the tool descriptions steer an agent
+to put a question that needs more than one check in one wave rather than call them one by one:
+
+1. `investigate_packs` once: the packs, their arguments and exports (each export has a reference form usable in
+   `stop_when`). The index is enough on its own: `investigate_operators` (6 to 9 KB per lookup) is only needed for a
+   custom `op` step. For an indicator-driven question (no alert) start with the `org_roster` pack: the org's machines
+   (offline ones included) and the people who own them.
+2. `investigate_wave` with one step per pack (`use`) or operator (`op`). Each step may carry `select` (only the field
+   paths the agent will read) and `limit`.
+3. `stop_when`: the expressions that would settle the question. The engine cancels the remaining steps as soon as one is
+   true and reports `stopped_by`. An unknown is never false, so an incomplete step cannot stop the wave.
+4. Read the compact answer (`status`, `complete`, `value`, `usage`), plan the next wave from it, and stop when the
+   question is answered. `full: true` returns raw values and is rarely needed; `validate_only: true` checks a wave
+   without running it. An invalid wave is refused with `[code] path: message (did you mean ...)` for each error.
 
 ## What `investigate_save_plan` refuses
 
