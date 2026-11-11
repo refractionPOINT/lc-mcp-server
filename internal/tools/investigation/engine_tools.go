@@ -51,6 +51,8 @@ const maxStopWhen = 8
 // maxWaveDeadlineMS bounds a wave's deadline: the call holds its connection for that long.
 const maxWaveDeadlineMS = 300000
 
+const maxWaveMetadataBytes = 256
+
 var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true, "packs": true, "library": true}
 
 func init() {
@@ -219,9 +221,9 @@ func init() {
 					"limit":  map[string]any{"type": "integer", "description": "At most this many elements of every list (1..1000, default 10)."},
 				},
 			}), mcp.Description("Questions: objects {id, op or use, args, select, limit}. Ids are unique.")),
-			mcp.WithString("title", mcp.Description("Optional human-readable title for this wave. Allow the engine to choose a default when omitted.")),
-			mcp.WithString("session", mcp.Description("Optional session identifier grouping related waves of one investigation.")),
-			mcp.WithString("correlation_id", mcp.Description("Optional caller correlation identifier for this wave.")),
+			mcp.WithString("title", mcp.Description("Optional human-readable title for this wave (at most 256 bytes). Allow the engine to choose a default when omitted.")),
+			mcp.WithString("session", mcp.Description("Optional session identifier grouping related waves of one investigation (at most 256 bytes).")),
+			mcp.WithString("correlation_id", mcp.Description("Optional caller correlation identifier for this wave (at most 256 bytes).")),
 			mcp.WithArray("stop_when", mcp.WithStringItems(), mcp.Description("Expressions that would settle the question, over step ids and fields, for example [\"prev.hosts_30d >= 50\"]. The wave stops as soon as one is true. At most 8.")),
 			mcp.WithBoolean("full", mcp.Description("Return the raw value of every step instead of the compact one. Default false: leave it off unless needed.")),
 			mcp.WithBoolean("validate_only", mcp.Description("Only check the wave and return its errors, warnings and expanded steps; run nothing.")),
@@ -554,6 +556,9 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 		value, err := optString(args, name)
 		if err != nil {
 			return fail(err)
+		}
+		if len(value) > maxWaveMetadataBytes {
+			return tools.ErrorResultf("%s must be at most %d bytes", name, maxWaveMetadataBytes), nil
 		}
 		if value != "" {
 			body[name] = value
