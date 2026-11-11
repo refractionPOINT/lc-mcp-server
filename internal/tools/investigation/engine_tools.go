@@ -51,6 +51,8 @@ const maxStopWhen = 8
 // maxWaveDeadlineMS bounds a wave's deadline: the call holds its connection for that long.
 const maxWaveDeadlineMS = 300000
 
+const maxWaveMetadataBytes = 256
+
 var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true, "packs": true, "library": true}
 
 func init() {
@@ -188,7 +190,7 @@ func init() {
 
 	register("investigate_wave",
 		preferWaves+"Hands the engine a whole batch of questions at once and gets compact, typed answers. The engine runs every ready "+
-			"step in parallel with YOUR token (no plan, no verdict, nothing stored), reuses what it already knows, and can "+
+			"step in parallel with YOUR token and records an ad-hoc run (returned as `run_id`), reuses what it already knows, and can "+
 			"stop as soon as the answer is known. `steps` is a list of {id, op|use, args, select, limit}: `op` is an "+
 			"operator (investigate_operators), `use` a fact pack (investigate_packs) with its parameters in `args`; "+
 			"exactly one of them. A string argument that is a whole reference (\"$host__resolve.entity_id\", "+
@@ -219,6 +221,9 @@ func init() {
 					"limit":  map[string]any{"type": "integer", "description": "At most this many elements of every list (1..1000, default 10)."},
 				},
 			}), mcp.Description("Questions: objects {id, op or use, args, select, limit}. Ids are unique.")),
+			mcp.WithString("title", mcp.Description("Optional human-readable title for this wave (at most 256 bytes). Allow the engine to choose a default when omitted.")),
+			mcp.WithString("session", mcp.Description("Optional session identifier grouping related waves of one investigation (at most 256 bytes).")),
+			mcp.WithString("correlation_id", mcp.Description("Optional caller correlation identifier for this wave (at most 256 bytes).")),
 			mcp.WithArray("stop_when", mcp.WithStringItems(), mcp.Description("Expressions that would settle the question, over step ids and fields, for example [\"prev.hosts_30d >= 50\"]. The wave stops as soon as one is true. At most 8.")),
 			mcp.WithBoolean("full", mcp.Description("Return the raw value of every step instead of the compact one. Default false: leave it off unless needed.")),
 			mcp.WithBoolean("validate_only", mcp.Description("Only check the wave and return its errors, warnings and expanded steps; run nothing.")),
@@ -546,7 +551,19 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 	}
 	// What a step, a select or an expression says is the engine's to validate: its coded errors carry
 	// suggestions, and are returned as they come.
-	body := map[string]interface{}{"steps": steps}
+	body := map[string]interface{}{"steps": steps, "source": "mcp"}
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		value, err := optString(args, name)
+		if err != nil {
+			return fail(err)
+		}
+		if len(value) > maxWaveMetadataBytes {
+			return tools.ErrorResultf("%s must be at most %d bytes", name, maxWaveMetadataBytes), nil
+		}
+		if value != "" {
+			body[name] = value
+		}
+	}
 	if given {
 		if deadline <= 0 || deadline > maxWaveDeadlineMS {
 			return tools.ErrorResultf("deadline_ms must be between 1 and %d", maxWaveDeadlineMS), nil

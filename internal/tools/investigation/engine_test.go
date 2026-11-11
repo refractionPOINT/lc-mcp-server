@@ -1066,3 +1066,77 @@ func TestDeleteRunAcceptsEmptySuccessOnlyForDelete(t *testing.T) {
 		})
 	}
 }
+
+func TestWaveMetadataAndRunIDPassThrough(t *testing.T) {
+	g := newGateway(t)
+	var got map[string]any
+	g.on("POST waves", func(_ *http.Request, b []byte) (int, any) {
+		assert.NoError(t, json.Unmarshal(b, &got))
+		return 200, map[string]any{"run_id": "wave-1", "results": []any{}, "compact": true}
+	})
+	steps := []interface{}{map[string]interface{}{"id": "host", "op": "entity.resolve"}}
+	args := map[string]interface{}{"steps": steps, "title": "Check host activity", "session": "thread/1&next", "correlation_id": "request-1", "source": "forged"}
+	reg, ok := tools.GetTool("investigate_wave")
+	require.True(t, ok)
+	assert.NotContains(t, reg.Schema.InputSchema.Properties, "source", "the transport supplies source")
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		property, ok := reg.Schema.InputSchema.Properties[name].(map[string]any)
+		require.True(t, ok, name)
+		assert.Equal(t, "string", property["type"], name)
+		assert.NotContains(t, reg.Schema.InputSchema.Required, name)
+	}
+	res, body := run(t, "investigate_wave", args)
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, "wave-1", body["run_id"])
+	assert.Equal(t, "mcp", got["source"], "caller arguments cannot override the transport source")
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		assert.Equal(t, args[name], got[name], name)
+	}
+	got = nil
+	res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": steps})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, "mcp", got["source"], "source is supplied even without optional metadata")
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		assert.NotContains(t, got, name)
+		for _, invalid := range []interface{}{float64(1), true, []interface{}{}, map[string]interface{}{}} {
+			before := len(g.calls())
+			res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": steps, name: invalid})
+			assert.True(t, res.IsError, name)
+			assert.Len(t, g.calls(), before, "invalid metadata must not reach the engine")
+		}
+	}
+}
+
+func TestWaveMetadataByteLimits(t *testing.T) {
+	g := newGateway(t)
+	var got map[string]any
+	g.on("POST waves", func(_ *http.Request, b []byte) (int, any) {
+		got = nil
+		assert.NoError(t, json.Unmarshal(b, &got))
+		return 200, map[string]any{"run_id": "wave-1", "results": []any{}}
+	})
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		for _, tc := range []struct {
+			value string
+			valid bool
+		}{
+			{strings.Repeat("a", 256), true},
+			{strings.Repeat("a", 257), false},
+			{strings.Repeat("é", 128), true},
+			{strings.Repeat("é", 128) + "a", false},
+		} {
+			before := len(g.calls())
+			res, _ := run(t, "investigate_wave", map[string]interface{}{
+				"steps": []interface{}{map[string]interface{}{"id": "host", "op": "entity.resolve"}}, name: tc.value,
+			})
+			if tc.valid {
+				require.False(t, res.IsError, text(res))
+				assert.Equal(t, tc.value, got[name])
+			} else {
+				require.True(t, res.IsError)
+				assert.Contains(t, text(res), name+" must be at most 256 bytes")
+				assert.Len(t, g.calls(), before, "oversized metadata must not reach the engine")
+			}
+		}
+	}
+}
