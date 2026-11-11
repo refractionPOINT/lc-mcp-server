@@ -223,8 +223,9 @@ func init() {
 	register("investigate_packs",
 		"Call this FIRST for a multi-check question, then answer it with investigate_wave (see its description: waves "+
 			"replace many single read-tool calls). Lists the fact packs: named, versioned, tested bundles of questions "+
-			"(host context, process tree, hash spread, domain and sender reputation, a user's activity, a message's "+
-			"outcome, and `org_roster`: the org's machines and the people who own them). By default a compact INDEX that is "+
+			"for the data sources supported by this engine version. Discover identity sign-in, SaaS audit, cloud resource "+
+			"and vulnerability coverage from the returned index; do not assume every source is installed or has data. "+
+			"`org_roster` lists the org's machines and the people who own them. By default a compact INDEX that is "+
 			"enough on its own to write the waves: per pack what it does, its args with types (* required, =default) and "+
 			"its exports with type, reference form (for `stop_when` and other steps' args) and a few words of meaning. "+
 			"You do NOT need investigate_operators for pack-driven work; it is only for a custom `op` step. (In a read-only "+
