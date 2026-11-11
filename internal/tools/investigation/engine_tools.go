@@ -549,7 +549,7 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 	}
 	// What a step, a select or an expression says is the engine's to validate: its coded errors carry
 	// suggestions, and are returned as they come.
-	body := map[string]interface{}{"steps": steps}
+	body := map[string]interface{}{"steps": steps, "source": "mcp"}
 	for _, name := range []string{"title", "session", "correlation_id"} {
 		value, err := optString(args, name)
 		if err != nil {
