@@ -199,7 +199,7 @@ facts:
 
 var allTools = []string{
 	"investigate_operators", "investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan",
-	"investigate_save_plan", "investigate_list_templates", "investigate_start", "investigate_get", "investigate_wave", "investigate_packs",
+	"investigate_save_plan", "investigate_list_templates", "investigate_start", "investigate_get", "investigate_delete", "investigate_wave", "investigate_packs",
 }
 
 func TestToolsAreInTheEngineProfiles(t *testing.T) {
@@ -223,7 +223,7 @@ func TestToolsAreInTheEngineProfiles(t *testing.T) {
 		assert.True(t, a.ReadOnly, n)
 	}
 	assert.True(t, readOnly["investigate_packs"], "the packs list changes nothing")
-	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_wave"} {
+	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_delete", "investigate_wave"} {
 		assert.False(t, readOnly[n], "%s must not be in the read-only profile", n)
 	}
 }
@@ -515,6 +515,55 @@ func TestStartAndGetMapTheirArguments(t *testing.T) {
 	assert.True(t, res.IsError)
 	res, _ = run(t, "investigate_get", map[string]interface{}{"run_id": "r1", "view": "graph"})
 	assert.True(t, res.IsError)
+}
+
+func TestDeleteRunUsesAuthenticatedGateway(t *testing.T) {
+	g := newGateway(t)
+	g.on("DELETE runs/r1", func(r *http.Request, b []byte) (int, any) {
+		assert.True(t, strings.HasPrefix(r.Header.Get("Authorization"), "bearer eyJ"), "use the caller's JWT")
+		assert.Empty(t, b, "DELETE has no request body")
+		assert.Empty(t, r.URL.RawQuery)
+		return http.StatusOK, map[string]any{"deleted": true}
+	})
+	res, body := run(t, "investigate_delete", map[string]interface{}{"run_id": "r1"})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, true, body["deleted"])
+	assert.Equal(t, []string{"DELETE runs/r1"}, g.calls())
+
+	reg, ok := tools.GetTool("investigate_delete")
+	require.True(t, ok)
+	assert.Contains(t, reg.Description, "Requires investigation.set")
+	assert.Contains(t, reg.Schema.InputSchema.Required, "run_id")
+	schema := reg.ToolSchema()
+	require.NotNil(t, schema.Annotations.DestructiveHint)
+	assert.True(t, *schema.Annotations.DestructiveHint)
+	require.NotNil(t, schema.Annotations.ReadOnlyHint)
+	assert.False(t, *schema.Annotations.ReadOnlyHint)
+}
+
+func TestDeleteRunRejectsInvalidIDsBeforeCallingGateway(t *testing.T) {
+	g := newGateway(t)
+	for _, id := range []interface{}{nil, "", " ", float64(3), "../x", ".", "..", "r/events", "r?all=true", "r#fragment", "%2F", strings.Repeat("a", 129)} {
+		res, _ := run(t, "investigate_delete", map[string]interface{}{"run_id": id})
+		assert.True(t, res.IsError, "id=%v", id)
+	}
+	res, _ := run(t, "investigate_delete", nil)
+	assert.True(t, res.IsError)
+	assert.Empty(t, g.calls())
+}
+
+func TestDeleteRunSurfacesGatewayErrorsWithoutRetry(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			g := newGateway(t)
+			g.reply("DELETE runs/r1", status, map[string]any{"error": "deletion refused"})
+			res, _ := run(t, "investigate_delete", map[string]interface{}{"run_id": "r1"})
+			require.True(t, res.IsError)
+			assert.Contains(t, text(res), "HTTP ")
+			assert.Contains(t, text(res), "deletion refused")
+			assert.Equal(t, []string{"DELETE runs/r1"}, g.calls())
+		})
+	}
 }
 
 func TestWaveSendsTheStepsOnly(t *testing.T) {

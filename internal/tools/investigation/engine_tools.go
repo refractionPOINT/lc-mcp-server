@@ -180,6 +180,12 @@ func init() {
 			mcp.WithNumber("wait", mcp.Description("For events: wait up to this many seconds (0..10) for a new event. Default 0.")),
 		}, handleGet)
 
+	register("investigate_delete",
+		"Delete an investigation run by its run_id. This is destructive. Requires investigation.set.",
+		[]mcp.ToolOption{
+			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id to delete.")),
+		}, handleDelete)
+
 	register("investigate_wave",
 		preferWaves+"Hands the engine a whole batch of questions at once and gets compact, typed answers. The engine runs every ready "+
 			"step in parallel with YOUR token (no plan, no verdict, nothing stored), reuses what it already knows, and can "+
@@ -443,6 +449,21 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 		body["wait_seconds"] = wait
 	}
 	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "runs", body: body, timeout: time.Duration(wait)*time.Second + waitMargin})
+	if err != nil {
+		return fail(err)
+	}
+	return tools.SuccessResult(out), nil
+}
+
+func handleDelete(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
+	runID, err := optString(args, "run_id")
+	if err != nil {
+		return fail(err)
+	}
+	if err := pathID("run_id", runID); err != nil {
+		return fail(err)
+	}
+	out, err := call(ctx, engineCall{method: http.MethodDelete, suffix: "runs/" + url.PathEscape(runID)})
 	if err != nil {
 		return fail(err)
 	}

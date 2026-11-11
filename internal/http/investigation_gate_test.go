@@ -30,6 +30,7 @@ func TestInvestigationEngineGateOffRegistersNoTool(t *testing.T) {
 	// The package is linked and did declare its tools; they were kept out, not forgotten.
 	held := tools.HeldToolNames()
 	assert.Contains(t, held, "investigate_get")
+	assert.Contains(t, held, "investigate_delete")
 	assert.Contains(t, held, "investigate_save_plan")
 
 	for _, name := range tools.GetAllRegisteredToolNames() {
@@ -111,7 +112,7 @@ func TestInvestigationEngineGateOffRefusesCallsAndHeaders(t *testing.T) {
 	srv := createTestServer(t)
 	t.Cleanup(srv.sdkCache.Close)
 	srv.profile = ""
-	for _, name := range []string{"investigate_get", "investigate_save_plan", "investigate_wave"} {
+	for _, name := range []string{"investigate_get", "investigate_save_plan", "investigate_wave", "investigate_delete"} {
 		w := postGateJSONRPC(t, srv, "/mcp", "tools/call", map[string]interface{}{"name": name, "arguments": map[string]interface{}{}}, creds)
 		var resp struct {
 			Error struct {
