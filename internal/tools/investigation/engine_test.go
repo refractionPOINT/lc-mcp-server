@@ -1066,3 +1066,40 @@ func TestDeleteRunAcceptsEmptySuccessOnlyForDelete(t *testing.T) {
 		})
 	}
 }
+
+func TestWaveMetadataAndRunIDPassThrough(t *testing.T) {
+	g := newGateway(t)
+	var got map[string]any
+	g.on("POST waves", func(_ *http.Request, b []byte) (int, any) {
+		require.NoError(t, json.Unmarshal(b, &got))
+		return 200, map[string]any{"run_id": "wave-1", "results": []any{}, "compact": true}
+	})
+	steps := []interface{}{map[string]interface{}{"id": "host", "op": "entity.resolve"}}
+	args := map[string]interface{}{"steps": steps, "title": "Check host activity", "session": "thread/1&next", "correlation_id": "request-1"}
+	reg, ok := tools.GetTool("investigate_wave")
+	require.True(t, ok)
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		property, ok := reg.Schema.InputSchema.Properties[name].(map[string]any)
+		require.True(t, ok, name)
+		assert.Equal(t, "string", property["type"], name)
+		assert.NotContains(t, reg.Schema.InputSchema.Required, name)
+	}
+	res, body := run(t, "investigate_wave", args)
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, "wave-1", body["run_id"])
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		assert.Equal(t, args[name], got[name], name)
+	}
+	got = nil
+	res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": steps})
+	require.False(t, res.IsError, text(res))
+	for _, name := range []string{"title", "session", "correlation_id"} {
+		assert.NotContains(t, got, name)
+		for _, invalid := range []interface{}{float64(1), true, []interface{}{}, map[string]interface{}{}} {
+			before := len(g.calls())
+			res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": steps, name: invalid})
+			assert.True(t, res.IsError, name)
+			assert.Len(t, g.calls(), before, "invalid metadata must not reach the engine")
+		}
+	}
+}
