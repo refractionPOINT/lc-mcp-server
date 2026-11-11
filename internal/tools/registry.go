@@ -718,7 +718,7 @@ var ProfileDefinitions = map[string][]string{
 	},
 	"investigation_engine": {
 		// Investigation Engine: write plan templates (always saved as drafts), dry-run them on past alerts,
-		// start and read runs.
+		// start, read and delete runs.
 		"investigate_operators",
 		"investigate_authoring_kit",
 		"investigate_validate_plan",
@@ -726,6 +726,7 @@ var ProfileDefinitions = map[string][]string{
 		"investigate_save_plan",
 		"investigate_list_templates",
 		"investigate_start",
+		"investigate_delete",
 		"investigate_get",
 		"investigate_wave",
 		"investigate_packs",

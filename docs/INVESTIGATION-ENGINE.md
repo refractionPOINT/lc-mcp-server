@@ -21,6 +21,7 @@ result.
 | `investigate_save_plan` | Saves the template to the `investigation_plan` hive, **always as a draft** | `investigation_plan.get/set`, `investigation.get`, `insight.evt.get` |
 | `investigate_list_templates` | The org's templates (its `investigation_plan` records): name, status (draft/active) | `investigation.get`, `insight.evt.get` |
 | `investigate_start`, `investigate_get` | Start a run, read its state, steps, events or case | `investigation.set` / `.get`, `insight.evt.get` |
+| `investigate_delete` | Delete a run by `run_id` (destructive); not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 | `investigate_wave` | Run a batch of questions (operators or fact packs) in parallel and get compact typed answers, stopping as soon as a `stop_when` expression is true. Also a way to see what an operator returns before writing a plan around it | `investigation.set`, `insight.evt.get` |
 | `investigate_packs` | The fact packs (named bundles of questions: host context, process tree, hash spread, the org's machines and owners, ...) as a compact index that is enough to write the waves: parameters with types, exports with type, reference form and a short meaning. `name` returns one pack in full | `investigation.get`, `insight.evt.get` |
 

@@ -694,6 +694,7 @@ investigation_engine:
   - investigate_save_plan
   - investigate_list_templates
   - investigate_start
+  - investigate_delete
   - investigate_get
   - investigate_wave
   - investigate_packs
