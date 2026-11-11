@@ -68,7 +68,11 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 	reply := func(status int, v any) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(v)
+		if raw, ok := v.([]byte); ok {
+			_, _ = w.Write(raw)
+		} else {
+			_ = json.NewEncoder(w).Encode(v)
+		}
 	}
 	if rest, ok := strings.CutPrefix(path, "/v1/investigate/"+testOID+"/"); ok {
 		key := r.Method + " " + rest
@@ -1043,5 +1047,22 @@ func TestDraftRecordRefusesYAMLAliases(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("%s: draftRecord did not return", name)
 		}
+	}
+}
+
+func TestDeleteRunAcceptsEmptySuccessOnlyForDelete(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusNoContent} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			g := newGateway(t)
+			g.reply("DELETE runs/r1", status, []byte{})
+			res, body := run(t, "investigate_delete", map[string]interface{}{"run_id": "r1"})
+			require.False(t, res.IsError, text(res))
+			assert.Equal(t, true, body["deleted"])
+			assert.Equal(t, []string{"DELETE runs/r1"}, g.calls())
+			g.reply("GET runs/r1", status, []byte{})
+			res, _ = run(t, "investigate_get", map[string]interface{}{"run_id": "r1"})
+			require.True(t, res.IsError)
+			assert.Contains(t, text(res), "JSON object")
+		})
 	}
 }

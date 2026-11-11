@@ -107,6 +107,10 @@ func call(ctx context.Context, c engineCall) (map[string]interface{}, error) {
 		if response.StatusCode < 200 || response.StatusCode > 299 {
 			return nil, fmt.Errorf("HTTP %d: %s", response.StatusCode, errorMessage(raw))
 		}
+		// A successful DELETE may carry no body. Other methods still require JSON.
+		if c.method == http.MethodDelete && len(bytes.TrimSpace(raw)) == 0 {
+			return map[string]interface{}{"deleted": true}, nil
+		}
 		var out map[string]interface{}
 		if err := json.Unmarshal(raw, &out); err != nil || out == nil {
 			return nil, fmt.Errorf("the engine did not answer with a JSON object")
