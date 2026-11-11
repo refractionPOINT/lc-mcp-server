@@ -181,7 +181,7 @@ func init() {
 		}, handleGet)
 
 	register("investigate_delete",
-		"Delete an investigation run by its run_id. This is destructive. Requires investigation.set.",
+		"Delete an investigation run by its run_id. This is destructive. Requires investigation.set and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id to delete.")),
 		}, handleDelete)

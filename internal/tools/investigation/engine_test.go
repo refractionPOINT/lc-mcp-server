@@ -532,7 +532,7 @@ func TestDeleteRunUsesAuthenticatedGateway(t *testing.T) {
 
 	reg, ok := tools.GetTool("investigate_delete")
 	require.True(t, ok)
-	assert.Contains(t, reg.Description, "Requires investigation.set")
+	assert.Contains(t, reg.Description, "Requires investigation.set and insight.evt.get.")
 	assert.Contains(t, reg.Schema.InputSchema.Required, "run_id")
 	schema := reg.ToolSchema()
 	require.NotNil(t, schema.Annotations.DestructiveHint)
