@@ -14,7 +14,7 @@ require (
 	github.com/mark3labs/mcp-go v1.4.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/redis/go-redis/v9 v9.17.2
-	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20261021040350-8413bf1fa358
+	github.com/refractionPOINT/go-limacharlie/limacharlie v0.0.0-20261113171331-fe6fd2229db0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
