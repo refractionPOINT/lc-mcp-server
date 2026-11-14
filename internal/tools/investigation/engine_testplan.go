@@ -192,7 +192,7 @@ func (a *accumulator) terminal() bool {
 // samples that need a look.
 func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	t := a.latest
-	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
+	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
 	if sum, ok := out["summary"].(map[string]interface{}); ok {
 		sum = pickAll(sum)
 		if c, ok := sum["cost"].(map[string]interface{}); ok {
@@ -200,16 +200,23 @@ func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 		}
 		out["summary"] = sum
 	}
+	if includeSteps {
+		for k, v := range pick(t, "plan", "expanded_plan") {
+			out[k] = v
+		}
+	}
 	out["done"] = a.terminal()
 	if p, ok := t["policy"].(map[string]interface{}); ok {
 		out["policy_clamped"] = p["clamped"]
 	}
 	if v, ok := t["validation"].(map[string]interface{}); ok {
-		out["validation"] = v // resolved composition digests must remain copyable on valid tests too
-		if str(t["state"]) == "invalid" {
+		if str(t["state"]) == "invalid" || includeSteps {
 			out["validation"] = v
-		} else if w, ok := v["warnings"].([]interface{}); ok && len(w) > 0 {
-			out["validation_warnings"] = w
+		} else {
+			out["validation"] = compactValidation(v)
+			if w, ok := v["warnings"].([]interface{}); ok && len(w) > 0 {
+				out["validation_warnings"] = w
+			}
 		}
 	}
 	idxs := make([]int, 0, len(a.results))
@@ -247,6 +254,17 @@ func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	return out
 }
 
+// compactValidation keeps copyable composition locks without expanded fact bodies.
+func compactValidation(v map[string]interface{}) map[string]interface{} {
+	out := pick(v, "valid", "digest", "snapshot_digest", "children", "trust", "trust_provenance", "resolved_packs")
+	for _, key := range []string{"plan", "expanded_plan"} {
+		if plan, ok := v[key].(map[string]interface{}); ok {
+			out[key] = pick(plan, "digest", "snapshot_digest", "children", "trust", "trust_provenance", "resolved_packs")
+		}
+	}
+	return out
+}
+
 // verdictUndecided is a sample the plan could not settle: no verdict, or an inconclusive one.
 func verdictUndecided(r map[string]interface{}) bool {
 	v, ok := r["verdict"].(map[string]interface{})
@@ -271,7 +289,7 @@ func pickAll(m map[string]interface{}) map[string]interface{} {
 // compactResult keeps what the author acts on. The steps that succeeded are dropped unless asked for: they
 // are the bulk, and only the ones that did not succeed explain an unknown.
 func compactResult(r map[string]interface{}, includeSteps bool) map[string]interface{} {
-	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
+	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
 	if c, ok := r["cost"].(map[string]interface{}); ok {
 		out["cost"] = compactCost(c)
 	}
@@ -280,6 +298,9 @@ func compactResult(r map[string]interface{}, includeSteps bool) map[string]inter
 	}
 	steps, _ := r["steps"].([]interface{})
 	if includeSteps {
+		for k, v := range pick(r, "plan", "expanded_plan") {
+			out[k] = v
+		}
 		out["steps"] = steps
 		return out
 	}

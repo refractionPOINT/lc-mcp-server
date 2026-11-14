@@ -70,7 +70,7 @@ func handleSavePack(ctx context.Context, args map[string]interface{}) (*mcp.Call
 	if err != nil {
 		return fail(err)
 	}
-	if _, given := args["etag"]; given && etag == "" {
+	if args["etag"] != nil && etag == "" {
 		return tools.ErrorResult("etag must not be empty"), nil
 	}
 	if etag == "" {
@@ -84,7 +84,11 @@ func handleSavePack(ctx context.Context, args map[string]interface{}) (*mcp.Call
 	if err != nil {
 		return fail(err)
 	}
-	out := map[string]interface{}{"saved": true, "name": name}
+	stored, err := hive.NewClient(org).Get(lc.HiveArgs{HiveName: packHive, PartitionKey: org.GetOID(), Key: name})
+	if err != nil {
+		return fail(err)
+	}
+	out := map[string]interface{}{"saved": true, "name": name, "etag": stored.SysMtd.Etag}
 	if warning != "" {
 		out["hive_warning"] = warning
 	}

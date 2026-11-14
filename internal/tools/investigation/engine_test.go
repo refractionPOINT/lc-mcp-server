@@ -44,8 +44,10 @@ type gateway struct {
 	mu sync.Mutex
 	// engine answers by "METHOD route-suffix" (the part after /v1/investigate/{oid}/), status and body.
 	engine map[string]func(r *http.Request, body []byte) (int, any)
-	// hive records by key: the hive's {data, sys_mtd, usr_mtd}.
-	records map[string]map[string]any
+	// hive records by hive/key: the hive's {data, sys_mtd, usr_mtd}.
+	records      map[string]map[string]any
+	expectedHive string
+	t            *testing.T
 	// hive writes seen: key -> decoded request.
 	writes []map[string]any
 	// engineCalls records "METHOD suffix?query".
@@ -56,7 +58,7 @@ type gateway struct {
 }
 
 func newGateway(t *testing.T) *gateway {
-	g := &gateway{engine: map[string]func(*http.Request, []byte) (int, any){}, records: map[string]map[string]any{}}
+	g := &gateway{t: t, engine: map[string]func(*http.Request, []byte) (int, any){}, records: map[string]map[string]any{}}
 	fakeAPI.Handle(t, g.serve)
 	return g
 }
@@ -89,8 +91,14 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	// Hive: /v1/hive/investigation_plan/<oid>/<key>/(data|mtd)
 	parts := strings.Split(strings.TrimPrefix(path, "/v1/hive/"), "/")
+	if len(parts) == 3 && r.Method == http.MethodDelete {
+		parts = append(parts, "data")
+	}
 	if len(parts) == 4 && (parts[0] == planHive || parts[0] == packHive) && parts[1] == testOID {
-		key, kind := parts[2], parts[3]
+		if g.expectedHive != "" {
+			assert.Equal(g.t, g.expectedHive, parts[0])
+		}
+		key, kind := parts[0]+"/"+parts[2], parts[3]
 		if kind == "mtd" && r.Method == http.MethodGet && g.onMtdRead != nil {
 			g.onMtdRead()
 		}
@@ -100,6 +108,13 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 			reply(404, map[string]string{"error": "RECORD_NOT_FOUND"})
 		case r.Method == http.MethodGet:
 			reply(200, rec)
+		case r.Method == http.MethodDelete && kind == "data":
+			if !exists {
+				reply(404, map[string]string{"error": "RECORD_NOT_FOUND"})
+				return
+			}
+			delete(g.records, key)
+			reply(200, map[string]any{})
 		case r.Method == http.MethodPost && kind == "data":
 			form, _ := url.ParseQuery(string(body))
 			req := map[string]any{}
@@ -122,7 +137,7 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 				reply(409, map[string]string{"error": "ETAG_MISMATCH"})
 				return
 			}
-			next := map[string]any{"data": req["data"], "sys_mtd": map[string]any{"etag": "etag-" + key + "-2", "last_author": "agent-key"}, "usr_mtd": map[string]any{"enabled": true}}
+			next := map[string]any{"data": req["data"], "sys_mtd": map[string]any{"etag": "etag-" + key + "-" + strconv.Itoa(len(g.writes)), "last_author": "agent-key"}, "usr_mtd": map[string]any{"enabled": true}}
 			if um, ok := req["usr_mtd"]; ok {
 				next["usr_mtd"] = um
 			} else if exists {
@@ -837,8 +852,8 @@ func TestSavePlanNeverWritesActive(t *testing.T) {
 
 func TestSavePlanRefusesActiveAndExistingNames(t *testing.T) {
 	g := savePlanGateway(t)
-	g.records["hand-promoted"] = map[string]any{"data": map[string]any{"status": "active"}, "sys_mtd": map[string]any{"etag": "e1"}, "usr_mtd": map[string]any{"enabled": true}}
-	g.records["my-draft"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true, "comment": "keep"}}
+	g.records[planHive+"/hand-promoted"] = map[string]any{"data": map[string]any{"status": "active"}, "sys_mtd": map[string]any{"etag": "e1"}, "usr_mtd": map[string]any{"enabled": true}}
+	g.records[planHive+"/my-draft"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true, "comment": "keep"}}
 
 	for name, wantReason := range map[string]string{
 		"live-one":      "active",
@@ -859,12 +874,12 @@ func TestSavePlanRefusesActiveAndExistingNames(t *testing.T) {
 		assert.Equal(t, "Test plan", w["data"].(map[string]any)["description"])
 	}
 	assert.Len(t, g.hiveWrites(), 1)
-	assert.Equal(t, "active", g.records["hand-promoted"]["data"].(map[string]any)["status"], "an active record is untouched")
+	assert.Equal(t, "active", g.records[planHive+"/hand-promoted"]["data"].(map[string]any)["status"], "an active record is untouched")
 }
 
 func TestSavePlanOverwritesADraftOnlyWithTheFlagAndItsEtag(t *testing.T) {
 	g := savePlanGateway(t)
-	g.records["my-draft"] = map[string]any{"data": map[string]any{"status": "draft", "description": "old"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true}}
+	g.records[planHive+"/my-draft"] = map[string]any{"data": map[string]any{"status": "draft", "description": "old"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true}}
 	args := saveArgs("my-draft")
 	args["overwrite"] = true
 	res, _ := run(t, "investigate_save_plan", args)
@@ -872,15 +887,15 @@ func TestSavePlanOverwritesADraftOnlyWithTheFlagAndItsEtag(t *testing.T) {
 	writes := g.hiveWrites()
 	require.Len(t, writes, 1)
 	assert.Equal(t, "e2", writes[0]["etag"], "the replace is conditional on the draft that was read")
-	assert.Equal(t, "Test plan", g.records["my-draft"]["data"].(map[string]any)["description"])
+	assert.Equal(t, "Test plan", g.records[planHive+"/my-draft"]["data"].(map[string]any)["description"])
 }
 
 func TestSavePlanLosesTheRaceWhenAPersonPromotedMeanwhile(t *testing.T) {
 	g := savePlanGateway(t)
-	g.records["my-draft"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true}}
+	g.records[planHive+"/my-draft"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true}}
 	// A person promotes the draft between this tool's read and its write.
 	g.on("POST plans/validate", func(*http.Request, []byte) (int, any) {
-		g.records["my-draft"] = map[string]any{"data": map[string]any{"status": "active"}, "sys_mtd": map[string]any{"etag": "e3"}, "usr_mtd": map[string]any{"enabled": true}}
+		g.records[planHive+"/my-draft"] = map[string]any{"data": map[string]any{"status": "active"}, "sys_mtd": map[string]any{"etag": "e3"}, "usr_mtd": map[string]any{"enabled": true}}
 		return 200, map[string]any{"valid": true, "errors": []any{}}
 	})
 	// The tool reads the record after validating, so it sees e3 and refuses; had it read first, the etag
@@ -890,7 +905,7 @@ func TestSavePlanLosesTheRaceWhenAPersonPromotedMeanwhile(t *testing.T) {
 	res, body := run(t, "investigate_save_plan", args)
 	require.True(t, res.IsError)
 	assert.Equal(t, false, body["saved"])
-	assert.Equal(t, "active", g.records["my-draft"]["data"].(map[string]any)["status"])
+	assert.Equal(t, "active", g.records[planHive+"/my-draft"]["data"].(map[string]any)["status"])
 	assert.Empty(t, g.hiveWrites())
 }
 
@@ -962,19 +977,19 @@ func TestSavePlanCreateDoesNotOverwriteARecordThatAppearedMeanwhile(t *testing.T
 	g := savePlanGateway(t)
 	// A person creates the active template between this tool's existence check and its write.
 	g.onMtdRead = func() {
-		g.records["raced"] = map[string]any{"data": map[string]any{"status": "active", "description": "mine"}, "sys_mtd": map[string]any{"etag": "e9"}, "usr_mtd": map[string]any{"enabled": true}}
+		g.records[planHive+"/raced"] = map[string]any{"data": map[string]any{"status": "active", "description": "mine"}, "sys_mtd": map[string]any{"etag": "e9"}, "usr_mtd": map[string]any{"enabled": true}}
 	}
 	res, _ := run(t, "investigate_save_plan", saveArgs("raced"))
 	require.True(t, res.IsError, "the hive refuses the conditional create: %s", text(res))
-	assert.Equal(t, "mine", g.records["raced"]["data"].(map[string]any)["description"], "the person's record is untouched")
-	assert.Equal(t, "active", g.records["raced"]["data"].(map[string]any)["status"])
+	assert.Equal(t, "mine", g.records[planHive+"/raced"]["data"].(map[string]any)["description"], "the person's record is untouched")
+	assert.Equal(t, "active", g.records[planHive+"/raced"]["data"].(map[string]any)["status"])
 }
 
 func TestSaveOverwriteReplacesOnlyDraftsAndKeepsAPersonsTags(t *testing.T) {
 	g := savePlanGateway(t)
-	g.records["odd"] = map[string]any{"data": map[string]any{"status": "Active"}, "sys_mtd": map[string]any{"etag": "e1"}, "usr_mtd": map[string]any{"enabled": true}}
-	g.records["legacy"] = map[string]any{"data": map[string]any{"description": "no status"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true, "tags": []any{"reviewed", "ai-draft"}, "comment": "old"}}
-	g.records["mine"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e3"}, "usr_mtd": map[string]any{"enabled": true, "tags": []any{"team-a"}}}
+	g.records[planHive+"/odd"] = map[string]any{"data": map[string]any{"status": "Active"}, "sys_mtd": map[string]any{"etag": "e1"}, "usr_mtd": map[string]any{"enabled": true}}
+	g.records[planHive+"/legacy"] = map[string]any{"data": map[string]any{"description": "no status"}, "sys_mtd": map[string]any{"etag": "e2"}, "usr_mtd": map[string]any{"enabled": true, "tags": []any{"reviewed", "ai-draft"}, "comment": "old"}}
+	g.records[planHive+"/mine"] = map[string]any{"data": map[string]any{"status": "draft"}, "sys_mtd": map[string]any{"etag": "e3"}, "usr_mtd": map[string]any{"enabled": true, "tags": []any{"team-a"}}}
 
 	args := saveArgs("odd")
 	args["overwrite"] = true
@@ -988,7 +1003,7 @@ func TestSaveOverwriteReplacesOnlyDraftsAndKeepsAPersonsTags(t *testing.T) {
 		args["overwrite"] = true
 		res, _ := run(t, "investigate_save_plan", args)
 		require.False(t, res.IsError, name+": "+text(res))
-		assert.Equal(t, want, g.records[name]["usr_mtd"].(map[string]any)["tags"], name)
+		assert.Equal(t, want, g.records[planHive+"/"+name]["usr_mtd"].(map[string]any)["tags"], name)
 	}
 }
 
@@ -1144,8 +1159,9 @@ func TestWaveMetadataByteLimits(t *testing.T) {
 
 func TestOrgPackWritesAreExactAndConditional(t *testing.T) {
 	g := newGateway(t)
+	g.expectedHive = packHive
 	src := "# keep bytes\nname: fictional_pack\nversion: 1\n"
-	res, _ := run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src})
+	res, saved := run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src, "etag": nil})
 	require.False(t, res.IsError, text(res))
 	writes := g.hiveWrites()
 	require.Len(t, writes, 1)
@@ -1154,12 +1170,28 @@ func TestOrgPackWritesAreExactAndConditional(t *testing.T) {
 	res, body := run(t, "investigate_get_pack", map[string]interface{}{"name": "fictional_pack"})
 	require.False(t, res.IsError, text(res))
 	assert.Equal(t, src, body["yaml"])
+	assert.NotEmpty(t, saved["etag"])
+	assert.Equal(t, body["etag"], saved["etag"])
+	res, _ = run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": "changed", "etag": "stale"})
+	require.True(t, res.IsError)
+	assert.Contains(t, text(res), "409")
+	assert.Equal(t, src, g.records[packHive+"/fictional_pack"]["data"].(map[string]any)["yaml"])
 	res, _ = run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src})
 	require.True(t, res.IsError, "create-only must refuse an existing record")
-	res, _ = run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src, "etag": body["etag"]})
+	res, updated := run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src, "etag": body["etag"]})
 	require.False(t, res.IsError, text(res))
+	assert.NotEqual(t, saved["etag"], updated["etag"])
+	res, body = run(t, "investigate_get_pack", map[string]interface{}{"name": "fictional_pack"})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, body["etag"], updated["etag"])
 	res, _ = run(t, "investigate_delete_pack", map[string]interface{}{"name": "fictional_pack"})
 	require.True(t, res.IsError, "deletion needs explicit confirmation")
+	res, body = run(t, "investigate_delete_pack", map[string]interface{}{"name": "fictional_pack", "confirm": true})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, true, body["deleted"])
+	assert.NotContains(t, g.records, packHive+"/fictional_pack")
+	res, _ = run(t, "investigate_get_pack", map[string]interface{}{"name": "fictional_pack"})
+	require.True(t, res.IsError)
 }
 
 func TestCompositionOptionalDigestPassThrough(t *testing.T) {
@@ -1187,10 +1219,18 @@ func TestCompositionOptionalDigestPassThrough(t *testing.T) {
 
 func TestCompactTestPreservesCompositionExplanation(t *testing.T) {
 	explanation := map[string]interface{}{"children": []interface{}{map[string]interface{}{"snapshot_digest": strings.Repeat("a", 64)}}, "trust_provenance": []interface{}{map[string]interface{}{"kind": "template"}}}
-	validation := map[string]interface{}{"valid": true, "expanded_plan": explanation}
+	validation := map[string]interface{}{"valid": true, "expanded_plan": explanation, "warnings": []interface{}{"notice"}}
 	a := newAccumulator()
 	a.add(map[string]interface{}{"state": "completed", "validation": validation})
+	assert.Equal(t, map[string]interface{}{"valid": true, "expanded_plan": explanation}, a.compact(false)["validation"])
+	assert.Equal(t, validation, a.compact(true)["validation"])
+	validation["expanded_plan"].(map[string]interface{})["facts"] = []interface{}{"bulky"}
+	compact := a.compact(false)["validation"].(map[string]interface{})
+	assert.NotContains(t, compact["expanded_plan"], "facts")
+	a.latest["state"] = "invalid"
 	assert.Equal(t, validation, a.compact(false)["validation"])
+	assert.NotContains(t, compactResult(map[string]interface{}{"plan": validation}, false), "plan")
+	assert.Equal(t, validation, compactResult(map[string]interface{}{"plan": validation}, true)["plan"])
 	result := compactResult(explanation, false)
 	assert.Equal(t, explanation["children"], result["children"])
 	assert.Equal(t, explanation["trust_provenance"], result["trust_provenance"])
