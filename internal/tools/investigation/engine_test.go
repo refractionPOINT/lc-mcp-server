@@ -1208,7 +1208,9 @@ func TestOrgPackSaveReadback(t *testing.T) {
 			g.expectedHive = packHive
 			src := "name: fictional_pack\nversion: 1\n"
 			g.onDataRead = func(key string) (int, any) {
-				require.Len(t, g.writes, 1, "readback must follow the successful write")
+				if !assert.Len(t, g.writes, 1, "readback must follow the successful write") {
+					return http.StatusInternalServerError, map[string]string{"error": "readback occurred before the successful write"}
+				}
 				assert.Equal(t, src, g.records[key]["data"].(map[string]any)["yaml"])
 				if scenario == "readback failure" {
 					return http.StatusServiceUnavailable, map[string]string{"error": "readback unavailable"}
