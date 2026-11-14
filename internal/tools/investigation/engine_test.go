@@ -1156,6 +1156,7 @@ func TestStartExplicitTrustPassthroughAndStrictKeys(t *testing.T) {
 	assert.Equal(t, spec, started["trust"])
 	res, _ = run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": map[string]any{"tags": []any{"trusted"}}})
 	require.True(t, res.IsError)
+	assert.Len(t, g.calls(), 1, "invalid trust is refused before any request")
 }
 
 func TestStartEmptyTrustOmitsNullAndAcceptsEmptyObject(t *testing.T) {
@@ -1170,12 +1171,61 @@ func TestStartEmptyTrustOmitsNullAndAcceptsEmptyObject(t *testing.T) {
 		if present {
 			args["trust"] = nil
 		}
+		started = nil
+		before := len(g.calls())
 		res, _ := run(t, "investigate_start", args)
 		require.False(t, res.IsError, text(res))
+		require.NotNil(t, started)
+		require.Len(t, g.calls(), before+1)
 		_, ok := started["trust"]
 		require.False(t, ok, "empty optional trust must be omitted")
 	}
+	started = nil
+	before := len(g.calls())
 	res, _ := run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": map[string]any{}})
 	require.False(t, res.IsError, text(res))
+	require.NotNil(t, started)
+	require.Len(t, g.calls(), before+1)
 	assert.Equal(t, map[string]any{}, started["trust"])
+}
+
+func TestStartTrustValidationBoundariesBeforeForwarding(t *testing.T) {
+	entries := func(n int) []any {
+		values := make([]any, n)
+		for i := range values {
+			values[i] = "entry.example.test"
+		}
+		return values
+	}
+	for _, tc := range []struct {
+		name  string
+		trust map[string]any
+		valid bool
+	}{
+		{"64 lookups", map[string]any{"lookups": entries(64)}, true},
+		{"65 lookups", map[string]any{"lookups": entries(65)}, false},
+		{"100 values", map[string]any{"values": entries(100)}, true},
+		{"101 values", map[string]any{"values": entries(101)}, false},
+		{"lookup scalar", map[string]any{"lookups": "x"}, false},
+		{"value scalar", map[string]any{"values": "x"}, false},
+		{"lookup number", map[string]any{"lookups": []any{1}}, false},
+		{"value number", map[string]any{"values": []any{1}}, false},
+		{"lookup empty", map[string]any{"lookups": []any{""}}, false},
+		{"value empty", map[string]any{"values": []any{""}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newGateway(t)
+			g.on("POST runs", func(_ *http.Request, _ []byte) (int, any) {
+				return 201, map[string]any{"run": map[string]any{"run_id": "r1"}}
+			})
+			res, _ := run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": tc.trust})
+			if tc.valid {
+				require.False(t, res.IsError, text(res))
+				require.Len(t, g.calls(), 1)
+			} else {
+				require.True(t, res.IsError)
+				require.Empty(t, g.calls(), "invalid trust must not be forwarded")
+			}
+		})
+	}
 }
