@@ -22,8 +22,8 @@ const Profile = "investigation_engine"
 // descriptions knows where it is.
 const compositionHelp = " On engines advertising template_composition_v1, a fact or wave step uses exactly one of op, use, investigate. " +
 	"investigate is {template: <literal same-org name>, version: <positive integer>, inputs: {...}, snapshot_digest?: <sha256>}. " +
-	"Normally omit snapshot_digest: admission resolves that exact version and freezes its closure. Validate/test return the resolved digest for an optional copy/paste lock; a supplied digest must match. " +
-	"Inspect expanded child facts, resolved pins, children and trust_provenance in responses. Replay/resume use frozen sources. " +
+	"Child version is mandatory and snapshot_digest optional: admission matches the current record at that version and freezes its closure. Validate/test return the resolved digest for an optional copy/paste lock; a supplied digest must match. Delete/recreate is allowed, so versions alone do not prevent record rebinding; the digest is the immutable lock. Same-version updates are guarded for all packs and callable entity templates; ordinary root template edits retain their existing behavior. " +
+	"Inspect expanded child facts, resolved_packs [{scope,name,version,digest}] for every version-only pack pin (including descendants), children and trust_provenance in validate/test responses. Replay/resume use frozen sources. " +
 	"Limits: depth 4 (root 0), 32 child scopes, 256 expanded facts, 1 MiB closure; stricter org limits apply. " +
 	"Children are advisory and cannot act or write cases. Incomplete/inconclusive/failed children are unknown, never benign; declared trust is not verified analysis. "
 

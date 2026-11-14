@@ -1195,3 +1195,22 @@ func TestCompactTestPreservesCompositionExplanation(t *testing.T) {
 	assert.Equal(t, explanation["children"], result["children"])
 	assert.Equal(t, explanation["trust_provenance"], result["trust_provenance"])
 }
+
+func TestInitialTestCompactionPreservesResolvedPacks(t *testing.T) {
+	pins := []interface{}{
+		map[string]interface{}{"scope": "root", "name": "fictional_context", "version": float64(1), "digest": strings.Repeat("a", 64)},
+		map[string]interface{}{"scope": "root/assessment", "name": "fictional_context", "version": float64(2), "digest": strings.Repeat("b", 64)},
+	}
+	validation := map[string]interface{}{"valid": true, "resolved_packs": pins,
+		"children":         []interface{}{map[string]interface{}{"template": "entity-url-harm"}},
+		"trust_provenance": []interface{}{map[string]interface{}{"kind": "pack", "name": "fictional_context"}}}
+	a := newAccumulator()
+	a.add(map[string]interface{}{"state": "running", "validation": validation, "resolved_packs": pins})
+	out := a.compact(false)
+	assert.Equal(t, validation, out["validation"], "initial successful validation must remain available before test completion")
+	assert.Equal(t, pins, out["resolved_packs"])
+	result := compactResult(map[string]interface{}{"resolved_packs": pins, "children": validation["children"], "trust_provenance": validation["trust_provenance"]}, false)
+	assert.Equal(t, pins, result["resolved_packs"])
+	assert.Equal(t, validation["children"], result["children"])
+	assert.Equal(t, validation["trust_provenance"], result["trust_provenance"])
+}

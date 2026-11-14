@@ -835,7 +835,13 @@ On engines advertising `template_composition_v1`, existing validation, test and
 wave tools pass authored `investigate: {template, version, inputs}` unchanged.
 The child version is mandatory; `snapshot_digest` is optional. Admission resolves
 and freezes the exact-version closure when omitted. Validate/test return the
-resolved digest for an optional lock; a supplied lock must match. Inspect
+resolved digest for an optional lock; a supplied lock must match. Versions match
+the current record; delete/recreate is explicitly allowed, so the digest is the
+immutable lock against record rebinding. Same-version updates are guarded for
+all packs and callable entity templates; ordinary root template edits retain
+their existing behavior. Validation and initial test validation include
+`resolved_packs: [{scope, name, version, digest}]` for every version-only pack
+pin, including descendant scopes such as `root/assessment`. Inspect
 expanded facts, children and trust contributors; replay/resume use frozen sources.
 Child judgments are advisory, cannot act or write cases, and incomplete results
 remain unknown. Limits: depth 4 (root 0), 32 child scopes, 256 facts, 1 MiB closure,

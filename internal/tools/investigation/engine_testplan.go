@@ -192,7 +192,7 @@ func (a *accumulator) terminal() bool {
 // samples that need a look.
 func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	t := a.latest
-	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest")
+	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
 	if sum, ok := out["summary"].(map[string]interface{}); ok {
 		sum = pickAll(sum)
 		if c, ok := sum["cost"].(map[string]interface{}); ok {
@@ -271,7 +271,7 @@ func pickAll(m map[string]interface{}) map[string]interface{} {
 // compactResult keeps what the author acts on. The steps that succeeded are dropped unless asked for: they
 // are the bulk, and only the ones that did not succeed explain an unknown.
 func compactResult(r map[string]interface{}, includeSteps bool) map[string]interface{} {
-	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest")
+	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
 	if c, ok := r["cost"].(map[string]interface{}); ok {
 		out["cost"] = compactCost(c)
 	}
