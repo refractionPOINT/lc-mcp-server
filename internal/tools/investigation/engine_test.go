@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -88,7 +89,7 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	// Hive: /v1/hive/investigation_plan/<oid>/<key>/(data|mtd)
 	parts := strings.Split(strings.TrimPrefix(path, "/v1/hive/"), "/")
-	if len(parts) == 4 && parts[0] == planHive && parts[1] == testOID {
+	if len(parts) == 4 && (parts[0] == planHive || parts[0] == packHive) && parts[1] == testOID {
 		key, kind := parts[2], parts[3]
 		if kind == "mtd" && r.Method == http.MethodGet && g.onMtdRead != nil {
 			g.onMtdRead()
@@ -696,7 +697,7 @@ func TestPacksIndexByDefaultFullForOneOrAll(t *testing.T) {
 	assert.Equal(t, "kept next to the index", body["warning"], "other top-level fields of the engine's answer survive")
 	row := body["packs"].([]any)[0].(map[string]any)
 	assert.Equal(t, map[string]any{
-		"name": "host_context", "does": "Who a sensor is", "args": "sid:str*, window:list=[\"-7d\",\"now\"]",
+		"name": "host_context", "version": float64(1), "does": "Who a sensor is", "args": "sid:str*, window:list=[\"-7d\",\"now\"]",
 		"exports": map[string]any{
 			"resolve":     []any{"resolved:bool maps to one entity"},
 			"card":        []any{"hostname:str @display_name host name", "whole:obj @(fact) the card"},
@@ -1139,4 +1140,58 @@ func TestWaveMetadataByteLimits(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestOrgPackWritesAreExactAndConditional(t *testing.T) {
+	g := newGateway(t)
+	src := "# keep bytes\nname: fictional_pack\nversion: 1\n"
+	res, _ := run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src})
+	require.False(t, res.IsError, text(res))
+	writes := g.hiveWrites()
+	require.Len(t, writes, 1)
+	assert.Equal(t, map[string]any{"yaml": src}, writes[0]["data"])
+	assert.Equal(t, createOnlyETag, writes[0]["etag"])
+	res, body := run(t, "investigate_get_pack", map[string]interface{}{"name": "fictional_pack"})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, src, body["yaml"])
+	res, _ = run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src})
+	require.True(t, res.IsError, "create-only must refuse an existing record")
+	res, _ = run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src, "etag": body["etag"]})
+	require.False(t, res.IsError, text(res))
+	res, _ = run(t, "investigate_delete_pack", map[string]interface{}{"name": "fictional_pack"})
+	require.True(t, res.IsError, "deletion needs explicit confirmation")
+}
+
+func TestCompositionOptionalDigestPassThrough(t *testing.T) {
+	for _, locked := range []bool{false, true} {
+		t.Run(strconv.FormatBool(locked), func(t *testing.T) {
+			g := newGateway(t)
+			child := map[string]any{"template": "entity-url-harm", "version": float64(1), "inputs": map[string]any{"url": "$message.links[0].url"}}
+			if locked {
+				child["snapshot_digest"] = strings.Repeat("a", 64)
+			}
+			steps := []interface{}{map[string]any{"id": "child", "investigate": child}}
+			resolved := map[string]any{"children": []any{map[string]any{"snapshot_digest": strings.Repeat("a", 64), "state": "completed"}}, "trust_provenance": []any{map[string]any{"kind": "template", "name": "entity-url-harm"}}}
+			g.on("POST waves", func(_ *http.Request, raw []byte) (int, any) {
+				var body map[string]any
+				require.NoError(t, json.Unmarshal(raw, &body))
+				assert.Equal(t, steps, body["steps"])
+				return 200, resolved
+			})
+			res, body := run(t, "investigate_wave", map[string]interface{}{"steps": steps, "validate_only": true})
+			require.False(t, res.IsError, text(res))
+			assert.Equal(t, resolved, body)
+		})
+	}
+}
+
+func TestCompactTestPreservesCompositionExplanation(t *testing.T) {
+	explanation := map[string]interface{}{"children": []interface{}{map[string]interface{}{"snapshot_digest": strings.Repeat("a", 64)}}, "trust_provenance": []interface{}{map[string]interface{}{"kind": "template"}}}
+	validation := map[string]interface{}{"valid": true, "expanded_plan": explanation}
+	a := newAccumulator()
+	a.add(map[string]interface{}{"state": "completed", "validation": validation})
+	assert.Equal(t, validation, a.compact(false)["validation"])
+	result := compactResult(explanation, false)
+	assert.Equal(t, explanation["children"], result["children"])
+	assert.Equal(t, explanation["trust_provenance"], result["trust_provenance"])
 }

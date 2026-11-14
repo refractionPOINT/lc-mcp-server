@@ -192,7 +192,7 @@ func (a *accumulator) terminal() bool {
 // samples that need a look.
 func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	t := a.latest
-	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary")
+	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest")
 	if sum, ok := out["summary"].(map[string]interface{}); ok {
 		sum = pickAll(sum)
 		if c, ok := sum["cost"].(map[string]interface{}); ok {
@@ -205,6 +205,7 @@ func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 		out["policy_clamped"] = p["clamped"]
 	}
 	if v, ok := t["validation"].(map[string]interface{}); ok {
+		out["validation"] = v // resolved composition digests must remain copyable on valid tests too
 		if str(t["state"]) == "invalid" {
 			out["validation"] = v
 		} else if w, ok := v["warnings"].([]interface{}); ok && len(w) > 0 {
@@ -270,7 +271,7 @@ func pickAll(m map[string]interface{}) map[string]interface{} {
 // compactResult keeps what the author acts on. The steps that succeeded are dropped unless asked for: they
 // are the bulk, and only the ones that did not succeed explain an unknown.
 func compactResult(r map[string]interface{}, includeSteps bool) map[string]interface{} {
-	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms")
+	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms", "plan", "expanded_plan", "children", "trust", "trust_provenance", "snapshot_digest")
 	if c, ok := r["cost"].(map[string]interface{}); ok {
 		out["cost"] = compactCost(c)
 	}
