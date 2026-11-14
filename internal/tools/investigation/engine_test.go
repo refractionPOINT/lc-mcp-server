@@ -55,6 +55,8 @@ type gateway struct {
 	// onMtdRead runs when the hive's metadata of a record is read (the first step of SetRecord), before the
 	// answer is computed: a test uses it to change the record between this tool's checks and its write.
 	onMtdRead func()
+	// onDataRead can simulate a writer or failure between a successful save and its readback.
+	onDataRead func(key string) (int, any)
 }
 
 func newGateway(t *testing.T) *gateway {
@@ -101,6 +103,11 @@ func (g *gateway) serve(w http.ResponseWriter, r *http.Request) {
 		key, kind := parts[0]+"/"+parts[2], parts[3]
 		if kind == "mtd" && r.Method == http.MethodGet && g.onMtdRead != nil {
 			g.onMtdRead()
+		}
+		if kind == "data" && r.Method == http.MethodGet && g.onDataRead != nil {
+			status, body := g.onDataRead(key)
+			reply(status, body)
+			return
 		}
 		rec, exists := g.records[key]
 		switch {
@@ -1192,6 +1199,43 @@ func TestOrgPackWritesAreExactAndConditional(t *testing.T) {
 	assert.NotContains(t, g.records, packHive+"/fictional_pack")
 	res, _ = run(t, "investigate_get_pack", map[string]interface{}{"name": "fictional_pack"})
 	require.True(t, res.IsError)
+}
+
+func TestOrgPackSaveReadback(t *testing.T) {
+	for _, scenario := range []string{"concurrent changed body", "readback failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			g := newGateway(t)
+			g.expectedHive = packHive
+			src := "name: fictional_pack\nversion: 1\n"
+			g.onDataRead = func(key string) (int, any) {
+				require.Len(t, g.writes, 1, "readback must follow the successful write")
+				assert.Equal(t, src, g.records[key]["data"].(map[string]any)["yaml"])
+				if scenario == "readback failure" {
+					return http.StatusServiceUnavailable, map[string]string{"error": "readback unavailable"}
+				}
+				g.records[key] = map[string]any{
+					"data":    map[string]any{"yaml": "another writer's source"},
+					"sys_mtd": map[string]any{"etag": "other-writer-etag"},
+					"usr_mtd": map[string]any{"enabled": true},
+				}
+				return http.StatusOK, g.records[key]
+			}
+			res, body := run(t, "investigate_save_pack", map[string]interface{}{"name": "fictional_pack", "yaml": src})
+			require.False(t, res.IsError, text(res))
+			assert.Equal(t, true, body["saved"])
+			assert.Equal(t, "fictional_pack", body["name"])
+			assert.NotContains(t, body, "etag")
+			assert.Contains(t, body["readback_note"], "The pack was saved")
+			if scenario == "readback failure" {
+				assert.Contains(t, body["readback_note"], "reading it back failed")
+				assert.Equal(t, src, g.records[packHive+"/fictional_pack"]["data"].(map[string]any)["yaml"])
+			} else {
+				assert.Contains(t, body["readback_note"], "different YAML")
+				assert.Equal(t, "another writer's source", g.records[packHive+"/fictional_pack"]["data"].(map[string]any)["yaml"])
+			}
+			assert.Len(t, g.hiveWrites(), 1)
+		})
+	}
 }
 
 func TestCompositionOptionalDigestPassThrough(t *testing.T) {

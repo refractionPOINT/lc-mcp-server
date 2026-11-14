@@ -85,10 +85,15 @@ func handleSavePack(ctx context.Context, args map[string]interface{}) (*mcp.Call
 		return fail(err)
 	}
 	stored, err := hive.NewClient(org).Get(lc.HiveArgs{HiveName: packHive, PartitionKey: org.GetOID(), Key: name})
-	if err != nil {
-		return fail(err)
+	out := map[string]interface{}{"saved": true, "name": name}
+	switch {
+	case err != nil:
+		out["readback_note"] = "The pack was saved, but reading it back failed; no etag is available. Read the current pack before a conditional update."
+	case stored.Data["yaml"] != src:
+		out["readback_note"] = "The pack was saved, but the readback contains different YAML, possibly from another writer; no etag is returned. Read the current pack before a conditional update."
+	default:
+		out["etag"] = stored.SysMtd.Etag
 	}
-	out := map[string]interface{}{"saved": true, "name": name, "etag": stored.SysMtd.Etag}
 	if warning != "" {
 		out["hive_warning"] = warning
 	}
