@@ -390,6 +390,7 @@ func TestTestPlanStartsPollsAndCompacts(t *testing.T) {
 	var started map[string]any
 	g.on("POST test-plan", func(_ *http.Request, b []byte) (int, any) {
 		_ = json.Unmarshal(b, &started)
+		assert.NotContains(t, started, "trust")
 		return 200, testObject("running", false, 3, sampleResult(0, "agree", true))
 	})
 	polls := 0
@@ -581,6 +582,7 @@ func TestWaveSendsTheStepsOnly(t *testing.T) {
 	require.False(t, res.IsError, text(res))
 	assert.EqualValues(t, 5000, got["deadline_ms"])
 	assert.Len(t, got["steps"], 1)
+	assert.NotContains(t, got, "trust")
 
 	res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": []interface{}{}})
 	assert.True(t, res.IsError)
@@ -1139,4 +1141,41 @@ func TestWaveMetadataByteLimits(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestStartExplicitTrustPassthroughAndStrictKeys(t *testing.T) {
+	g := newGateway(t)
+	var started map[string]any
+	g.on("POST runs", func(_ *http.Request, b []byte) (int, any) {
+		_ = json.Unmarshal(b, &started)
+		return 201, map[string]any{"run": map[string]any{"run_id": "r1"}}
+	})
+	spec := map[string]any{"lookups": []any{"partners"}, "values": []any{"partner.example.test"}}
+	res, _ := run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": spec})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, spec, started["trust"])
+	res, _ = run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": map[string]any{"tags": []any{"trusted"}}})
+	require.True(t, res.IsError)
+}
+
+func TestStartEmptyTrustOmitsNullAndAcceptsEmptyObject(t *testing.T) {
+	g := newGateway(t)
+	var started map[string]any
+	g.on("POST runs", func(_ *http.Request, b []byte) (int, any) {
+		_ = json.Unmarshal(b, &started)
+		return 201, map[string]any{"run": map[string]any{"run_id": "r1"}}
+	})
+	for _, present := range []bool{false, true} {
+		args := map[string]any{"template": "mail", "detection_id": "d"}
+		if present {
+			args["trust"] = nil
+		}
+		res, _ := run(t, "investigate_start", args)
+		require.False(t, res.IsError, text(res))
+		_, ok := started["trust"]
+		require.False(t, ok, "empty optional trust must be omitted")
+	}
+	res, _ := run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": map[string]any{}})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, map[string]any{}, started["trust"])
 }
