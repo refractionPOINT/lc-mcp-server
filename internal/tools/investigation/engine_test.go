@@ -390,6 +390,7 @@ func TestTestPlanStartsPollsAndCompacts(t *testing.T) {
 	var started map[string]any
 	g.on("POST test-plan", func(_ *http.Request, b []byte) (int, any) {
 		_ = json.Unmarshal(b, &started)
+		assert.NotContains(t, started, "trust")
 		return 200, testObject("running", false, 3, sampleResult(0, "agree", true))
 	})
 	polls := 0
@@ -581,6 +582,7 @@ func TestWaveSendsTheStepsOnly(t *testing.T) {
 	require.False(t, res.IsError, text(res))
 	assert.EqualValues(t, 5000, got["deadline_ms"])
 	assert.Len(t, got["steps"], 1)
+	assert.NotContains(t, got, "trust")
 
 	res, _ = run(t, "investigate_wave", map[string]interface{}{"steps": []interface{}{}})
 	assert.True(t, res.IsError)
