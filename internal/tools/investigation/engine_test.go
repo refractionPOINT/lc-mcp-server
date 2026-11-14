@@ -1155,3 +1155,25 @@ func TestStartExplicitTrustPassthroughAndStrictKeys(t *testing.T) {
 	res, _ = run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": map[string]any{"tags": []any{"trusted"}}})
 	require.True(t, res.IsError)
 }
+
+func TestStartEmptyTrustOmitsNullAndAcceptsEmptyObject(t *testing.T) {
+	g := newGateway(t)
+	var started map[string]any
+	g.on("POST runs", func(_ *http.Request, b []byte) (int, any) {
+		_ = json.Unmarshal(b, &started)
+		return 201, map[string]any{"run": map[string]any{"run_id": "r1"}}
+	})
+	for _, present := range []bool{false, true} {
+		args := map[string]any{"template": "mail", "detection_id": "d"}
+		if present {
+			args["trust"] = nil
+		}
+		res, _ := run(t, "investigate_start", args)
+		require.False(t, res.IsError, text(res))
+		_, ok := started["trust"]
+		require.False(t, ok, "empty optional trust must be omitted")
+	}
+	res, _ := run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": map[string]any{}})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, map[string]any{}, started["trust"])
+}
