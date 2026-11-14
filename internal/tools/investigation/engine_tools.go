@@ -163,6 +163,7 @@ func init() {
 			mcp.WithString("entity_id", mcp.Description("Entity to investigate.")),
 			mcp.WithString("question", mcp.Description("Free-text question, for a template that takes one.")),
 			mcp.WithObject("inputs", mcp.Description("Extra run inputs, name to value.")),
+			mcp.WithObject("trust", mcp.Description("Add to template trust for this run only: lookups (up to 64 same-org Lookup names) and values (up to 100 inline strings). Read using run identity with lookup.get. Customer declaration skips initial active analysis, never proves benign.")),
 			mcp.WithString("urgency", mcp.Description("Optional urgency: low, normal or high.")),
 			mcp.WithString("mode", mcp.Description("triage (default), full or scope.")),
 			mcp.WithString("case", mcp.Description("create, none or attach:<case id>. Default per the org's policy.")),
@@ -417,6 +418,13 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	if err != nil {
 		return fail(err)
 	}
+	runTrust, err := optObject(args, "trust")
+	if err != nil {
+		return fail(err)
+	}
+	if err := validateRunTrust(runTrust); err != nil {
+		return fail(err)
+	}
 	wait, _, err := optInt(args, "wait_seconds")
 	if err != nil {
 		return fail(err)
@@ -450,6 +458,9 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	}
 	if inputs != nil {
 		body["inputs"] = inputs
+	}
+	if runTrust != nil {
+		body["trust"] = runTrust
 	}
 	if wait > 0 {
 		body["wait_seconds"] = wait
