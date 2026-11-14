@@ -1140,3 +1140,18 @@ func TestWaveMetadataByteLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestStartExplicitTrustPassthroughAndStrictKeys(t *testing.T) {
+	g := newGateway(t)
+	var started map[string]any
+	g.on("POST runs", func(_ *http.Request, b []byte) (int, any) {
+		_ = json.Unmarshal(b, &started)
+		return 201, map[string]any{"run": map[string]any{"run_id": "r1"}}
+	})
+	spec := map[string]any{"lookups": []any{"partners"}, "values": []any{"partner.example.test"}}
+	res, _ := run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": spec})
+	require.False(t, res.IsError, text(res))
+	assert.Equal(t, spec, started["trust"])
+	res, _ = run(t, "investigate_start", map[string]any{"template": "mail", "detection_id": "d", "trust": map[string]any{"tags": []any{"trusted"}}})
+	require.True(t, res.IsError)
+}
