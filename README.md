@@ -823,3 +823,26 @@ limitations under the License.
 ---
 
 **Built with ❤️ for the security community**
+
+Org-authored investigation packs are managed by `investigate_get_pack`,
+`investigate_save_pack` and `investigate_delete_pack` in the investigation
+profile. They use existing Hive permissions `investigation_plan.get/set/del`
+and the `investigation_pack` data envelope `{ "yaml": "<exact source>" }`.
+Save creates only unless supplied the etag read from get; delete requires
+`confirm=true`. Discover resolved managed and org packs with `investigate_packs`.
+
+On engines advertising `template_composition_v1`, existing validation, test and
+wave tools pass authored `investigate: {template, version, inputs}` unchanged.
+The child version is mandatory; `snapshot_digest` is optional. Admission resolves
+and freezes the exact-version closure when omitted. Validate/test return the
+resolved digest for an optional lock; a supplied lock must match. Versions match
+the current record; delete/recreate is explicitly allowed, so the digest is the
+immutable lock against record rebinding. Same-version updates are guarded for
+all packs and callable entity templates; ordinary root template edits retain
+their existing behavior. Validation and initial test validation include
+`resolved_packs: [{scope, name, version, digest}]` for every version-only pack
+pin, including descendant scopes such as `root/assessment`. Inspect
+expanded facts, children and trust contributors; replay/resume use frozen sources.
+Child judgments are advisory, cannot act or write cases, and incomplete results
+remain unknown. Limits: depth 4 (root 0), 32 child scopes, 256 facts, 1 MiB closure,
+subject to stricter existing limits. Trust declarations are not verified analysis.

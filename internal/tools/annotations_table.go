@@ -324,11 +324,14 @@ var toolAnnotations = map[string]Annotation{
 	"get_os_version":          read().Open(), // sensor.SimpleRequest(os_version) tasks the live endpoint for introspection only; no endpoint state change
 	"get_processes":           read().Open(), // sensor.SimpleRequest(os_processes) tasks the live endpoint for introspection only; no endpoint state change
 	// --- investigation engine ---
-	"investigate_authoring_kit":  read(),           // GET authoring-kit: static schema/guide plus the org's operator catalog and policy; nothing changes
-	"investigate_delete":         destroy(),        // DELETE runs/{id}
-	"investigate_get":            read(),           // GET runs/{id}[/steps|/events|/case]; events long-poll is still a read
-	"investigate_list_templates": read(),           // GET templates
-	"investigate_operators":      read(),           // GET operators
+	"investigate_authoring_kit":  read(),    // GET authoring-kit: static schema/guide plus the org's operator catalog and policy; nothing changes
+	"investigate_delete":         destroy(), // DELETE runs/{id}
+	"investigate_get":            read(),    // GET runs/{id}[/steps|/events|/case]; events long-poll is still a read
+	"investigate_list_templates": read(),    // GET templates
+	"investigate_operators":      read(),    // GET operators
+	"investigate_get_pack":       read(),
+	"investigate_save_pack":      destroy().Idem(),
+	"investigate_delete_pack":    destroy().Idem(),
 	"investigate_packs":          read(),           // GET packs: the managed fact packs; nothing changes
 	"investigate_save_plan":      destroy().Idem(), // writes the investigation_plan hive record, always status draft; replaces an existing DRAFT only with overwrite=true, never an active or managed template; same input => same state
 	"investigate_start":          destroy().Open(), // POST runs: an active template's run may act on endpoints or mail as the org's policy allows (approval by default); a draft's is capped at suggest

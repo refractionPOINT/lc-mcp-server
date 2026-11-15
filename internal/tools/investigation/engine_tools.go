@@ -20,7 +20,14 @@ const Profile = "investigation_engine"
 
 // authoringLoop is the loop every authoring tool teaches, so an agent that has read any one of their
 // descriptions knows where it is.
-const authoringLoop = "Plan authoring loop: (1) investigate_authoring_kit once; (2) look at the org's real data " +
+const compositionHelp = " On engines advertising template_composition_v1, a fact or wave step uses exactly one of op, use, investigate. " +
+	"investigate is {template: <literal same-org name>, version: <positive integer>, inputs: {...}, snapshot_digest?: <sha256>}. " +
+	"Child version is mandatory and snapshot_digest optional: admission matches the current record at that version and freezes its closure. Validate/test return the resolved digest for an optional copy/paste lock; a supplied digest must match. Delete/recreate is allowed, so versions alone do not prevent record rebinding; the digest is the immutable lock. Same-version updates are guarded for all packs and callable entity templates; ordinary root template edits retain their existing behavior. " +
+	"Inspect expanded child facts, resolved_packs [{scope,name,version,digest}] for every version-only pack pin (including descendants), children and trust_provenance in validate/test responses. Replay/resume use frozen sources. " +
+	"Limits: depth 4 (root 0), 32 child scopes, 256 expanded facts, 1 MiB closure; stricter org limits apply. " +
+	"Children are advisory and cannot act or write cases. Incomplete/inconclusive/failed children are unknown, never benign; declared trust is not verified analysis. "
+
+const authoringLoop = compositionHelp + "Plan authoring loop: (1) investigate_authoring_kit once; (2) look at the org's real data " +
 	"(get_detection / run_lcql_query for which fields exist, investigate_wave to try an operator on a real value); " +
 	"(3) draft the YAML; (4) investigate_validate_plan until it reports no errors; (5) investigate_test_plan on real " +
 	"past alerts, then read the disagreements, unknowns and costs and refine (back to 3); (6) investigate_save_plan, " +
@@ -192,9 +199,9 @@ func init() {
 	register("investigate_wave",
 		preferWaves+"Hands the engine a whole batch of questions at once and gets compact, typed answers. The engine runs every ready "+
 			"step in parallel with YOUR token and records an ad-hoc run (returned as `run_id`), reuses what it already knows, and can "+
-			"stop as soon as the answer is known. `steps` is a list of {id, op|use, args, select, limit}: `op` is an "+
+			"stop as soon as the answer is known. `steps` is a list of {id, op|use|investigate, args, select, limit}: `op` is an "+
 			"operator (investigate_operators), `use` a fact pack (investigate_packs) with its parameters in `args`; "+
-			"exactly one of them. A string argument that is a whole reference (\"$host__resolve.entity_id\", "+
+			"exactly one of op, use, investigate. A string argument that is a whole reference (\"$host__resolve.entity_id\", "+
 			"\"$prev.hosts_30d\") reads another step's value and the step waits for it; a name in `inputs` is read as "+
 			"$name. `select` lists the field paths of the step's value you want (`matches[*].entity_id`; for a pack, its "+
 			"export names) and is checked before anything runs; `limit` (1..1000, default 10) caps the elements of every "+
@@ -214,14 +221,22 @@ func init() {
 			mcp.WithArray("steps", mcp.Required(), mcp.Items(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":     map[string]any{"type": "string", "description": "Unique id, letters, digits and underscore, starting with a letter; no double underscore."},
-					"op":     map[string]any{"type": "string", "description": "An operator of the catalog. Give op or use, not both."},
-					"use":    map[string]any{"type": "string", "description": "A fact pack (investigate_packs). Give op or use, not both."},
-					"args":   map[string]any{"type": "object", "description": "The operator's arguments, or the pack's parameters."},
-					"select": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Field paths of the value to return (a pack's export names for use). Default: the operator's summary."},
-					"limit":  map[string]any{"type": "integer", "description": "At most this many elements of every list (1..1000, default 10)."},
+					"id":  map[string]any{"type": "string", "description": "Unique id, letters, digits and underscore, starting with a letter; no double underscore."},
+					"op":  map[string]any{"type": "string", "description": "An operator of the catalog. Give exactly one of op, use, investigate."},
+					"use": map[string]any{"type": "string", "description": "A fact pack (investigate_packs). Give exactly one of op, use, investigate."},
+					"investigate": map[string]any{"type": "object", "required": []string{"template", "version"}, "properties": map[string]any{
+						"template":        map[string]any{"type": "string", "description": "Literal same-org entity template name."},
+						"version":         map[string]any{"type": "integer", "minimum": 1},
+						"snapshot_digest": map[string]any{"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Optional closure lock; omit to resolve exact version at admission."},
+						"inputs":          map[string]any{"type": "object"},
+					}},
+					"pack_version": map[string]any{"type": "integer", "minimum": 1},
+					"pack_digest":  map[string]any{"type": "string"},
+					"args":         map[string]any{"type": "object", "description": "The operator's arguments, or the pack's parameters."},
+					"select":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Field paths of the value to return (a pack's export names for use). Default: the operator's summary."},
+					"limit":        map[string]any{"type": "integer", "description": "At most this many elements of every list (1..1000, default 10)."},
 				},
-			}), mcp.Description("Questions: objects {id, op or use, args, select, limit}. Ids are unique.")),
+			}), mcp.Description("Questions: objects {id, op or use or investigate, args, select, limit}. Ids are unique.")),
 			mcp.WithString("title", mcp.Description("Optional human-readable title for this wave (at most 256 bytes). Allow the engine to choose a default when omitted.")),
 			mcp.WithString("session", mcp.Description("Optional session identifier grouping related waves of one investigation (at most 256 bytes).")),
 			mcp.WithString("correlation_id", mcp.Description("Optional caller correlation identifier for this wave (at most 256 bytes).")),
@@ -256,7 +271,7 @@ func init() {
 // test keeps the two equal.
 var readOnlyTools = map[string]bool{
 	"investigate_operators": true, "investigate_authoring_kit": true, "investigate_validate_plan": true,
-	"investigate_list_templates": true, "investigate_get": true, "investigate_packs": true,
+	"investigate_get_pack": true, "investigate_list_templates": true, "investigate_get": true, "investigate_packs": true,
 }
 
 // register declares an Investigation Engine tool. Every tool of this package is declared through here, which is
@@ -538,7 +553,7 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 		return fail(err)
 	}
 	if len(steps) == 0 {
-		return tools.ErrorResult("steps is required: a list of {id, op or use, args, select, limit}"), nil
+		return tools.ErrorResult("steps is required: a list of {id, op or use or investigate, args, select, limit}"), nil
 	}
 	deadline, given, err := optInt(args, "deadline_ms")
 	if err != nil {
@@ -682,6 +697,11 @@ func packIndex(out map[string]interface{}) map[string]interface{} {
 		for _, p := range asList(row["params"]) {
 			if m, ok := p.(map[string]interface{}); ok {
 				args = append(args, paramLine(m))
+			}
+		}
+		for _, key := range []string{"version", "digest", "source", "trust", "trust_provenance"} {
+			if value, ok := row[key]; ok {
+				entry[key] = value
 			}
 		}
 		entry["args"] = strings.Join(args, ", ")
