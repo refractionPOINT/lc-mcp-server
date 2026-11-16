@@ -97,6 +97,30 @@ func optStringSlice(args map[string]interface{}, key string) []string {
 	return out
 }
 
+// effortLevels are the reasoning effort values the ai-sessions service accepts.
+// The service validates the value; the tool offers these as its choices.
+var effortLevels = []string{"low", "medium", "high", "xhigh", "max"}
+
+// startSessionOptions maps start_ai_session arguments onto the SDK's overrides.
+// An absent or empty argument leaves the template value in place.
+func startSessionOptions(args map[string]interface{}) *lc.StartSessionOptions {
+	return &lc.StartSessionOptions{
+		Prompt:           optStringPtr(args, "prompt"),
+		Name:             optStringPtr(args, "name"),
+		IdempotentKey:    optStringPtr(args, "idempotent_key"),
+		Model:            optStringPtr(args, "model"),
+		Effort:           optStringPtr(args, "effort"),
+		MaxTurns:         optIntPtr(args, "max_turns"),
+		MaxBudgetUSD:     optFloatPtr(args, "max_budget_usd"),
+		TaskBudgetTokens: optIntPtr(args, "task_budget_tokens"),
+		TTLSeconds:       optIntPtr(args, "ttl_seconds"),
+		OneShot:          optBoolPtr(args, "one_shot"),
+		PermissionMode:   optStringPtr(args, "permission_mode"),
+		AllowedTools:     optStringSlice(args, "allowed_tools"),
+		DeniedTools:      optStringSlice(args, "denied_tools"),
+	}
+}
+
 // RegisterStartAISession registers the start_ai_session tool.
 func RegisterStartAISession() {
 	tools.RegisterTool(&tools.ToolRegistration{
@@ -117,6 +141,9 @@ func RegisterStartAISession() {
 				mcp.Description("Deduplication key for the session")),
 			mcp.WithString("model",
 				mcp.Description("Override the Anthropic model (e.g. claude-sonnet-4-6)")),
+			mcp.WithString("effort",
+				mcp.Enum(effortLevels...),
+				mcp.Description("Override the reasoning effort. Higher levels think longer: better on hard investigations, but slower and more tokens on the AI provider's bill. Omit to keep the definition's value, or the model's own default.")),
 			mcp.WithNumber("max_turns",
 				mcp.Description("Override the maximum number of agent turns")),
 			mcp.WithNumber("max_budget_usd",
@@ -154,22 +181,7 @@ func RegisterStartAISession() {
 				return tools.ErrorResultf("failed to get organization: %v", err), nil
 			}
 
-			opts := &lc.StartSessionOptions{
-				Prompt:           optStringPtr(args, "prompt"),
-				Name:             optStringPtr(args, "name"),
-				IdempotentKey:    optStringPtr(args, "idempotent_key"),
-				Model:            optStringPtr(args, "model"),
-				MaxTurns:         optIntPtr(args, "max_turns"),
-				MaxBudgetUSD:     optFloatPtr(args, "max_budget_usd"),
-				TaskBudgetTokens: optIntPtr(args, "task_budget_tokens"),
-				TTLSeconds:       optIntPtr(args, "ttl_seconds"),
-				OneShot:          optBoolPtr(args, "one_shot"),
-				PermissionMode:   optStringPtr(args, "permission_mode"),
-				AllowedTools:     optStringSlice(args, "allowed_tools"),
-				DeniedTools:      optStringSlice(args, "denied_tools"),
-			}
-
-			resp, err := org.AI().StartSession(ctx, definitionName, opts)
+			resp, err := org.AI().StartSession(ctx, definitionName, startSessionOptions(args))
 			if err != nil {
 				return tools.ErrorResultf("failed to start AI session: %v", err), nil
 			}
