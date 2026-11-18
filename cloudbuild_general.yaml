@@ -24,4 +24,5 @@ steps:
   - gcr.io/$PROJECT_ID/github.com/refractionpoint/lc-mcp-server:$SHORT_SHA
   - .
 options:
+ logging: CLOUD_LOGGING_ONLY
  machineType: 'E2_HIGHCPU_8'
