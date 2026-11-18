@@ -235,7 +235,11 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			cfg = ratelimit.DefaultConfigs["default"]
 		}
 
-		// Use client IP as rate limit key
+		// Key on the client address resolved from the trusted end of
+		// X-Forwarded-For (see clientip.go). Authenticated MCP calls are also
+		// limited per identity once the credential is resolved (see
+		// allowIdentity), so a caller cannot escape its own limit by changing
+		// address.
 		clientIP := getClientIP(r)
 		rateLimitKey := clientIP + ":" + endpointType
 
@@ -247,16 +251,20 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 		}
 
 		if !allowed {
-			// Return 429 Too Many Requests
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "60")
-			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"rate_limit_exceeded","error_description":"Too many requests. Please try again later."}`))
+			writeRateLimited(w)
 			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// writeRateLimited answers 429 in the shape every limiter uses.
+func writeRateLimited(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", "60")
+	w.WriteHeader(http.StatusTooManyRequests)
+	w.Write([]byte(`{"error":"rate_limit_exceeded","error_description":"Too many requests. Please try again later."}`))
 }
 
 // getEndpointType determines the rate limit category for a path
@@ -317,28 +325,6 @@ func generateCSPNonce() string {
 	b := make([]byte, 16)
 	rand.Read(b)
 	return base64.StdEncoding.EncodeToString(b)
-}
-
-// getClientIP extracts the client IP from the request
-func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header (for proxies/load balancers)
-	forwarded := r.Header.Get("X-Forwarded-For")
-	if forwarded != "" {
-		// Get first IP in the chain
-		ips := strings.Split(forwarded, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
-		}
-	}
-
-	// Check X-Real-IP header
-	realIP := r.Header.Get("X-Real-IP")
-	if realIP != "" {
-		return realIP
-	}
-
-	// Fallback to RemoteAddr
-	return r.RemoteAddr
 }
 
 // ======================================================================

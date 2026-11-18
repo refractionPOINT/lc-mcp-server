@@ -526,7 +526,14 @@ func (m *Manager) GenerateClientID() (string, error) {
 	return "mcp_" + base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreClientRegistration stores a client registration (no expiration)
+// ClientRegistrationTTL is how long an unused dynamic client registration is
+// kept. /register is unauthenticated, so registrations must not accumulate
+// forever. Every lookup (authorize) and every successful token exchange or
+// refresh (TouchClientRegistration) extends it, so a client that is signed in or
+// signing in never expires, however long its refresh chain is.
+const ClientRegistrationTTL = 90 * 24 * time.Hour
+
+// StoreClientRegistration stores a client registration with ClientRegistrationTTL
 func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientRegistration) error {
 	key := ClientPrefix + client.ClientID
 
@@ -535,15 +542,27 @@ func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientReg
 		return fmt.Errorf("failed to marshal client registration: %w", err)
 	}
 
-	// No expiration for client registrations. Create-only: a registration (and
-	// so the redirect URIs it vouches for) is never replaced under its id.
-	if err := m.createOnly(ctx, key, string(data), 0); err != nil {
+	// Create-only: a registration (and so the redirect URIs it vouches for) is
+	// never replaced under its id.
+	if err := m.createOnly(ctx, key, string(data), int(ClientRegistrationTTL/time.Second)); err != nil {
 		return fmt.Errorf("failed to store client registration: %w", err)
 	}
 
 	m.logger.Info("Stored client registration")
 
 	return nil
+}
+
+// TouchClientRegistration extends a registration's expiry without reading it.
+// It does nothing for a client_id with no registration (a global allow-list or
+// URL client id). Best effort: a failure is logged, never returned.
+func (m *Manager) TouchClientRegistration(ctx context.Context, clientID string) {
+	if clientID == "" {
+		return
+	}
+	if err := m.redis.Expire(ctx, ClientPrefix+clientID, ClientRegistrationTTL); err != nil {
+		m.logger.Warn("Failed to extend client registration expiry", "error", err)
+	}
 }
 
 // GetClientRegistration retrieves a client registration
@@ -563,6 +582,10 @@ func (m *Manager) GetClientRegistration(ctx context.Context, clientID string) (*
 	if err := json.Unmarshal([]byte(data), &client); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal client registration: %w", err)
 	}
+
+	// Sliding expiry: a client that is still being used keeps its registration
+	// (this also gives registrations that predate the TTL one). Best effort.
+	m.TouchClientRegistration(ctx, clientID)
 
 	return &client, nil
 }

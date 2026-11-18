@@ -69,6 +69,12 @@ func New(cfg *config.Config, logger *slog.Logger, sdkCache *auth.SDKCache, gcsMa
 		profile:        profile,
 	}
 
+	hops, err := configureTrustedProxyHops()
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("Client IP resolution", "trusted_proxy_hops", hops)
+
 	// Store server-wide credentials if configured
 	if cfg.Auth != nil && cfg.Auth.HasCredentials() {
 		s.serverAuthCtx = cfg.Auth

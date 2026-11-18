@@ -649,6 +649,10 @@ func (m *Manager) RefreshAccessToken(ctx context.Context, refreshToken, clientID
 	}
 	published = true
 
+	// The client the grant is bound to is in use: keep its dynamic
+	// registration alive (the presented client_id may be empty).
+	m.stateManager.TouchClientRegistration(ctx, boundClientID)
+
 	m.logger.Info("Issued new tokens via refresh",
 		"uid", uid,
 		"rotated", true)
@@ -850,6 +854,7 @@ func (m *Manager) recoverRotation(ctx context.Context, refreshToken, clientID st
 		expiresIn = 1
 	}
 	m.logger.Warn("Refresh token was rotated moments ago; handing back the same successors (refresh grace)", "uid", uid)
+	m.stateManager.TouchClientRegistration(ctx, rot.Refresh.ClientID)
 	return &TokenResponse{
 		AccessToken:  rot.Access.AccessToken,
 		TokenType:    "Bearer",

@@ -452,40 +452,6 @@ func TestGenerateCSPNonce_UniqueNonces(t *testing.T) {
 	}
 }
 
-func TestGetClientIP_XForwardedFor(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-Forwarded-For", "203.0.113.1, 198.51.100.1")
-
-	ip := getClientIP(req)
-	assert.Equal(t, "203.0.113.1", ip, "Should extract first IP from X-Forwarded-For")
-}
-
-func TestGetClientIP_XRealIP(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-Real-IP", "203.0.113.5")
-
-	ip := getClientIP(req)
-	assert.Equal(t, "203.0.113.5", ip)
-}
-
-func TestGetClientIP_RemoteAddr(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = "192.0.2.1:12345"
-
-	ip := getClientIP(req)
-	assert.Equal(t, "192.0.2.1:12345", ip, "Should fall back to RemoteAddr")
-}
-
-func TestGetClientIP_PreferenceOrder(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.Header.Set("X-Forwarded-For", "203.0.113.1")
-	req.Header.Set("X-Real-IP", "203.0.113.2")
-	req.RemoteAddr = "203.0.113.3:12345"
-
-	ip := getClientIP(req)
-	assert.Equal(t, "203.0.113.1", ip, "X-Forwarded-For should have highest priority")
-}
-
 // ===== Response Writer Tests =====
 
 func TestResponseWriter_CapturesStatusCode(t *testing.T) {
