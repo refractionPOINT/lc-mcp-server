@@ -442,6 +442,10 @@ type resolvedAuth struct {
 	// jwtPassthrough is set for a LimaCharlie JWT that is not pinned to one
 	// organization: every org-scoped tool call must then name its oid.
 	jwtPassthrough bool
+	// serverWide is set when the request carried no credential and runs as the
+	// server's own identity. Every caller shares it, so it must not be used as
+	// a per-caller key.
+	serverWide bool
 }
 
 // pinnedOID returns the organization the credential fixes every call to, or
@@ -621,7 +625,7 @@ func (s *Server) resolveRequestAuth(r *http.Request, requestID string) (*resolve
 	if s.serverAuthCtx != nil && s.serverAuthCtx.HasCredentials() {
 		// No request credentials - use server-wide credentials
 		s.logger.Debug("Using server-wide credentials", "request_id", requestID, "uid", s.serverAuthCtx.UID, "mode", s.serverAuthCtx.Mode.String())
-		return &resolvedAuth{authCtx: s.serverAuthCtx}, nil
+		return &resolvedAuth{authCtx: s.serverAuthCtx, serverWide: true}, nil
 	}
 
 	return nil, &authFailure{challenge: true, detail: "Missing authentication: provide Authorization header, X-LC-UID + X-LC-API-KEY, or X-LC-OID + X-LC-API-KEY headers"}

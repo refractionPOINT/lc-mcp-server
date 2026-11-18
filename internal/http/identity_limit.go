@@ -13,6 +13,8 @@ import (
 // rate limiting, or "" when there is nothing to key on (server-wide credentials,
 // which are not a caller).
 //
+//   - Server-wide credentials: none. They are shared by every caller, which stay
+//     on the per-address limit.
 //   - OAuth access token and LimaCharlie JWT: the uid. Both are verified before
 //     this point, so a caller cannot name someone else's bucket.
 //   - Org JWT without a uid: the org it is pinned to.
@@ -21,7 +23,7 @@ import (
 //     here; the key is a secret the caller must know, so it cannot be used to
 //     drain another caller's bucket. The key itself never reaches Redis.
 func identityKey(a *resolvedAuth) string {
-	if a == nil || a.authCtx == nil {
+	if a == nil || a.authCtx == nil || a.serverWide {
 		return ""
 	}
 	c := a.authCtx

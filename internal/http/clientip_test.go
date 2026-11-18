@@ -135,7 +135,7 @@ func TestRateLimitFallsBackToRemoteAddr(t *testing.T) {
 
 func TestIdentityKey(t *testing.T) {
 	assert.Equal(t, "", identityKey(nil))
-	assert.Equal(t, "", identityKey(&resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeNormal, OID: "o", APIKey: ""}}), "server-wide / no credential: no identity")
+	assert.Equal(t, "", identityKey(&resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeNormal, OID: "o", APIKey: "server-key-00000000"}, serverWide: true}), "server-wide credentials are shared: no identity")
 	assert.Equal(t, "uid:u1", identityKey(&resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeUIDOAuth, UID: "u1", JWTToken: "j"}}))
 	assert.Equal(t, "oid:o1", identityKey(&resolvedAuth{authCtx: &auth.AuthContext{Mode: auth.AuthModeNormal, OID: "o1", JWTToken: "j"}}))
 
@@ -179,3 +179,14 @@ func TestAuthenticatedCallerLimitedAcrossAddresses(t *testing.T) {
 }
 
 func bytesReader(b []byte) *strings.Reader { return strings.NewReader(string(b)) }
+
+// Callers without a credential run as the server's own identity; they must keep
+// their per-address buckets rather than share one.
+func TestServerWideCredentialsAreNotAnIdentity(t *testing.T) {
+	s := newLimitedServer(t)
+	s.serverAuthCtx = &auth.AuthContext{Mode: auth.AuthModeNormal, OID: "00000000-0000-0000-0000-000000000001", APIKey: "server-key-0000000000"}
+	r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	resolved, failure := s.resolveRequestAuth(r, "req")
+	require.Nil(t, failure)
+	assert.Equal(t, "", identityKey(resolved))
+}

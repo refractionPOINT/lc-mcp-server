@@ -528,8 +528,9 @@ func (m *Manager) GenerateClientID() (string, error) {
 
 // ClientRegistrationTTL is how long an unused dynamic client registration is
 // kept. /register is unauthenticated, so registrations must not accumulate
-// forever. Every lookup (authorize, token) extends it, so an in-use client never
-// expires; an idle one is re-registered by the client on the next 400.
+// forever. Every lookup (authorize) and every successful token exchange or
+// refresh (TouchClientRegistration) extends it, so a client that is signed in or
+// signing in never expires, however long its refresh chain is.
 const ClientRegistrationTTL = 90 * 24 * time.Hour
 
 // StoreClientRegistration stores a client registration with ClientRegistrationTTL
@@ -552,6 +553,18 @@ func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientReg
 	return nil
 }
 
+// TouchClientRegistration extends a registration's expiry without reading it.
+// It does nothing for a client_id with no registration (a global allow-list or
+// URL client id). Best effort: a failure is logged, never returned.
+func (m *Manager) TouchClientRegistration(ctx context.Context, clientID string) {
+	if clientID == "" {
+		return
+	}
+	if err := m.redis.Expire(ctx, ClientPrefix+clientID, ClientRegistrationTTL); err != nil {
+		m.logger.Warn("Failed to extend client registration expiry", "error", err)
+	}
+}
+
 // GetClientRegistration retrieves a client registration
 func (m *Manager) GetClientRegistration(ctx context.Context, clientID string) (*ClientRegistration, error) {
 	key := ClientPrefix + clientID
@@ -572,9 +585,7 @@ func (m *Manager) GetClientRegistration(ctx context.Context, clientID string) (*
 
 	// Sliding expiry: a client that is still being used keeps its registration
 	// (this also gives registrations that predate the TTL one). Best effort.
-	if err := m.redis.Expire(ctx, key, ClientRegistrationTTL); err != nil {
-		m.logger.Warn("Failed to extend client registration expiry", "error", err)
-	}
+	m.TouchClientRegistration(ctx, clientID)
 
 	return &client, nil
 }

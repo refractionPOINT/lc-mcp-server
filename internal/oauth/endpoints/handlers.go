@@ -488,6 +488,7 @@ func (h *Handlers) handleAuthorizationCodeGrant(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	h.stateManager.TouchClientRegistration(r.Context(), authCode.ClientID)
 	writeJSON(w, http.StatusOK, tokenResp)
 }
 
@@ -528,6 +529,8 @@ func (h *Handlers) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// A client that keeps refreshing is in use: keep its registration alive.
+	h.stateManager.TouchClientRegistration(r.Context(), clientID)
 	writeJSON(w, http.StatusOK, tokenResp)
 }
 

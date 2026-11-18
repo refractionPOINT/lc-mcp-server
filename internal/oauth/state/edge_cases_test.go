@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -678,4 +679,30 @@ func TestClientRegistration_ExpiresUnlessUsed(t *testing.T) {
 	got, err = manager.GetClientRegistration(ctx, "mcp_ttl2")
 	require.NoError(t, err)
 	assert.NotNil(t, got, "a client in use does not expire")
+}
+
+func TestClientRegistration_LegacyAndTouch(t *testing.T) {
+	manager, mr := setupTestManager(t)
+	ctx := context.Background()
+
+	// A registration written before the TTL existed has none; the first lookup gives it one.
+	data, err := json.Marshal(NewClientRegistration("mcp_legacy", "App", []string{"https://app.example.com/cb"}))
+	require.NoError(t, err)
+	key := ClientPrefix + "mcp_legacy"
+	require.NoError(t, mr.Set(key, string(data)))
+	assert.Equal(t, time.Duration(0), mr.TTL(key))
+	got, err := manager.GetClientRegistration(ctx, "mcp_legacy")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, ClientRegistrationTTL, mr.TTL(key))
+
+	// A token refresh extends the registration without reading it, and does not
+	// create anything for an unregistered client id.
+	require.NoError(t, manager.StoreClientRegistration(ctx, NewClientRegistration("mcp_touch", "App", []string{"https://app.example.com/cb"})))
+	mr.FastForward(ClientRegistrationTTL - time.Hour)
+	manager.TouchClientRegistration(ctx, "mcp_touch")
+	assert.Equal(t, ClientRegistrationTTL, mr.TTL(ClientPrefix+"mcp_touch"))
+	manager.TouchClientRegistration(ctx, "not-registered")
+	manager.TouchClientRegistration(ctx, "")
+	assert.False(t, mr.Exists(ClientPrefix+"not-registered"))
 }
