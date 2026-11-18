@@ -1180,12 +1180,20 @@ func (h *Handlers) HandleAuthorizationServerMetadata(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusOK, metadata)
 }
 
+// Bounds on what the unauthenticated /register endpoint accepts and stores.
+const (
+	maxRegisterBodyBytes    = 64 * 1024
+	maxRegisterRedirectURIs = 10
+	maxRegisterRedirectURI  = 2048 // bytes per redirect URI
+)
+
 // HandleRegister handles POST /register - Dynamic Client Registration (RFC 7591)
 func (h *Handlers) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Method not allowed", http.StatusMethodNotAllowed))
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRegisterBodyBytes)
 
 	// Parse request body
 	var req struct {
@@ -1217,6 +1225,20 @@ func (h *Handlers) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	if len(req.RedirectURIs) == 0 {
 		WriteOAuthError(w, NewOAuthError(ErrInvalidRequest, "Missing redirect_uris parameter", http.StatusBadRequest))
 		return
+	}
+
+	// Bound what an unauthenticated caller can make us store.
+	if len(req.RedirectURIs) > maxRegisterRedirectURIs {
+		WriteOAuthError(w, NewOAuthError("invalid_redirect_uri",
+			fmt.Sprintf("At most %d redirect_uris are allowed", maxRegisterRedirectURIs), http.StatusBadRequest))
+		return
+	}
+	for _, uri := range req.RedirectURIs {
+		if len(uri) > maxRegisterRedirectURI {
+			WriteOAuthError(w, NewOAuthError("invalid_redirect_uri",
+				fmt.Sprintf("redirect_uri longer than %d bytes", maxRegisterRedirectURI), http.StatusBadRequest))
+			return
+		}
 	}
 
 	// SECURITY FIX: Validate redirect URIs with proper URL parsing

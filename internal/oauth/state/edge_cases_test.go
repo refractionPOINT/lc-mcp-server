@@ -653,3 +653,29 @@ func TestTokenGeneration_StressTest(t *testing.T) {
 		assert.Equal(t, goroutines*4, count, "All tokens should be generated")
 	})
 }
+
+func TestClientRegistration_ExpiresUnlessUsed(t *testing.T) {
+	manager, mr := setupTestManager(t)
+	ctx := context.Background()
+	key := ClientPrefix + "mcp_ttl"
+
+	require.NoError(t, manager.StoreClientRegistration(ctx, NewClientRegistration("mcp_ttl", "App", []string{"https://app.example.com/cb"})))
+	assert.Equal(t, ClientRegistrationTTL, mr.TTL(key), "a registration is stored with a TTL")
+
+	// An idle registration disappears.
+	mr.FastForward(ClientRegistrationTTL + time.Second)
+	got, err := manager.GetClientRegistration(ctx, "mcp_ttl")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	// Using it extends it (also for registrations that predate the TTL).
+	require.NoError(t, manager.StoreClientRegistration(ctx, NewClientRegistration("mcp_ttl2", "App", []string{"https://app.example.com/cb"})))
+	mr.FastForward(ClientRegistrationTTL - time.Hour)
+	got, err = manager.GetClientRegistration(ctx, "mcp_ttl2")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	mr.FastForward(ClientRegistrationTTL - time.Hour)
+	got, err = manager.GetClientRegistration(ctx, "mcp_ttl2")
+	require.NoError(t, err)
+	assert.NotNil(t, got, "a client in use does not expire")
+}

@@ -253,6 +253,10 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 		authErr.write(s, w, r, id)
 		return
 	}
+	if !s.allowIdentity(w, r, resolved) {
+		errorClass = "rate_limited"
+		return
+	}
 	authCtx := resolved.authCtx
 	isJWTPassthrough := resolved.jwtPassthrough
 

@@ -526,7 +526,13 @@ func (m *Manager) GenerateClientID() (string, error) {
 	return "mcp_" + base64.URLEncoding.EncodeToString(b), nil
 }
 
-// StoreClientRegistration stores a client registration (no expiration)
+// ClientRegistrationTTL is how long an unused dynamic client registration is
+// kept. /register is unauthenticated, so registrations must not accumulate
+// forever. Every lookup (authorize, token) extends it, so an in-use client never
+// expires; an idle one is re-registered by the client on the next 400.
+const ClientRegistrationTTL = 90 * 24 * time.Hour
+
+// StoreClientRegistration stores a client registration with ClientRegistrationTTL
 func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientRegistration) error {
 	key := ClientPrefix + client.ClientID
 
@@ -535,9 +541,9 @@ func (m *Manager) StoreClientRegistration(ctx context.Context, client *ClientReg
 		return fmt.Errorf("failed to marshal client registration: %w", err)
 	}
 
-	// No expiration for client registrations. Create-only: a registration (and
-	// so the redirect URIs it vouches for) is never replaced under its id.
-	if err := m.createOnly(ctx, key, string(data), 0); err != nil {
+	// Create-only: a registration (and so the redirect URIs it vouches for) is
+	// never replaced under its id.
+	if err := m.createOnly(ctx, key, string(data), int(ClientRegistrationTTL/time.Second)); err != nil {
 		return fmt.Errorf("failed to store client registration: %w", err)
 	}
 
@@ -562,6 +568,12 @@ func (m *Manager) GetClientRegistration(ctx context.Context, clientID string) (*
 	var client ClientRegistration
 	if err := json.Unmarshal([]byte(data), &client); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal client registration: %w", err)
+	}
+
+	// Sliding expiry: a client that is still being used keeps its registration
+	// (this also gives registrations that predate the TTL one). Best effort.
+	if err := m.redis.Expire(ctx, key, ClientRegistrationTTL); err != nil {
+		m.logger.Warn("Failed to extend client registration expiry", "error", err)
 	}
 
 	return &client, nil
