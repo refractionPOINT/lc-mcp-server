@@ -416,12 +416,21 @@ Prevent duplicate actions within time windows.
 ```yaml
 suppression:
   max_count: 1           # maximum actions per period
-  period: 1h             # time window (supports: s, m, h, d)
+  period: 1h             # time window: a duration string (units: s, m, h; no d)
   is_global: true        # org-wide (true) vs per-sensor (false)
   keys:                  # uniqueness identifiers
     - '{{ .event.FILE_PATH }}'
     - 'detection-name'
 ```
+
+### Suppression Field Rules
+Every `suppression` block is rejected when it breaks one of these rules:
+
+- `keys` is required: a non-empty list of strings (templates allowed).
+- At least one of `max_count` or `min_count` is required (positive integers).
+- `period` is required and is a **duration string**, from `1s` to `720h` (30 days). Valid units are `ns`, `us`, `ms`, `s`, `m`, `h`. There is no `d` unit: write 7 days as `168h` and 30 days as `720h`.
+- `period` is never an integer. `period: 3600` is rejected; write `period: 1h`. Do not confuse it with `ttl` on `add tag`, which IS an integer number of seconds (`ttl: 86400`).
+- `is_global` is optional (defaults to `false`, per-sensor). `count_path` is optional.
 
 ### Threshold Activation
 Only trigger after minimum occurrence count.
