@@ -150,18 +150,24 @@ func (e *engineError) Error() string {
 	return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message)
 }
 
-// text is the tool result text: the engine's message on the first line, then the relayed fields as one JSON
-// object (with the HTTP status), so an agent reads error_code and reason_code instead of parsing words.
-func (e *engineError) text() string {
+// oneLine makes a message one line: the JSON detail is on the line after it.
+func oneLine(s string) string {
+	return strings.Join(strings.Fields(strings.NewReplacer("\r", " ", "\n", " ").Replace(s)), " ")
+}
+
+// textFor is the tool result text for err, which is this error or wraps it: the message on the first line (with
+// whatever context a caller added around the engine's answer), then the relayed fields as one JSON object with the
+// HTTP status, so an agent reads error_code and reason_code instead of parsing words.
+func (e *engineError) textFor(err error) string {
 	detail := map[string]interface{}{"http_status": e.Status}
 	for k, v := range e.Fields {
 		detail[k] = v
 	}
-	b, err := json.Marshal(detail)
-	if err != nil {
-		return e.Error()
+	b, merr := json.Marshal(detail)
+	if merr != nil {
+		return oneLine(err.Error())
 	}
-	return e.Error() + "\n" + string(b)
+	return oneLine(err.Error()) + "\n" + string(b)
 }
 
 // errorMessage is the engine's "error" field when the body has one, else the trimmed body.

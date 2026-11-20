@@ -122,7 +122,8 @@ func init() {
 			"facts that could not be resolved and why (the usual cause is a wrong field path or argument), `problem_steps` the "+
 			"steps that failed. A test takes seconds to minutes: this call waits up to `wait_seconds`; if `done` is false, call "+
 			"again with the returned `test_id` (and nothing else) to keep waiting. Requires investigation.set and "+
-			"insight.evt.get; it counts against the org's concurrent run cap and bills LLM steps. "+authoringLoop,
+			"insight.evt.get; it counts against the org's concurrent run cap (`too_many_runs`, 429: retry later) and bills LLM "+
+			"steps. A refusal carries `error_code` and, when there is one, `reason_code`: act on those, not on the message. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("yaml", mcp.Description("Template source (YAML) to test as a draft. Give this or `template`.")),
 			mcp.WithString("template", mcp.Description("Name of a stored template (draft or active) to test. Give this or `yaml`.")),
@@ -301,7 +302,7 @@ func register(name, description string, options []mcp.ToolOption, h tools.ToolHa
 func fail(err error) (*mcp.CallToolResult, error) {
 	var engine *engineError
 	if errors.As(err, &engine) {
-		return tools.ErrorResult(engine.text()), nil
+		return tools.ErrorResult(engine.textFor(err)), nil
 	}
 	return tools.ErrorResult(err.Error()), nil
 }

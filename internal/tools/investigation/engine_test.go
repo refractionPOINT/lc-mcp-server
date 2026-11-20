@@ -1517,3 +1517,36 @@ func TestStartDescriptionTeachesTheRefusals(t *testing.T) {
 	_, hasAuto := reg.Schema.InputSchema.Properties["auto"]
 	assert.False(t, hasAuto, "plan.auto is refused by the engine for a person: the parameter is gone")
 }
+
+// The message is one line, whatever the body held, so the JSON detail is always the second line.
+func TestErrorMessageStaysOneLineBeforeTheDetail(t *testing.T) {
+	g := newGateway(t)
+	g.on("GET templates", func(*http.Request, []byte) (int, any) {
+		return 502, []byte("<html>\r\n<body>bad gateway</body>\n</html>\n")
+	})
+	res, _ := run(t, "investigate_list_templates", nil)
+	require.True(t, res.IsError)
+	lines := strings.Split(text(res), "\n")
+	require.Len(t, lines, 2, text(res))
+	assert.Equal(t, "HTTP 502: <html> <body>bad gateway</body> </html>", lines[0])
+	assert.JSONEq(t, `{"http_status":502}`, lines[1])
+
+	g.reply("GET operators", 400, map[string]any{"error": "line one\nline two", "reason_code": "r"})
+	res, _ = run(t, "investigate_operators", nil)
+	lines = strings.Split(text(res), "\n")
+	require.Len(t, lines, 2, text(res))
+	assert.Equal(t, "HTTP 400: line one line two", lines[0])
+}
+
+// When a step of the save fails, the message says which step, and the engine's fields still follow.
+func TestSavePlanKeepsTheContextOfAFailedCheck(t *testing.T) {
+	g := savePlanGateway(t)
+	g.reply("GET templates", 403, map[string]any{"error": "forbidden", "error_code": "forbidden", "reason_code": "identity_not_allowed"})
+	res, _ := run(t, "investigate_save_plan", saveArgs("p"))
+	require.True(t, res.IsError)
+	message, detail, found := strings.Cut(text(res), "\n")
+	require.True(t, found, text(res))
+	assert.Equal(t, "could not list the org's templates to check the name: HTTP 403: forbidden", message)
+	assert.Contains(t, detail, `"reason_code":"identity_not_allowed"`)
+	assert.Empty(t, g.hiveWrites())
+}
