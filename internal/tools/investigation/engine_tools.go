@@ -3,6 +3,7 @@ package investigation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -60,6 +61,9 @@ const maxWaveDeadlineMS = 300000
 
 const maxWaveMetadataBytes = 256
 
+var startUrgencies = map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
+var startModes = map[string]bool{"triage": true, "full": true, "scope": true}
+
 var sectionNames = map[string]bool{"schema": true, "guide": true, "operators": true, "examples": true, "policy": true, "codes": true, "packs": true, "library": true}
 
 func init() {
@@ -91,7 +95,7 @@ func init() {
 			"use with investigate_operators (names). `size` says what was returned. Requires investigation.get and "+
 			"insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
-			mcp.WithArray("sections", mcp.WithStringItems(), mcp.Description("Optional. Any of schema, guide, operators, examples, policy, codes, packs, library. Omit for the whole kit.")),
+			mcp.WithArray("sections", mcp.WithStringItems(), mcp.Description("Optional. Any of schema, guide, operators, examples, policy, codes, packs, library. Omit for everything except library.")),
 		}, handleKit)
 
 	register("investigate_validate_plan",
@@ -100,7 +104,7 @@ func init() {
 			"Returns `valid`, `errors` and `warnings` (each with a `code`, a `path`, a message and often a `suggestion`: the "+
 			"fix), the worst-case step count and cost class, and an `estimate` of the worst-case cost of one run. Fix every "+
 			"error, and read every warning, then validate again until `errors` is empty. A template that does not validate "+
-			"cannot be saved or tested. Requires investigation.get. "+authoringLoop,
+			"cannot be saved or tested. Requires investigation.get and insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("yaml", mcp.Required(), mcp.Description("The template source (YAML). The template name is not part of it; do not add a `name:` key.")),
 		}, handleValidate)
@@ -118,7 +122,8 @@ func init() {
 			"facts that could not be resolved and why (the usual cause is a wrong field path or argument), `problem_steps` the "+
 			"steps that failed. A test takes seconds to minutes: this call waits up to `wait_seconds`; if `done` is false, call "+
 			"again with the returned `test_id` (and nothing else) to keep waiting. Requires investigation.set and "+
-			"insight.evt.get; it counts against the org's concurrent run cap and bills LLM steps. "+authoringLoop,
+			"insight.evt.get; it counts against the org's concurrent run cap (`too_many_runs`, 429: retry later) and bills LLM "+
+			"steps. A refusal carries `error_code` and, when there is one, `reason_code`: act on those, not on the message. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("yaml", mcp.Description("Template source (YAML) to test as a draft. Give this or `template`.")),
 			mcp.WithString("template", mcp.Description("Name of a stored template (draft or active) to test. Give this or `yaml`.")),
@@ -157,22 +162,27 @@ func init() {
 
 	register("investigate_start",
 		"Start an investigation run: the engine gathers facts with its operators, weighs them and reaches a verdict "+
-			"(true_positive, false_positive or inconclusive) with a proof. Give a `template` (or `auto` to pick by the alert) "+
-			"and the thing to investigate: a `detection_id`, a `case_id`, an `entity_id` or a `question`. A draft template "+
-			"runs with autonomy capped at suggest; an active one acts as the org's policy says (response actions may need a "+
-			"person's approval). To try a draft on past alerts without a run, use investigate_test_plan instead. Poll with "+
-			"investigate_get. Requires investigation.set and insight.evt.get.",
+			"(true_positive, false_positive or inconclusive) with a proof. Give the thing to investigate (a `detection_id`, a "+
+			"`case_id`, an `entity_id` or a `question`) and, normally, a `template`. Without `template` the engine chooses "+
+			"among the org's ACTIVE templates by their `applies_to` (a draft is never chosen); this tool sends only the ids you "+
+			"give, with source api, so only a template whose applies_to fits that can match. A draft "+
+			"template named here runs with autonomy capped at suggest; an active one acts as the org's policy says (response "+
+			"actions may need a person's approval). To try a draft on past alerts without a run, use investigate_test_plan. "+
+			"Poll with investigate_get. Requires investigation.set and insight.evt.get. "+
+			"A refusal carries `error_code` and, for a start, `reason_code`: act on those, not on the message. "+
+			"`no_template_applies` or `unknown_template`: name a template from investigate_list_templates. `forbidden`: the "+
+			"caller or the org's policy does not allow it. `too_many_runs` (429): the org's concurrent run cap is reached, retry "+
+			"later. `bad_request`: fix the argument the message names.",
 		[]mcp.ToolOption{
-			mcp.WithString("template", mcp.Description("Template name. Give this or `auto`.")),
-			mcp.WithBoolean("auto", mcp.Description("Pick the active template whose applies_to matches the alert.")),
+			mcp.WithString("template", mcp.Description("Template name (investigate_list_templates). Omit to let the engine choose among the org's active templates.")),
 			mcp.WithString("detection_id", mcp.Description("Detection to investigate.")),
 			mcp.WithString("case_id", mcp.Description("Case to investigate.")),
 			mcp.WithString("entity_id", mcp.Description("Entity to investigate.")),
 			mcp.WithString("question", mcp.Description("Free-text question, for a template that takes one.")),
 			mcp.WithObject("inputs", mcp.Description("Extra run inputs, name to value.")),
 			mcp.WithObject("trust", mcp.Description("Add to template trust for this run only: lookups (up to 64 same-org Lookup names) and values (up to 100 inline strings). Read using run identity with lookup.get. Customer declaration skips initial active analysis, never proves benign.")),
-			mcp.WithString("urgency", mcp.Description("Optional urgency: low, normal or high.")),
-			mcp.WithString("mode", mcp.Description("triage (default), full or scope.")),
+			mcp.WithString("urgency", mcp.Description("low, medium, high or critical. Default: derived from the trigger's priority or severity, else medium.")),
+			mcp.WithString("mode", mcp.Description("triage, full or scope. Default full.")),
 			mcp.WithString("case", mcp.Description("create, none or attach:<case id>. Default per the org's policy.")),
 			mcp.WithString("idempotency_key", mcp.Description("Starting twice with the same key returns the same run.")),
 			mcp.WithNumber("wait_seconds", mcp.Description("Wait up to this many seconds (0..60) for the run to finish before answering.")),
@@ -191,7 +201,7 @@ func init() {
 		}, handleGet)
 
 	register("investigate_delete",
-		"Delete an investigation run by its run_id. This is destructive. Requires investigation.set and insight.evt.get.",
+		"Delete an investigation run by its run_id. This is destructive. A run that is still running is refused (409 `conflict`). Requires investigation.set and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id to delete.")),
 		}, handleDelete)
@@ -290,6 +300,10 @@ func register(name, description string, options []mcp.ToolOption, h tools.ToolHa
 
 // fail is the tool error for a bad argument or a failed call.
 func fail(err error) (*mcp.CallToolResult, error) {
+	var engine *engineError
+	if errors.As(err, &engine) {
+		return tools.ErrorResult(engine.textFor(err)), nil
+	}
 	return tools.ErrorResult(err.Error()), nil
 }
 
@@ -425,9 +439,14 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 			return fail(err)
 		}
 	}
+	// `auto` was a parameter of an earlier version. Omitting the template is what it meant, and it still does.
+	// Only the contradiction is refused.
 	auto, err := optBool(args, "auto")
 	if err != nil {
 		return fail(err)
+	}
+	if auto && arg("template") != "" {
+		return tools.ErrorResult("give a template or omit it to let the engine choose, not both"), nil
 	}
 	inputs, err := optObject(args, "inputs")
 	if err != nil {
@@ -447,8 +466,11 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	if wait < 0 || wait > 60 {
 		return tools.ErrorResult("wait_seconds must be between 0 and 60"), nil
 	}
-	if (arg("template") != "") == auto {
-		return tools.ErrorResult("give exactly one of template or auto"), nil
+	if u := arg("urgency"); u != "" && !startUrgencies[u] {
+		return tools.ErrorResult("urgency must be low, medium, high or critical"), nil
+	}
+	if m := arg("mode"); m != "" && !startModes[m] {
+		return tools.ErrorResult("mode must be triage, full or scope"), nil
 	}
 	trigger := map[string]interface{}{}
 	for _, k := range []string{"detection_id", "case_id", "entity_id", "question"} {
@@ -459,13 +481,12 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	if len(trigger) == 0 {
 		return tools.ErrorResult("give one of detection_id, case_id, entity_id or question"), nil
 	}
-	plan := map[string]interface{}{}
+	// With no plan the engine picks the active template whose applies_to fits the trigger. Never send plan.auto:
+	// the engine refuses it for a person.
+	body := map[string]interface{}{"trigger": trigger}
 	if t := arg("template"); t != "" {
-		plan["template"] = t
-	} else {
-		plan["auto"] = true
+		body["plan"] = map[string]interface{}{"template": t}
 	}
-	body := map[string]interface{}{"trigger": trigger, "plan": plan}
 	for _, k := range []string{"urgency", "mode", "case", "idempotency_key"} {
 		if v := arg(k); v != "" {
 			body[k] = v

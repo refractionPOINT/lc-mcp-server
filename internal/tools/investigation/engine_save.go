@@ -273,7 +273,7 @@ func refuseOrFail(err error) (*mcp.CallToolResult, error) {
 	if r, ok := err.(refusal); ok {
 		return notSaved(map[string]interface{}{"saved": false, "reason": string(r)}), nil
 	}
-	return tools.ErrorResult(err.Error()), nil
+	return fail(err)
 }
 
 // mergeTags is the existing tags plus add, in order, without duplicates.
