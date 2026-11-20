@@ -527,8 +527,9 @@ func TestStartAndGetMapTheirArguments(t *testing.T) {
 
 	for name, args := range map[string]map[string]interface{}{
 		"no trigger":        {"template": "t"},
-		"no plan":           {"detection_id": "d"},
 		"template and auto": {"template": "t", "auto": true, "detection_id": "d"},
+		"bad urgency":       {"template": "t", "detection_id": "d", "urgency": "normal"},
+		"bad mode":          {"template": "t", "detection_id": "d", "mode": "deep"},
 	} {
 		res, _ := run(t, "investigate_start", args)
 		assert.True(t, res.IsError, name)
@@ -1388,4 +1389,131 @@ func TestStartTrustValidationBoundariesBeforeForwarding(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The engine refuses plan.auto for a person. Without a template the tool sends no plan at all, which is how the
+// engine is asked to choose among the org's active templates.
+func TestStartWithoutTemplateSendsNoPlan(t *testing.T) {
+	for name, args := range map[string]map[string]interface{}{
+		"omitted":     {"detection_id": "d1"},
+		"legacy auto": {"detection_id": "d1", "auto": true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t)
+			var raw []byte
+			g.on("POST runs", func(_ *http.Request, b []byte) (int, any) {
+				raw = b
+				return 201, map[string]any{"run": map[string]any{"run_id": "r1"}, "joined": false}
+			})
+			res, _ := run(t, "investigate_start", args)
+			require.False(t, res.IsError, text(res))
+			var sent map[string]any
+			require.NoError(t, json.Unmarshal(raw, &sent))
+			assert.Equal(t, map[string]any{"trigger": map[string]any{"detection_id": "d1"}}, sent)
+			assert.NotContains(t, string(raw), "auto")
+		})
+	}
+}
+
+func TestStartSendsUrgencyAndModeFromTheEnginesEnums(t *testing.T) {
+	g := newGateway(t)
+	var sent map[string]any
+	g.on("POST runs", func(_ *http.Request, b []byte) (int, any) {
+		_ = json.Unmarshal(b, &sent)
+		return 201, map[string]any{"run": map[string]any{"run_id": "r1"}, "joined": false}
+	})
+	for _, u := range []string{"low", "medium", "high", "critical"} {
+		res, _ := run(t, "investigate_start", map[string]interface{}{"template": "t", "question": "q", "urgency": u, "mode": "scope"})
+		require.False(t, res.IsError, text(res))
+		assert.Equal(t, u, sent["urgency"])
+		assert.Equal(t, "scope", sent["mode"])
+	}
+	for _, u := range []string{"normal", "urgent", "High"} {
+		before := len(g.calls())
+		res, _ := run(t, "investigate_start", map[string]interface{}{"template": "t", "question": "q", "urgency": u})
+		require.True(t, res.IsError, u)
+		assert.Contains(t, text(res), "low, medium, high or critical")
+		assert.Len(t, g.calls(), before, "a refused urgency never reaches the engine")
+	}
+}
+
+// What the gateway relays of a refusal (error_code, reason_code, path, coded errors and warnings) reaches the
+// agent as a JSON object after the message, from every tool that calls the gateway.
+func TestEveryGatewayToolPassesTheErrorFieldsThrough(t *testing.T) {
+	cases := []struct {
+		tool, route string
+		args        map[string]interface{}
+	}{
+		{"investigate_operators", "GET operators", nil},
+		{"investigate_authoring_kit", "GET authoring-kit", nil},
+		{"investigate_validate_plan", "POST plans/validate", map[string]interface{}{"yaml": validPlan}},
+		{"investigate_test_plan", "POST test-plan", map[string]interface{}{"template": "t", "samples": []interface{}{map[string]interface{}{"detection_id": "d"}}}},
+		{"investigate_list_templates", "GET templates", nil},
+		{"investigate_start", "POST runs", map[string]interface{}{"detection_id": "d1"}},
+		{"investigate_get", "GET runs/r1", map[string]interface{}{"run_id": "r1"}},
+		{"investigate_delete", "DELETE runs/r1", map[string]interface{}{"run_id": "r1"}},
+		{"investigate_wave", "POST waves", map[string]interface{}{"steps": []interface{}{map[string]interface{}{"id": "a", "op": "x"}}}},
+		{"investigate_packs", "GET packs", nil},
+		{"investigate_save_plan", "POST plans/validate", saveArgs("p")},
+	}
+	for _, c := range cases {
+		t.Run(c.tool, func(t *testing.T) {
+			g := newGateway(t)
+			g.reply(c.route, 400, map[string]any{
+				"error": "no template applies to this trigger", "error_code": "bad_request", "http_status": 400,
+				"reason_code": "no_template_applies", "path": "/budgets",
+				"errors":   []any{map[string]any{"code": "unknown_operator", "suggestion": "ioc.prevalence"}},
+				"warnings": []any{map[string]any{"code": "w1"}},
+			})
+			res, _ := run(t, c.tool, c.args)
+			require.True(t, res.IsError)
+			message, detail, found := strings.Cut(text(res), "\n")
+			require.True(t, found, text(res))
+			assert.Equal(t, "HTTP 400: no template applies to this trigger", message)
+			var fields map[string]any
+			require.NoError(t, json.Unmarshal([]byte(detail), &fields), detail)
+			assert.Equal(t, "bad_request", fields["error_code"])
+			assert.Equal(t, "no_template_applies", fields["reason_code"])
+			assert.EqualValues(t, 400, fields["http_status"])
+			assert.Equal(t, "/budgets", fields["path"])
+			assert.Len(t, fields["errors"], 1)
+			assert.Len(t, fields["warnings"], 1)
+		})
+	}
+}
+
+func TestErrorWithoutAJSONBodyStaysAPlainMessage(t *testing.T) {
+	g := newGateway(t)
+	g.on("GET templates", func(*http.Request, []byte) (int, any) { return 502, []byte("upstream connect error") })
+	res, _ := run(t, "investigate_list_templates", nil)
+	require.True(t, res.IsError)
+	message, detail, _ := strings.Cut(text(res), "\n")
+	assert.Equal(t, "HTTP 502: upstream connect error", message)
+	assert.JSONEq(t, `{"http_status":502}`, detail)
+}
+
+// An unknown reason_code is not interpreted: it is passed as the engine said it.
+func TestStartRefusalKeepsAnUnknownReasonCode(t *testing.T) {
+	g := newGateway(t)
+	g.reply("POST runs", 429, map[string]any{"error": "too many runs", "error_code": "too_many_runs", "reason_code": "too_many_runs"})
+	res, _ := run(t, "investigate_start", map[string]interface{}{"template": "t", "detection_id": "d"})
+	require.True(t, res.IsError)
+	assert.Contains(t, text(res), `"reason_code":"too_many_runs"`)
+	assert.Equal(t, []string{"POST runs"}, g.calls(), "a refused start is never retried")
+}
+
+func TestStartDescriptionTeachesTheRefusals(t *testing.T) {
+	reg, ok := tools.GetTool("investigate_start")
+	require.True(t, ok)
+	d := reg.Description
+	for _, want := range []string{"reason_code", "no_template_applies", "unknown_template", "too_many_runs"} {
+		assert.Contains(t, d, want)
+	}
+	urgency, _ := reg.Schema.InputSchema.Properties["urgency"].(map[string]any)
+	assert.Contains(t, urgency["description"], "low, medium, high or critical")
+	assert.NotContains(t, d, "low, normal or high")
+	assert.NotContains(t, d, "triage (default")
+	assert.NotContains(t, d, "`auto`")
+	_, hasAuto := reg.Schema.InputSchema.Properties["auto"]
+	assert.False(t, hasAuto, "plan.auto is refused by the engine for a person: the parameter is gone")
 }

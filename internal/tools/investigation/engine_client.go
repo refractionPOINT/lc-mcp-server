@@ -105,7 +105,7 @@ func call(ctx context.Context, c engineCall) (map[string]interface{}, error) {
 			continue
 		}
 		if response.StatusCode < 200 || response.StatusCode > 299 {
-			return nil, fmt.Errorf("HTTP %d: %s", response.StatusCode, errorMessage(raw))
+			return nil, newEngineError(response.StatusCode, raw)
 		}
 		// A successful DELETE may carry no body. Other methods still require JSON.
 		if c.method == http.MethodDelete && len(bytes.TrimSpace(raw)) == 0 {
@@ -118,6 +118,50 @@ func call(ctx context.Context, c engineCall) (map[string]interface{}, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("authentication refresh failed")
+}
+
+// engineError is a non-2xx answer of the gateway. Beyond the message it keeps the machine-readable fields the
+// gateway relays from the engine: error_code, reason_code (why a start was refused), path, and the coded
+// errors and warnings of an invalid wave or plan. An agent acts on those, never on the message text.
+type engineError struct {
+	Status  int
+	Message string
+	// Fields are the relayed members of the error body, as sent. Absent when the body was not a JSON object.
+	Fields map[string]interface{}
+}
+
+// relayedErrorFields are the members of an error body that are passed through to the caller, next to the message.
+var relayedErrorFields = []string{"error_code", "reason_code", "path", "policy_hive", "history_from", "errors", "warnings"}
+
+func newEngineError(status int, raw []byte) *engineError {
+	e := &engineError{Status: status, Message: errorMessage(raw), Fields: map[string]interface{}{}}
+	var body map[string]interface{}
+	if json.Unmarshal(raw, &body) == nil {
+		for _, k := range relayedErrorFields {
+			if v, ok := body[k]; ok && v != nil {
+				e.Fields[k] = v
+			}
+		}
+	}
+	return e
+}
+
+func (e *engineError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.Status, e.Message)
+}
+
+// text is the tool result text: the engine's message on the first line, then the relayed fields as one JSON
+// object (with the HTTP status), so an agent reads error_code and reason_code instead of parsing words.
+func (e *engineError) text() string {
+	detail := map[string]interface{}{"http_status": e.Status}
+	for k, v := range e.Fields {
+		detail[k] = v
+	}
+	b, err := json.Marshal(detail)
+	if err != nil {
+		return e.Error()
+	}
+	return e.Error() + "\n" + string(b)
 }
 
 // errorMessage is the engine's "error" field when the body has one, else the trimmed body.
