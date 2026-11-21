@@ -220,8 +220,13 @@ func text(res *mcp.CallToolResult) string {
 const validPlan = `description: Test plan
 applies_to:
   detect_cat: ['x']
-facts:
-  host: {op: entity.resolve, args: {sensor_id: $sid}}
+starts_from: detection
+gather:
+  trigger: {op: detection.get, args: {detect_id: $detection_id}}
+  host: {op: entity.resolve, args: {sensor_id: '$trigger.sid'}}
+rules:
+  escalate:
+    - {id: known_bad_host, when: 'host.found', say: "The host is known."}
 `
 
 var allTools = []string{
@@ -358,7 +363,7 @@ func TestValidatePlanSendsTheYAMLAndReturnsTheReport(t *testing.T) {
 	var got map[string]any
 	g.on("POST plans/validate", func(_ *http.Request, b []byte) (int, any) {
 		_ = json.Unmarshal(b, &got)
-		return 200, map[string]any{"valid": false, "errors": []any{map[string]any{"code": "unknown_field", "path": "facts.host.args.sid", "suggestion": "sensor_id"}}}
+		return 200, map[string]any{"valid": false, "errors": []any{map[string]any{"code": "unknown_field", "path": "gather.host.args.sid", "suggestion": "sensor_id"}}}
 	})
 	res, body := run(t, "investigate_validate_plan", map[string]interface{}{"yaml": validPlan})
 	require.False(t, res.IsError)
@@ -402,9 +407,26 @@ func testObject(state string, done bool, total int, results ...any) map[string]a
 		"policy": map[string]any{"clamped": []any{"dry_run.autonomy"}}}
 }
 
-func sampleResult(index int, agreement string, decided bool, steps ...any) map[string]any {
+// sampleResult is one result of the engine's test_plan answer: the outcome the sample ended with and, per side, how
+// the rule and the AI compare with what the analyst decided.
+func sampleResult(index int, outcome, rule, ai string, steps ...any) map[string]any {
+	verdict := map[string]any{"outcome": outcome, "label": "inconclusive", "decided": false}
+	switch outcome {
+	case "closed_by_rule", "closed_by_ai":
+		verdict["label"], verdict["decided"] = "false_positive", true
+	case "escalated_by_rule", "escalated_by_ai":
+		verdict["label"], verdict["decided"] = "true_positive", true
+	}
+	switch outcome {
+	case "closed_by_rule", "escalated_by_rule":
+		verdict["decided_by"] = map[string]any{"kind": "rule", "rule": "known_sender"}
+	case "ai_recommends_benign", "ai_recommends_malicious":
+		verdict["recommendation"] = map[string]any{"label": "benign", "self_rated_confidence": 0.8, "citations": []any{"sender_history.prior_messages_30d"}, "by": "ai_review"}
+	case "couldnt_tell":
+		verdict["missing"] = []any{map[string]any{"step": "sender_history", "reason": "index_lag", "needed_by": []any{"known_sender", "ai_review"}, "ask": "Has this sender written before?"}}
+	}
 	return map[string]any{"index": index, "sample": map[string]any{"detection_id": "d"}, "state": "ok",
-		"verdict": map[string]any{"label": "false_positive", "decided": decided}, "agreement": agreement,
+		"verdict": verdict, "agreement": map[string]any{"rule": rule, "ai": ai},
 		"cost": map[string]any{"steps": 3}, "wall_ms": 100, "steps": steps}
 }
 
@@ -414,7 +436,7 @@ func TestTestPlanStartsPollsAndCompacts(t *testing.T) {
 	g.on("POST test-plan", func(_ *http.Request, b []byte) (int, any) {
 		_ = json.Unmarshal(b, &started)
 		assert.NotContains(t, started, "trust")
-		return 200, testObject("running", false, 3, sampleResult(0, "agree", true))
+		return 200, testObject("running", false, 4, sampleResult(0, "closed_by_rule", "agree", "none"))
 	})
 	polls := 0
 	g.on("GET test-plan/test-1", func(r *http.Request, _ []byte) (int, any) {
@@ -423,12 +445,19 @@ func TestTestPlanStartsPollsAndCompacts(t *testing.T) {
 			// only the new result, as `after` asks for
 			assert.Equal(t, "1", r.URL.Query().Get("after"))
 			assert.Equal(t, "10", r.URL.Query().Get("wait"))
-			return 200, testObject("running", false, 3, sampleResult(1, "disagree", true,
+			return 200, testObject("running", false, 4, sampleResult(1, "escalated_by_rule", "disagree", "none",
 				map[string]any{"fact": "a", "op": "x", "status": "ok"}))
 		}
-		final := testObject("done", true, 3, sampleResult(2, "undecided", false,
-			map[string]any{"fact": "b", "op": "y", "status": "unknown", "reason": "index_lag", "ms": 5}))
-		final["summary"] = map[string]any{"samples": 3, "agreement_rate": 0.5}
+		if polls == 2 {
+			assert.Equal(t, "2", r.URL.Query().Get("after"))
+			return 200, testObject("running", false, 4, sampleResult(2, "couldnt_tell", "none", "none",
+				map[string]any{"fact": "b", "op": "y", "status": "unknown", "reason": "index_lag", "ms": 5}))
+		}
+		final := testObject("done", true, 4, sampleResult(3, "ai_recommends_benign", "none", "agree"))
+		final["summary"] = map[string]any{"samples": 4, "decided_by_rules": 2, "rule_share": 0.5,
+			"rules":      map[string]any{"known_sender": map[string]any{"decided": 2, "agree": 1, "disagree": 1}},
+			"ai":         map[string]any{"recommended": 1, "agree": 1, "disagree": 0, "unclear": 0},
+			"by_outcome": map[string]any{"closed_by_rule": 1, "escalated_by_rule": 1, "couldnt_tell": 1, "ai_recommends_benign": 1}}
 		return 200, final
 	})
 
@@ -443,15 +472,24 @@ func TestTestPlanStartsPollsAndCompacts(t *testing.T) {
 
 	assert.Equal(t, "done", body["state"])
 	assert.Equal(t, true, body["done"])
-	assert.Len(t, body["results"], 3, "results from every poll are kept")
-	assert.Equal(t, []any{float64(1)}, body["disagree"])
-	assert.Equal(t, []any{float64(2)}, body["undecided"])
-	assert.EqualValues(t, 0.5, body["summary"].(map[string]any)["agreement_rate"])
+	assert.Len(t, body["results"], 4, "results from every poll are kept")
+	assert.Equal(t, []any{float64(1)}, body["disagree"], "a rule that contradicted the analyst")
+	assert.Equal(t, []any{float64(2)}, body["undecided"], "couldnt_tell")
+	assert.Equal(t, []any{float64(3)}, body["ai_recommended"], "the AI recommended on a sample no rule decided")
+	summary := body["summary"].(map[string]any)
+	assert.EqualValues(t, 0.5, summary["rule_share"])
+	assert.Equal(t, map[string]any{"decided": float64(2), "agree": float64(1), "disagree": float64(1)}, summary["rules"].(map[string]any)["known_sender"])
+	assert.EqualValues(t, 1, summary["ai"].(map[string]any)["agree"])
+	assert.NotContains(t, summary, "agreement_rate")
 	assert.Equal(t, []any{"dry_run.autonomy"}, body["policy_clamped"])
 
 	results := body["results"].([]any)
 	assert.NotContains(t, results[1], "steps", "successful steps are dropped")
 	assert.NotContains(t, results[1], "problem_steps")
+	assert.Equal(t, "known_sender", results[0].(map[string]any)["verdict"].(map[string]any)["decided_by"].(map[string]any)["rule"])
+	assert.Equal(t, map[string]any{"rule": "disagree", "ai": "none"}, results[1].(map[string]any)["agreement"])
+	assert.Contains(t, results[2].(map[string]any)["verdict"].(map[string]any), "missing", "what nothing could establish stays")
+	assert.Contains(t, results[3].(map[string]any)["verdict"].(map[string]any), "recommendation")
 	problems := results[2].(map[string]any)["problem_steps"].([]any)
 	require.Len(t, problems, 1)
 	assert.Equal(t, "index_lag", problems[0].(map[string]any)["reason"])
@@ -463,7 +501,7 @@ func TestTestPlanStartsPollsAndCompacts(t *testing.T) {
 
 func TestTestPlanStillRunningTellsTheCallerHowToContinue(t *testing.T) {
 	g := newGateway(t)
-	g.reply("POST test-plan", 200, testObject("running", false, 2, sampleResult(0, "agree", true)))
+	g.reply("POST test-plan", 200, testObject("running", false, 2, sampleResult(0, "closed_by_rule", "agree", "none")))
 	_, body := run(t, "investigate_test_plan", map[string]interface{}{
 		"template": "t", "samples": []interface{}{map[string]interface{}{"case_id": "1"}}, "wait_seconds": float64(0),
 	})
@@ -472,7 +510,7 @@ func TestTestPlanStillRunningTellsTheCallerHowToContinue(t *testing.T) {
 	assert.Len(t, g.calls(), 1, "wait_seconds 0 never polls")
 
 	// Continue by id, with nothing else.
-	g.reply("GET test-plan/test-1", 200, testObject("done", true, 2, sampleResult(0, "agree", true), sampleResult(1, "agree", true)))
+	g.reply("GET test-plan/test-1", 200, testObject("done", true, 2, sampleResult(0, "closed_by_rule", "agree", "none"), sampleResult(1, "escalated_by_rule", "agree", "none")))
 	_, body = run(t, "investigate_test_plan", map[string]interface{}{"test_id": "test-1"})
 	assert.Equal(t, true, body["done"])
 	assert.Len(t, body["results"], 2)
@@ -482,7 +520,7 @@ func TestTestPlanStillRunningTellsTheCallerHowToContinue(t *testing.T) {
 func TestTestPlanInvalidTemplateReturnsTheValidationReport(t *testing.T) {
 	g := newGateway(t)
 	obj := testObject("invalid", false, 0)
-	obj["validation"] = map[string]any{"valid": false, "errors": []any{map[string]any{"code": "unknown_operator", "path": "facts.a.op"}}}
+	obj["validation"] = map[string]any{"valid": false, "errors": []any{map[string]any{"code": "legacy_template_format", "path": "facts"}}}
 	g.reply("POST test-plan", 200, obj)
 	_, body := run(t, "investigate_test_plan", map[string]interface{}{"yaml": "facts: {}", "samples": []interface{}{map[string]interface{}{"case_id": "1"}}})
 	assert.Equal(t, "invalid", body["state"])
@@ -828,9 +866,9 @@ func TestSavePlanWritesADraftAndReadsItBack(t *testing.T) {
 }
 
 func TestDraftRecordKeepsDatesAsWritten(t *testing.T) {
-	data, normalized, err := draftRecord("description: d\nfacts:\n  a: {op: x, args: {since: 2026-01-01, n: 5, ok: true, ratio: 0.5, list: [a, 2]}}\n")
+	data, normalized, err := draftRecord("description: d\ngather:\n  a: {op: x, args: {since: 2026-01-01, n: 5, ok: true, ratio: 0.5, list: [a, 2]}}\n")
 	require.NoError(t, err)
-	args := data["facts"].(map[string]interface{})["a"].(map[string]interface{})["args"].(map[string]interface{})
+	args := data["gather"].(map[string]interface{})["a"].(map[string]interface{})["args"].(map[string]interface{})
 	assert.Equal(t, "2026-01-01", args["since"], "an unquoted date stays the text the author wrote, not a time.Time")
 	assert.EqualValues(t, 5, args["n"])
 	assert.Equal(t, true, args["ok"])
@@ -926,6 +964,18 @@ func TestSavePlanDoesNotSaveATemplateThatDoesNotValidate(t *testing.T) {
 	require.True(t, res.IsError)
 	assert.Equal(t, false, body["saved"])
 	assert.Contains(t, body, "validation")
+	assert.Empty(t, g.hiveWrites())
+}
+
+// A template in the earlier format is refused by the engine's validator and never written.
+func TestSavePlanDoesNotSaveALegacyFormatTemplate(t *testing.T) {
+	g := savePlanGateway(t)
+	g.reply("POST plans/validate", 200, map[string]any{"valid": false, "errors": []any{map[string]any{"code": "legacy_template_format", "path": "facts"}}})
+	legacy := map[string]interface{}{"name": "old-plan", "yaml": "description: old\nfacts:\n  a: {op: entity.resolve, args: {}}\nproofs: {}\n"}
+	res, body := run(t, "investigate_save_plan", legacy)
+	require.True(t, res.IsError)
+	assert.Equal(t, false, body["saved"])
+	assert.Contains(t, text(res), "legacy_template_format")
 	assert.Empty(t, g.hiveWrites())
 }
 
@@ -1042,14 +1092,13 @@ func TestHeldCallsOutliveTheOrdinaryTimeout(t *testing.T) {
 
 func TestTestPlanCompactsCostsAndFlagsInconclusiveSamples(t *testing.T) {
 	g := newGateway(t)
-	r := sampleResult(0, "none", true)
-	r["verdict"] = map[string]any{"label": "inconclusive", "decided": true}
+	r := sampleResult(0, "conflict", "none", "none")
 	r["cost"] = map[string]any{"steps": 4, "llm_usd": 0.01, "usage_version": 2, "speculation_efficiency": 0.5, "span_ms": 9}
 	obj := testObject("done", true, 1, r)
 	obj["summary"] = map[string]any{"samples": 1, "cost": map[string]any{"steps": 4, "concurrency": 0.9, "work_ms": 3}}
 	g.reply("POST test-plan", 200, obj)
 	_, body := run(t, "investigate_test_plan", map[string]interface{}{"template": "t", "samples": []interface{}{map[string]interface{}{"case_id": "1"}}})
-	assert.Equal(t, []any{float64(0)}, body["undecided"], "an inconclusive verdict is undecided even when the engine says decided")
+	assert.Equal(t, []any{float64(0)}, body["undecided"], "a conflict (both sides held) is undecided")
 	cost := body["results"].([]any)[0].(map[string]any)["cost"].(map[string]any)
 	assert.EqualValues(t, 4, cost["steps"])
 	assert.NotContains(t, cost, "speculation_efficiency")
@@ -1062,7 +1111,7 @@ func TestDraftRecordRefusesYAMLAliases(t *testing.T) {
 		"self reference":    "a: &x [*x]\n",
 		"expanding aliases": bomb,
 		"plain alias":       "a: &x 1\nb: *x\n",
-		"merge key":         "base: &base {op: x}\nfacts:\n  f:\n    <<: *base\n",
+		"merge key":         "base: &base {op: x}\ngather:\n  f:\n    <<: *base\n",
 	} {
 		done := make(chan error, 1)
 		go func() { _, _, err := draftRecord(src); done <- err }()
@@ -1243,65 +1292,104 @@ func TestOrgPackSaveReadback(t *testing.T) {
 	}
 }
 
-func TestCompositionOptionalDigestPassThrough(t *testing.T) {
-	for _, locked := range []bool{false, true} {
-		t.Run(strconv.FormatBool(locked), func(t *testing.T) {
-			g := newGateway(t)
-			child := map[string]any{"template": "entity-url-harm", "version": float64(1), "inputs": map[string]any{"url": "$message.links[0].url"}}
-			if locked {
-				child["snapshot_digest"] = strings.Repeat("a", 64)
-			}
-			steps := []interface{}{map[string]any{"id": "child", "investigate": child}}
-			resolved := map[string]any{"children": []any{map[string]any{"snapshot_digest": strings.Repeat("a", 64), "state": "completed"}}, "trust_provenance": []any{map[string]any{"kind": "template", "name": "entity-url-harm"}}}
-			g.on("POST waves", func(_ *http.Request, raw []byte) (int, any) {
-				var body map[string]any
-				require.NoError(t, json.Unmarshal(raw, &body))
-				assert.Equal(t, steps, body["steps"])
-				return 200, resolved
-			})
-			res, body := run(t, "investigate_wave", map[string]interface{}{"steps": steps, "validate_only": true})
-			require.False(t, res.IsError, text(res))
-			assert.Equal(t, resolved, body)
-		})
-	}
+// A wave step is an operator or a fact pack: child templates are gone from the template model.
+func TestWaveStepsHaveNoChildTemplates(t *testing.T) {
+	reg, ok := tools.GetTool("investigate_wave")
+	require.True(t, ok)
+	items, _ := reg.Schema.InputSchema.Properties["steps"].(map[string]any)["items"].(map[string]any)
+	assert.NotContains(t, items["properties"], "investigate")
+	assert.NotContains(t, reg.Description, "investigate,")
+	assert.Contains(t, reg.Description, "exactly one of op, use")
 }
 
-func TestCompactTestPreservesCompositionExplanation(t *testing.T) {
-	explanation := map[string]interface{}{"children": []interface{}{map[string]interface{}{"snapshot_digest": strings.Repeat("a", 64)}}, "trust_provenance": []interface{}{map[string]interface{}{"kind": "template"}}}
-	validation := map[string]interface{}{"valid": true, "expanded_plan": explanation, "warnings": []interface{}{"notice"}}
-	a := newAccumulator()
-	a.add(map[string]interface{}{"state": "completed", "validation": validation})
-	assert.Equal(t, map[string]interface{}{"valid": true, "expanded_plan": explanation}, a.compact(false)["validation"])
-	assert.Equal(t, validation, a.compact(true)["validation"])
-	validation["expanded_plan"].(map[string]interface{})["facts"] = []interface{}{"bulky"}
-	compact := a.compact(false)["validation"].(map[string]interface{})
-	assert.NotContains(t, compact["expanded_plan"], "facts")
-	a.latest["state"] = "invalid"
-	assert.Equal(t, validation, a.compact(false)["validation"])
-	assert.NotContains(t, compactResult(map[string]interface{}{"plan": validation}, false), "plan")
-	assert.Equal(t, validation, compactResult(map[string]interface{}{"plan": validation}, true)["plan"])
-	result := compactResult(explanation, false)
-	assert.Equal(t, explanation["children"], result["children"])
-	assert.Equal(t, explanation["trust_provenance"], result["trust_provenance"])
-}
-
-func TestInitialTestCompactionPreservesResolvedPacks(t *testing.T) {
+// The compact test keeps the copyable pack pins, the declared trust and the AI-assisted rule ids of the validation,
+// and none of the bulky expanded plan.
+func TestCompactTestKeepsPackPinsTrustAndAIRules(t *testing.T) {
 	pins := []interface{}{
 		map[string]interface{}{"scope": "root", "name": "fictional_context", "version": float64(1), "digest": strings.Repeat("a", 64)},
-		map[string]interface{}{"scope": "root/assessment", "name": "fictional_context", "version": float64(2), "digest": strings.Repeat("b", 64)},
 	}
-	validation := map[string]interface{}{"valid": true, "resolved_packs": pins,
-		"children":         []interface{}{map[string]interface{}{"template": "entity-url-harm"}},
-		"trust_provenance": []interface{}{map[string]interface{}{"kind": "pack", "name": "fictional_context"}}}
+	provenance := []interface{}{map[string]interface{}{"kind": "pack", "name": "fictional_context"}}
+	validation := map[string]interface{}{"valid": true, "ai_rules": []interface{}{"ai_says_benign"}, "resolved_packs": pins, "trust_provenance": provenance,
+		"expanded_plan": map[string]interface{}{"digest": "d", "gather": []interface{}{"bulky"}, "resolved_packs": pins}, "warnings": []interface{}{"notice"}}
 	a := newAccumulator()
-	a.add(map[string]interface{}{"state": "running", "validation": validation, "resolved_packs": pins})
+	a.add(map[string]interface{}{"state": "running", "validation": validation, "resolved_packs": pins, "trust_provenance": provenance})
 	out := a.compact(false)
-	assert.Equal(t, validation, out["validation"], "initial successful validation must remain available before test completion")
+	compact := out["validation"].(map[string]interface{})
+	assert.Equal(t, pins, compact["resolved_packs"])
+	assert.Equal(t, provenance, compact["trust_provenance"])
+	assert.Equal(t, []interface{}{"ai_says_benign"}, compact["ai_rules"], "the rules the AI switch applies to stay visible")
+	assert.Equal(t, map[string]interface{}{"digest": "d", "resolved_packs": pins}, compact["expanded_plan"], "the expanded plan is cut to its locks")
+	assert.Equal(t, []interface{}{"notice"}, out["validation_warnings"])
 	assert.Equal(t, pins, out["resolved_packs"])
-	result := compactResult(map[string]interface{}{"resolved_packs": pins, "children": validation["children"], "trust_provenance": validation["trust_provenance"]}, false)
+	assert.Equal(t, validation, a.compact(true)["validation"], "include_steps returns the whole report")
+	a.latest["state"] = "invalid"
+	assert.Equal(t, validation, a.compact(false)["validation"], "an invalid test returns the whole report")
+	result := compactResult(map[string]interface{}{"resolved_packs": pins, "trust_provenance": provenance, "children": []interface{}{"gone"}}, false)
 	assert.Equal(t, pins, result["resolved_packs"])
-	assert.Equal(t, validation["children"], result["children"])
-	assert.Equal(t, validation["trust_provenance"], result["trust_provenance"])
+	assert.Equal(t, provenance, result["trust_provenance"])
+	assert.NotContains(t, result, "children")
+}
+
+// The tools teach the outcome model and never the weighing one that the template format replaced.
+func TestDescriptionsTeachTheOutcomeModelOnly(t *testing.T) {
+	for _, name := range allTools {
+		reg, ok := tools.GetTool(name)
+		require.True(t, ok, name)
+		for _, gone := range []string{"proofs", "belief", "threshold", "mandatory_checks", "llm.judge", "calibration", "likelihood", "true_positive_requires", "respond and report"} {
+			assert.NotContains(t, reg.Description, gone, "%s still teaches %q", name, gone)
+		}
+	}
+	for _, name := range []string{"investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan", "investigate_save_plan"} {
+		reg, _ := tools.GetTool(name)
+		for _, word := range []string{"gather", "rules", "ai_review", "ai_may_decide"} {
+			assert.Contains(t, reg.Description, word, "%s's description must name %s", name, word)
+		}
+	}
+	validate, _ := tools.GetTool("investigate_validate_plan")
+	assert.Contains(t, validate.Description, "legacy_template_format")
+	for _, name := range []string{"investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan", "investigate_save_plan"} {
+		reg, _ := tools.GetTool(name)
+		assert.Contains(t, reg.Description, "on_rules", "%s must teach the act key on_rules", name)
+		assert.NotContains(t, reg.Description, "`on:", "%s must not teach the old act key", name)
+		for _, word := range []string{"record:", "malicious_when", "benign_when", "each", "outcome_map", "absence", "artifact"} {
+			assert.Contains(t, reg.Description, word, "%s must teach the step key record (%s)", name, word)
+		}
+	}
+	assert.Contains(t, validate.Description, "ai_rules")
+	start, _ := tools.GetTool("investigate_start")
+	for _, outcome := range []string{"closed_by_rule", "escalated_by_rule", "closed_by_ai", "escalated_by_ai", "ai_recommends_benign", "ai_recommends_malicious", "couldnt_tell", "conflict"} {
+		assert.Contains(t, start.Description, outcome)
+	}
+	get, _ := tools.GetTool("investigate_get")
+	for _, word := range []string{"decided_by", "recommendation", "missing", "narrative", "ai_agent", "self_rated_confidence"} {
+		assert.Contains(t, get.Description, word)
+	}
+	test, _ := tools.GetTool("investigate_test_plan")
+	for _, word := range []string{"decided_by", "agreement", "rule_share", "undecided", "disagree"} {
+		assert.Contains(t, test.Description, word)
+	}
+}
+
+// The run object of the engine reaches the agent as the engine sent it: the outcome, who decided, what the AI
+// recommends, what is missing and every step's narrative. No probability field is added or invented.
+func TestGetPassesTheOutcomeAndTheNarrativeThrough(t *testing.T) {
+	g := newGateway(t)
+	verdict := map[string]any{
+		"outcome": "ai_recommends_benign", "label": "inconclusive", "decided": false,
+		"recommendation": map[string]any{"label": "benign", "self_rated_confidence": 0.8, "rationale": "r", "citations": []any{"sender_history.prior_messages_30d"}, "by": "ai_review"},
+		"missing":        []any{map[string]any{"step": "link_landing", "reason": "timeout", "needed_by": []any{"known_sender"}, "ask": "Does the link land on a login page?"}},
+	}
+	g.reply("GET runs/r1", 200, map[string]any{"run_id": "r1", "verdict": verdict, "ai_agent": map[string]any{"name": "triage"}})
+	g.reply("GET runs/r1/steps", 200, map[string]any{"steps": []any{map[string]any{"id": "sender_history", "narrative": map[string]any{"why": "w", "found": "f", "used": []any{"ai_review"}}}}, "timeline": []any{}, "ai_may_decide": "off"})
+	_, run1 := run(t, "investigate_get", map[string]interface{}{"run_id": "r1"})
+	assert.Equal(t, verdict, run1["verdict"])
+	assert.Equal(t, map[string]any{"name": "triage"}, run1["ai_agent"])
+	assert.NotContains(t, run1, "p")
+	_, steps := run(t, "investigate_get", map[string]interface{}{"run_id": "r1", "view": "steps"})
+	step := steps["steps"].([]any)[0].(map[string]any)
+	assert.Equal(t, map[string]any{"why": "w", "found": "f", "used": []any{"ai_review"}}, step["narrative"])
+	assert.Equal(t, "off", steps["ai_may_decide"])
+	assert.Equal(t, []string{"GET runs/r1", "GET runs/r1/steps"}, g.calls())
 }
 
 func TestStartExplicitTrustPassthroughAndStrictKeys(t *testing.T) {

@@ -192,7 +192,7 @@ func (a *accumulator) terminal() bool {
 // samples that need a look.
 func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	t := a.latest
-	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
+	out := pick(t, "test_id", "state", "error", "template", "samples_total", "samples_done", "summary", "trust", "trust_provenance", "resolved_packs")
 	if sum, ok := out["summary"].(map[string]interface{}); ok {
 		sum = pickAll(sum)
 		if c, ok := sum["cost"].(map[string]interface{}); ok {
@@ -225,17 +225,19 @@ func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	}
 	sort.Ints(idxs)
 	results := make([]interface{}, 0, len(idxs))
-	var disagree, undecided, failed []int
+	var disagree, undecided, recommended, failed []int
 	for _, i := range idxs {
 		r := compactResult(a.results[i], includeSteps)
 		results = append(results, r)
 		switch {
 		case r["state"] == "error":
 			failed = append(failed, i)
-		case r["agreement"] == "disagree":
+		case agreementIs(r, "rule", "disagree") || agreementIs(r, "ai", "disagree"):
 			disagree = append(disagree, i)
-		case r["agreement"] == "undecided" || verdictUndecided(r):
+		case outcomeIs(r, "couldnt_tell", "conflict") || agreementIs(r, "ai", "unclear"):
 			undecided = append(undecided, i)
+		case outcomeIs(r, "ai_recommends_benign", "ai_recommends_malicious"):
+			recommended = append(recommended, i)
 		}
 	}
 	out["results"] = results
@@ -244,6 +246,9 @@ func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 	}
 	if len(undecided) > 0 {
 		out["undecided"] = undecided
+	}
+	if len(recommended) > 0 {
+		out["ai_recommended"] = recommended
 	}
 	if len(failed) > 0 {
 		out["failed_samples"] = failed
@@ -256,19 +261,33 @@ func (a *accumulator) compact(includeSteps bool) map[string]interface{} {
 
 // compactValidation keeps copyable composition locks without expanded fact bodies.
 func compactValidation(v map[string]interface{}) map[string]interface{} {
-	out := pick(v, "valid", "digest", "snapshot_digest", "children", "trust", "trust_provenance", "resolved_packs")
+	out := pick(v, "valid", "digest", "ai_rules", "trust", "trust_provenance", "resolved_packs")
 	for _, key := range []string{"plan", "expanded_plan"} {
 		if plan, ok := v[key].(map[string]interface{}); ok {
-			out[key] = pick(plan, "digest", "snapshot_digest", "children", "trust", "trust_provenance", "resolved_packs")
+			out[key] = pick(plan, "digest", "trust", "trust_provenance", "resolved_packs")
 		}
 	}
 	return out
 }
 
-// verdictUndecided is a sample the plan could not settle: no verdict, or an inconclusive one.
-func verdictUndecided(r map[string]interface{}) bool {
+// outcomeIs is whether the sample ended with one of the outcomes (verdict.outcome).
+func outcomeIs(r map[string]interface{}, outcomes ...string) bool {
 	v, ok := r["verdict"].(map[string]interface{})
-	return ok && (v["decided"] == false || v["label"] == "inconclusive")
+	if !ok {
+		return false
+	}
+	for _, o := range outcomes {
+		if v["outcome"] == o {
+			return true
+		}
+	}
+	return false
+}
+
+// agreementIs is whether the sample's agreement on one side ("rule" or "ai") has the given value.
+func agreementIs(r map[string]interface{}, side, value string) bool {
+	a, ok := r["agreement"].(map[string]interface{})
+	return ok && a[side] == value
 }
 
 // compactCost keeps the cost figures an author weighs: the engine's usage object has some thirty scheduling
@@ -289,7 +308,7 @@ func pickAll(m map[string]interface{}) map[string]interface{} {
 // compactResult keeps what the author acts on. The steps that succeeded are dropped unless asked for: they
 // are the bulk, and only the ones that did not succeed explain an unknown.
 func compactResult(r map[string]interface{}, includeSteps bool) map[string]interface{} {
-	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms", "children", "trust", "trust_provenance", "snapshot_digest", "resolved_packs")
+	out := pick(r, "index", "sample", "state", "error", "code", "verdict", "proof", "unknowns", "expected", "agreement", "wall_ms", "trust", "trust_provenance", "resolved_packs")
 	if c, ok := r["cost"].(map[string]interface{}); ok {
 		out["cost"] = compactCost(c)
 	}
