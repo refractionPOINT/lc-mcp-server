@@ -4,7 +4,7 @@ The `investigation_engine` profile (and the read-only `investigation_engine_read
 Investigation Engine through the LimaCharlie gateway routes `/v1/investigate/{oid}/...`. A plan template is a
 YAML document that says what to gather for an alert (`gather`), which rules decide it (`rules`: `escalate` and
 `close`, each with an id and a sentence for the case), optionally one AI review for what rules cannot decide
-(`ai_review`), and what to do about it (`act`, `case`). There is no scoring: a run ends with an outcome and the rule
+(`ai_review`), and what to do about it (`act`, `case`). An `act` entry says which rules fire it with `on_rules: [<rule id> | ai_review]`; the key is `on_rules`, not `on`, because YAML 1.1 parsers read a bare `on:` as the boolean `true`. There is no scoring: a run ends with an outcome and the rule
 (or the AI) behind it. Writing one by hand is long work, so the tools are built for an AI agent to author them, with
 a person promoting the result.
 

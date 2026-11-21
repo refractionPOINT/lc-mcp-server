@@ -1347,6 +1347,11 @@ func TestDescriptionsTeachTheOutcomeModelOnly(t *testing.T) {
 	}
 	validate, _ := tools.GetTool("investigate_validate_plan")
 	assert.Contains(t, validate.Description, "legacy_template_format")
+	for _, name := range []string{"investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan", "investigate_save_plan"} {
+		reg, _ := tools.GetTool(name)
+		assert.Contains(t, reg.Description, "on_rules", "%s must teach the act key on_rules", name)
+		assert.NotContains(t, reg.Description, "`on:", "%s must not teach the old act key", name)
+	}
 	assert.Contains(t, validate.Description, "ai_rules")
 	start, _ := tools.GetTool("investigate_start")
 	for _, outcome := range []string{"closed_by_rule", "escalated_by_rule", "closed_by_ai", "escalated_by_ai", "ai_recommends_benign", "ai_recommends_malicious", "couldnt_tell", "conflict"} {

@@ -23,7 +23,8 @@ const Profile = "investigation_engine"
 // descriptions knows where it is.
 const authoringLoop = "Template model: a template has `gather` (steps that read the org's data), `rules` (`escalate` and `close` " +
 	"rules over what was gathered, each with an `id` and a `say` sentence), an optional `ai_review` (the fallback for what rules cannot decide) " +
-	"and `act`/`case`. Nothing is scored: a run ends with an outcome and the rule or the AI behind it. " +
+	"and `act`/`case`; an `act` entry names the rules that fire it in `on_rules: [<rule id> | ai_review]` (there is no `on` key: " +
+	"YAML 1.1 reads a bare on as the boolean true). Nothing is scored: a run ends with an outcome and the rule or the AI behind it. " +
 	"Plan authoring loop: (1) investigate_authoring_kit once (sections guide, schema, codes first); (2) look at the org's real data " +
 	"(get_detection / run_lcql_query for which fields exist, investigate_wave to try an operator on a real value); " +
 	"(3) draft the YAML, cheapest deciding rules first, gathering only what a rule or the review reads; (4) investigate_validate_plan until it reports no errors; " +
