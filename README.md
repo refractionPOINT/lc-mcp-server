@@ -164,7 +164,7 @@ The server organizes tools into profiles for different use cases:
 | **cloud_security_readonly** | Read-only Cloud Security | CloudSec reads; local scanning and writes excluded |
 | **email_security** | MailSec | Messages, campaigns, analysis, actions and onboarding diagnostics |
 | **email_security_readonly** | MailSec reads | Messages, coverage and history using mailsec.get; privileged diagnostics and raw EML excluded |
-| **investigation_engine** (off by default) | Investigation Engine plans and runs | Write investigation plan templates (saved as drafts), dry-run them on past alerts, start, read and delete runs; available only when the server runs with `INVESTIGATION_ENGINE_ENABLED=true` (without it the profile is undefined, so `MCP_PROFILE=investigation_engine` is rejected at startup as an invalid profile); see [docs/INVESTIGATION-ENGINE.md](docs/INVESTIGATION-ENGINE.md) |
+| **investigation_engine** (off by default) | Investigation Engine plans and runs | Write investigation plan templates (saved as drafts), dry-run them on past alerts (which rule decided, where it disagreed with analysts, what the AI recommended), start, read and delete runs; available only when the server runs with `INVESTIGATION_ENGINE_ENABLED=true` (without it the profile is undefined, so `MCP_PROFILE=investigation_engine` is rejected at startup as an invalid profile); see [docs/INVESTIGATION-ENGINE.md](docs/INVESTIGATION-ENGINE.md) |
 | **investigation_engine_readonly** (off by default) | Investigation Engine reads | Authoring kit, operator catalog, plan validation, templates and runs |
 | **all** | All profiles combined | Full platform access |
 
@@ -831,18 +831,6 @@ and the `investigation_pack` data envelope `{ "yaml": "<exact source>" }`.
 Save creates only unless supplied the etag read from get; delete requires
 `confirm=true`. Discover resolved managed and org packs with `investigate_packs`.
 
-On engines advertising `template_composition_v1`, existing validation, test and
-wave tools pass authored `investigate: {template, version, inputs}` unchanged.
-The child version is mandatory; `snapshot_digest` is optional. Admission resolves
-and freezes the exact-version closure when omitted. Validate/test return the
-resolved digest for an optional lock; a supplied lock must match. Versions match
-the current record; delete/recreate is explicitly allowed, so the digest is the
-immutable lock against record rebinding. Same-version updates are guarded for
-all packs and callable entity templates; ordinary root template edits retain
-their existing behavior. Validation and initial test validation include
-`resolved_packs: [{scope, name, version, digest}]` for every version-only pack
-pin, including descendant scopes such as `root/assessment`. Inspect
-expanded facts, children and trust contributors; replay/resume use frozen sources.
-Child judgments are advisory, cannot act or write cases, and incomplete results
-remain unknown. Limits: depth 4 (root 0), 32 child scopes, 256 facts, 1 MiB closure,
-subject to stricter existing limits. Trust declarations are not verified analysis.
+Validation and initial test validation include `resolved_packs: [{scope, name, version, digest}]`
+for every version-only pack pin, and `ai_rules` (the rules that read an `ask_ai` answer, which decide
+only where the org policy's `ai_may_decide` allows). Trust declarations are not verified analysis.

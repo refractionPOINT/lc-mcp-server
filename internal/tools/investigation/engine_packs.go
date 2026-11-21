@@ -18,7 +18,7 @@ func init() {
 	}, handleGetPack)
 	register("investigate_save_pack", "Create or conditionally replace an org-authored fact pack. Stores exactly {yaml: source} through Hive validation; unknown fields, managed-name collisions and invalid dependencies are rejected by the service. Requires investigation_plan.set. Does not change pinned runs. Use investigate_packs to inspect the resolved pack before using it.", []mcp.ToolOption{
 		mcp.WithString("name", mcp.Required(), mcp.Description("Record key matching the pack YAML name.")),
-		mcp.WithString("yaml", mcp.Required(), mcp.Description("Exact complete pack YAML with positive version; packs cannot contain use or investigate.")),
+		mcp.WithString("yaml", mcp.Required(), mcp.Description("Exact complete pack YAML with positive version; packs cannot contain use.")),
 		mcp.WithString("etag", mcp.Description("Revision returned by investigate_get_pack to replace; omit to create only.")),
 	}, handleSavePack)
 	register("investigate_delete_pack", "Delete an org-authored pack. Existing admitted runs retain frozen sources; new admissions with missing dependencies fail closed. Requires investigation_plan.del.", []mcp.ToolOption{

@@ -170,7 +170,7 @@ func draftRecord(src string) (map[string]interface{}, string, error) {
 		return nil, "", fmt.Errorf("the template is empty")
 	}
 	if doc.Content[0].Kind != yaml.MappingNode {
-		return nil, "", fmt.Errorf("the template must be a YAML mapping (description, applies_to, facts, ...)")
+		return nil, "", fmt.Errorf("the template must be a YAML mapping (description, applies_to, gather, rules, ...)")
 	}
 	value, err := nodeValue(doc.Content[0])
 	if err != nil {

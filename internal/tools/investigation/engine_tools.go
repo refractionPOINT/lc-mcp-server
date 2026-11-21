@@ -21,18 +21,16 @@ const Profile = "investigation_engine"
 
 // authoringLoop is the loop every authoring tool teaches, so an agent that has read any one of their
 // descriptions knows where it is.
-const compositionHelp = " On engines advertising template_composition_v1, a fact or wave step uses exactly one of op, use, investigate. " +
-	"investigate is {template: <literal same-org name>, version: <positive integer>, inputs: {...}, snapshot_digest?: <sha256>}. " +
-	"Child version is mandatory and snapshot_digest optional: admission matches the current record at that version and freezes its closure. Validate/test return the resolved digest for an optional copy/paste lock; a supplied digest must match. Delete/recreate is allowed, so versions alone do not prevent record rebinding; the digest is the immutable lock. Same-version updates are guarded for all packs and callable entity templates; ordinary root template edits retain their existing behavior. " +
-	"Inspect expanded child facts, resolved_packs [{scope,name,version,digest}] for every version-only pack pin (including descendants), children and trust_provenance in validate/test responses. Replay/resume use frozen sources. " +
-	"Limits: depth 4 (root 0), 32 child scopes, 256 expanded facts, 1 MiB closure; stricter org limits apply. " +
-	"Children are advisory and cannot act or write cases. Incomplete/inconclusive/failed children are unknown, never benign; declared trust is not verified analysis. "
-
-const authoringLoop = compositionHelp + "Plan authoring loop: (1) investigate_authoring_kit once; (2) look at the org's real data " +
+const authoringLoop = "Template model: a template has `gather` (steps that read the org's data), `rules` (`escalate` and `close` " +
+	"rules over what was gathered, each with an `id` and a `say` sentence), an optional `ai_review` (the fallback for what rules cannot decide) " +
+	"and `act`/`case`. Nothing is scored: a run ends with an outcome and the rule or the AI behind it. " +
+	"Plan authoring loop: (1) investigate_authoring_kit once (sections guide, schema, codes first); (2) look at the org's real data " +
 	"(get_detection / run_lcql_query for which fields exist, investigate_wave to try an operator on a real value); " +
-	"(3) draft the YAML; (4) investigate_validate_plan until it reports no errors; (5) investigate_test_plan on real " +
-	"past alerts, then read the disagreements, unknowns and costs and refine (back to 3); (6) investigate_save_plan, " +
-	"which always saves a DRAFT. A person promotes a draft to active in the console; no tool can."
+	"(3) draft the YAML, cheapest deciding rules first, gathering only what a rule or the review reads; (4) investigate_validate_plan until it reports no errors; " +
+	"(5) investigate_test_plan on real past alerts, then read which rule decided each one, where it disagreed with the analysts, " +
+	"what the AI recommended on the rest and what stayed unknown, and refine (back to 3); (6) investigate_save_plan, " +
+	"which always saves a DRAFT. A person promotes a draft to active in the console and decides in the org's policy " +
+	"(`ai_may_decide`) whether the AI may decide for the template; no tool can."
 
 // waveLoop is the loop a novel investigation follows with waves and fact packs. investigate_wave and
 // investigate_packs both teach it.
@@ -82,7 +80,7 @@ func init() {
 
 	register("investigate_authoring_kit",
 		"Everything needed to write an investigation plan template, in ONE call: the template JSON Schema, the authoring "+
-			"guide (how facts, signals, proofs, evidence, respond and report work, when a result is unknown or complete, the "+
+			"guide (how gather steps, rules, explain_signals, the AI review and act work, when a result is unknown or complete, the "+
 			"common mistakes), the org's typed operator catalog (the fields each operator produces, which operators the org "+
 			"may use), the default template library (ready-made templates to learn from or install), the org's effective "+
 			"policy and budgets, and every validation code with its usual fix, and the fact packs a plan or a wave can use. "+
@@ -102,27 +100,37 @@ func init() {
 		"Check an investigation plan template (YAML) without running anything: structure, operator names and arguments, "+
 			"every $reference and expression against the operators' typed outputs, dependency cycles, and the org's budgets. "+
 			"Returns `valid`, `errors` and `warnings` (each with a `code`, a `path`, a message and often a `suggestion`: the "+
-			"fix), the worst-case step count and cost class, and an `estimate` of the worst-case cost of one run. Fix every "+
-			"error, and read every warning, then validate again until `errors` is empty. A template that does not validate "+
-			"cannot be saved or tested. Requires investigation.get and insight.evt.get. "+authoringLoop,
+			"fix), the worst-case step count and cost class, an `estimate` of the worst-case cost of one run and `ai_rules`: the ids of "+
+			"the rules that read an `ask_ai` answer, which decide only where the org's policy allows the AI to (otherwise they recommend). "+
+			"Fix every error, and read every warning, then validate again until `errors` is empty. A template in the format "+
+			"this engine had before (`facts`, `inputs`, `signals`, `respond`, `decision`) is refused with `legacy_template_format`: "+
+			"rewrite it with `gather`, `rules` and `ai_review`. A template that does not validate cannot be saved or tested. "+
+			"Requires investigation.get and insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("yaml", mcp.Required(), mcp.Description("The template source (YAML). The template name is not part of it; do not add a `name:` key.")),
 		}, handleValidate)
 
 	register("investigate_test_plan",
 		"Dry-run a plan on REAL past alerts and report how it did. Runs the plan's real read-only operators, with the "+
-			"caller's token, on each sample; nothing is written (no run, case, label or action) and any response step is only "+
+			"caller's token, on each sample; nothing is written (no run, case, label or action) and any `act` entry is only "+
 			"listed in `would_propose`. Give exactly one of `yaml` (a draft in progress) or `template` (a stored template), and "+
 			"`samples`: objects with ONE of {detection_id}, {case_id}, {detect_cat, last: 1..25} (the newest alerts of a "+
 			"category), or {inputs, expected} (free inputs and an optional expected label true_positive|false_positive); at most "+
-			"25 after expansion. A sample whose case is closed is judged against the case's classification: `agreement` is "+
-			"agree, disagree, undecided or none, and `summary.agreement_rate` is the share that agreed. Use at least 5-10 samples "+
-			"of the category and include known false positives AND known true positives. Read in this order: `validation` (if "+
-			"state is invalid, fix the template), `summary`, then each `disagree`, then `undecided` samples: `unknowns` names the "+
-			"facts that could not be resolved and why (the usual cause is a wrong field path or argument), `problem_steps` the "+
-			"steps that failed. A test takes seconds to minutes: this call waits up to `wait_seconds`; if `done` is false, call "+
+			"25 after expansion. A sample whose case is closed is judged against the analyst's classification of the case. "+
+			"Each result says which rule decided (`verdict.decided_by.rule`, with the `outcome`), what the AI recommended on the "+
+			"samples no rule decided (`verdict.recommendation`: label, self-rated confidence, citations), what was `missing` "+
+			"and who needed it, and, when there is an expected label, `agreement`: `{rule: agree|disagree|none, ai: agree|disagree|unclear|none}`. "+
+			"`summary` holds the share decided by rules (`decided_by_rules`, `rule_share`), per rule id how many samples it decided "+
+			"and how many agreed or disagreed (`rules`), the AI's agree/disagree/unclear counts (`ai`), `unknown_reasons` and the cost per sample. "+
+			"These numbers are informational: nothing blocks on them and nothing at run time reads them. Use at least 5-10 "+
+			"samples of the category and include known false positives AND known true positives. Read in this order: "+
+			"`validation` (if state is invalid, fix the template), `summary`, then each sample in `disagree` (a rule or the AI "+
+			"contradicted the analyst: tighten or remove that rule), then `undecided` samples (`couldnt_tell`, `conflict` or an AI "+
+			"answer that recommended neither side): `missing` and `unknowns` name what could not be established and why (the usual "+
+			"cause is a wrong field path or argument), `problem_steps` the steps that failed. A rule that keeps deciding the "+
+			"same way the analysts did is a candidate to keep; a pattern the AI keeps recommending correctly is a candidate for a new rule. A test takes seconds to minutes: this call waits up to `wait_seconds`; if `done` is false, call "+
 			"again with the returned `test_id` (and nothing else) to keep waiting. Requires investigation.set and "+
-			"insight.evt.get; it counts against the org's concurrent run cap (`too_many_runs`, 429: retry later) and bills LLM "+
+			"insight.evt.get; it counts against the org's concurrent run cap (`too_many_runs`, 429: retry later) and bills AI "+
 			"steps. A refusal carries `error_code` and, when there is one, `reason_code`: act on those, not on the message. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("yaml", mcp.Description("Template source (YAML) to test as a draft. Give this or `template`.")),
@@ -142,7 +150,8 @@ func init() {
 			"template. An existing draft is replaced only with `overwrite: true`. A "+
 			"draft never runs on its own: it runs only through investigate_test_plan or a run a person starts (with autonomy "+
 			"capped at suggest), and a person promotes it to active in the console. Pass `test_summary`: what you tested "+
-			"(samples, agreement rate, unknowns, cost), so the reviewer sees it with the draft. Requires "+
+			"(samples, share decided by rules, rules that disagreed with analysts, what the AI recommended, unknowns, cost), so the reviewer sees it with the draft. "+
+			"Saving never lets the AI decide: that is the org policy's `ai_may_decide` for the template, set by a person. Requires "+
 			"investigation_plan.get, investigation_plan.set, investigation.get and insight.evt.get. "+authoringLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("name", mcp.Required(), mcp.Description("The template name (the record key): lowercase letters, digits, - and _, at most 64 characters.")),
@@ -161,8 +170,11 @@ func init() {
 		}, handleListTemplates)
 
 	register("investigate_start",
-		"Start an investigation run: the engine gathers facts with its operators, weighs them and reaches a verdict "+
-			"(true_positive, false_positive or inconclusive) with a proof. Give the thing to investigate (a `detection_id`, a "+
+		"Start an investigation run: the engine gathers what the template's rules and review read, and ends with an outcome: "+
+			"closed_by_rule, escalated_by_rule, closed_by_ai, escalated_by_ai, ai_recommends_benign, ai_recommends_malicious, "+
+			"couldnt_tell or conflict (`verdict.outcome`; `verdict.label` is false_positive, true_positive or inconclusive). A rule "+
+			"decides with its own sentence (`verdict.decided_by`); the AI decides only where the org policy's `ai_may_decide` allows "+
+			"it for the template, otherwise it recommends and a person acts on the recommendation (close, escalate, or add to a list and close). Give the thing to investigate (a `detection_id`, a "+
 			"`case_id`, an `entity_id` or a `question`) and, normally, a `template`. Without `template` the engine chooses "+
 			"among the org's ACTIVE templates by their `applies_to` (a draft is never chosen); this tool sends only the ids you "+
 			"give, with source api, so only a template whose applies_to fits that can match. A draft "+
@@ -189,9 +201,13 @@ func init() {
 		}, handleStart)
 
 	register("investigate_get",
-		"Read an investigation run. `view` is run (default: state, phase, verdict, actions, usage), steps (the step log, "+
-			"plan graph and belief curve), events (the run's events after sequence `after`; long-polls up to `wait` seconds; "+
-			"`done` is true when the run is over) or case (the case document the run wrote). Requires investigation.get and "+
+		"Read an investigation run. `view` is run (default: state, phase, actions, usage and the `verdict`: `outcome`, `label`, "+
+			"`decided`, `decided_by` {kind rule|ai_rule|ai_review, rule, say}, `recommendation` {label, self_rated_confidence, rationale, "+
+			"citations, by} when the AI only recommends, `missing` [{step, reason, needed_by, ask}] for what nothing could establish, and the "+
+			"pinned `ai_agent`), steps (the step log with each step's `narrative` {why, found, used}, the plan graph and the outcome "+
+			"timeline), events (the run's "+
+			"events after sequence `after`; long-polls up to `wait` seconds; `done` is true when the run is over) or case (the case "+
+			"document the run wrote, which opens with the outcome sentence). `self_rated_confidence` is the AI's own rating: it is shown, never used to decide. Requires investigation.get and "+
 			"insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id.")),
@@ -209,9 +225,9 @@ func init() {
 	register("investigate_wave",
 		preferWaves+"Hands the engine a whole batch of questions at once and gets compact, typed answers. The engine runs every ready "+
 			"step in parallel with YOUR token and records an ad-hoc run (returned as `run_id`), reuses what it already knows, and can "+
-			"stop as soon as the answer is known. `steps` is a list of {id, op|use|investigate, args, select, limit}: `op` is an "+
+			"stop as soon as the answer is known. `steps` is a list of {id, op|use, args, select, limit}: `op` is an "+
 			"operator (investigate_operators), `use` a fact pack (investigate_packs) with its parameters in `args`; "+
-			"exactly one of op, use, investigate. A string argument that is a whole reference (\"$host__resolve.entity_id\", "+
+			"exactly one of op, use. A string argument that is a whole reference (\"$host__resolve.entity_id\", "+
 			"\"$prev.hosts_30d\") reads another step's value and the step waits for it; a name in `inputs` is read as "+
 			"$name. `select` lists the field paths of the step's value you want (`matches[*].entity_id`; for a pack, its "+
 			"export names) and is checked before anything runs; `limit` (1..1000, default 10) caps the elements of every "+
@@ -231,22 +247,16 @@ func init() {
 			mcp.WithArray("steps", mcp.Required(), mcp.Items(map[string]any{
 				"type": "object",
 				"properties": map[string]any{
-					"id":  map[string]any{"type": "string", "description": "Unique id, letters, digits and underscore, starting with a letter; no double underscore."},
-					"op":  map[string]any{"type": "string", "description": "An operator of the catalog. Give exactly one of op, use, investigate."},
-					"use": map[string]any{"type": "string", "description": "A fact pack (investigate_packs). Give exactly one of op, use, investigate."},
-					"investigate": map[string]any{"type": "object", "required": []string{"template", "version"}, "properties": map[string]any{
-						"template":        map[string]any{"type": "string", "description": "Literal same-org entity template name."},
-						"version":         map[string]any{"type": "integer", "minimum": 1},
-						"snapshot_digest": map[string]any{"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Optional closure lock; omit to resolve exact version at admission."},
-						"inputs":          map[string]any{"type": "object"},
-					}},
+					"id":           map[string]any{"type": "string", "description": "Unique id, letters, digits and underscore, starting with a letter; no double underscore."},
+					"op":           map[string]any{"type": "string", "description": "An operator of the catalog. Give exactly one of op, use."},
+					"use":          map[string]any{"type": "string", "description": "A fact pack (investigate_packs). Give exactly one of op, use."},
 					"pack_version": map[string]any{"type": "integer", "minimum": 1},
 					"pack_digest":  map[string]any{"type": "string"},
 					"args":         map[string]any{"type": "object", "description": "The operator's arguments, or the pack's parameters."},
 					"select":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Field paths of the value to return (a pack's export names for use). Default: the operator's summary."},
 					"limit":        map[string]any{"type": "integer", "description": "At most this many elements of every list (1..1000, default 10)."},
 				},
-			}), mcp.Description("Questions: objects {id, op or use or investigate, args, select, limit}. Ids are unique.")),
+			}), mcp.Description("Questions: objects {id, op or use, args, select, limit}. Ids are unique.")),
 			mcp.WithString("title", mcp.Description("Optional human-readable title for this wave (at most 256 bytes). Allow the engine to choose a default when omitted.")),
 			mcp.WithString("session", mcp.Description("Optional session identifier grouping related waves of one investigation (at most 256 bytes).")),
 			mcp.WithString("correlation_id", mcp.Description("Optional caller correlation identifier for this wave (at most 256 bytes).")),
@@ -574,7 +584,7 @@ func handleWave(ctx context.Context, args map[string]interface{}) (*mcp.CallTool
 		return fail(err)
 	}
 	if len(steps) == 0 {
-		return tools.ErrorResult("steps is required: a list of {id, op or use or investigate, args, select, limit}"), nil
+		return tools.ErrorResult("steps is required: a list of {id, op or use, args, select, limit}"), nil
 	}
 	deadline, given, err := optInt(args, "deadline_ms")
 	if err != nil {
