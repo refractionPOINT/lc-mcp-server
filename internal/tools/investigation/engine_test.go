@@ -1351,6 +1351,9 @@ func TestDescriptionsTeachTheOutcomeModelOnly(t *testing.T) {
 		reg, _ := tools.GetTool(name)
 		assert.Contains(t, reg.Description, "on_rules", "%s must teach the act key on_rules", name)
 		assert.NotContains(t, reg.Description, "`on:", "%s must not teach the old act key", name)
+		for _, word := range []string{"record:", "malicious_when", "benign_when", "each", "outcome_map", "absence", "artifact"} {
+			assert.Contains(t, reg.Description, word, "%s must teach the step key record (%s)", name, word)
+		}
 	}
 	assert.Contains(t, validate.Description, "ai_rules")
 	start, _ := tools.GetTool("investigate_start")
