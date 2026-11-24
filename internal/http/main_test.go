@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
+	"github.com/refractionpoint/lc-mcp-go/internal/tools/testutil"
 )
 
 // The tools and profiles register when the process starts, according to INVESTIGATION_ENGINE_ENABLED, and cannot
@@ -24,5 +25,14 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "cannot restart the test binary without %s: %v\n", tools.EnvInvestigationEngine, err)
 		os.Exit(1)
 	}
-	os.Exit(m.Run())
+	// Every LimaCharlie REST call this package's tests make goes to a local stand-in,
+	// never to the production API. auth.APIRoot reads it once, so it is set first.
+	api, stop := testutil.InstallFakeAPI()
+	fakeAPI = api
+	code := m.Run()
+	stop()
+	os.Exit(code)
 }
+
+// fakeAPI is the local LimaCharlie gateway the tests drive real SDK calls against.
+var fakeAPI *testutil.FakeAPI

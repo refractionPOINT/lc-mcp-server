@@ -171,7 +171,7 @@ func TestHTTPToolOutcomeEarlyRejections(t *testing.T) {
 			assert.Zero(t, runs)
 			var response map[string]any
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
-			if tc.class == "invalid_oid" {
+			if tc.class == "invalid_oid" || tc.class == "permission_denied" {
 				assert.Equal(t, true, response["result"].(map[string]any)["isError"])
 			} else {
 				assert.NotNil(t, response["error"], "a rejection still reaches the caller")

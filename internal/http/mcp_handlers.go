@@ -360,9 +360,14 @@ func (s *Server) handleToolCall(w http.ResponseWriter, r *http.Request, call *mc
 		// mode. Skip the check for tools marked with SkipsAIAgentPermission, and
 		// for genuinely org-less contexts (the call fails downstream anyway).
 		if effectiveOID != "" && !tool.SkipsAIAgentPermissionCheck() {
-			if err := s.checkAIAgentPermission(ctx, effectiveOID); err != nil {
+			if err := tools.CheckAIAgentPermission(ctx, effectiveOID); err != nil {
 				errorClass = "permission_denied"
-				s.writeJSONRPCError(w, id, -32000, "Permission denied", err.Error())
+				// A tool execution error (isError), not a JSON-RPC protocol
+				// error: clients show the model a result's text, while a
+				// protocol error usually reaches it as its bare message
+				// ("Permission denied"), which left users unable to tell which
+				// permission was missing.
+				s.writeToolError(w, call, err.Error())
 				return
 			}
 		}
@@ -896,38 +901,4 @@ func parseToolList(header string) []string {
 		return nil
 	}
 	return result
-}
-
-// checkAIAgentPermission verifies that the current credentials have the ai_agent.operate
-// permission for the specified organization.
-func (s *Server) checkAIAgentPermission(ctx context.Context, oid string) error {
-	// Check if permission enforcement is enabled
-	if !auth.IsPermissionEnforcementEnabled(ctx) {
-		return nil
-	}
-
-	// Get permission cache from context
-	permCache := auth.GetPermissionCache(ctx)
-	if permCache == nil {
-		// Permission checking not configured - allow by default
-		return nil
-	}
-
-	// Get organization to call WhoAmI
-	org, err := tools.GetOrganization(ctx)
-	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
-	}
-
-	// Check for ai_agent.operate permission
-	hasPermission, err := permCache.CheckPermission(ctx, org, oid, "ai_agent.operate")
-	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
-	}
-
-	if !hasPermission {
-		return fmt.Errorf("access denied: missing 'ai_agent.operate' permission for organization %s", oid)
-	}
-
-	return nil
 }
