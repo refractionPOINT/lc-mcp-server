@@ -3,11 +3,14 @@ package http
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -313,8 +316,62 @@ func TestToolCallOrgSelection(t *testing.T) {
 		t.Cleanup(srv.permissionCache.Close)
 		resp := callOrgTool(t, srv, orgKey, map[string]any{"filter": "x"})
 		require.Equal(t, http.StatusOK, resp.Status)
-		assert.Equal(t, -32000, resp.errorCode(t))
-		assert.Equal(t, "Permission denied", resp.errorObj(t)["message"])
+		text, isErr := toolText(t, resp)
+		assert.True(t, isErr)
+		assert.Contains(t, text, "could not verify the 'ai_agent.operate' permission in organization "+testOID)
+		assert.NotContains(t, text, `{"oid":`, "the tool must not run")
+	})
+}
+
+// A user whose organization grants the tool's own permission but not
+// ai_agent.operate is refused with a tool result that names the missing
+// permission, its scope and the fix. It used to be a bare JSON-RPC "Permission
+// denied" error, which clients showed the model without its detail, so the user
+// could not tell what was missing.
+func TestAIAgentOperateDenialNamesTheMissingPermission(t *testing.T) {
+	claims := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, time.Now().Add(time.Hour).Unix())))
+	userJWT := "eyJhbGciOiJIUzI1NiJ9." + claims + ".synthetic"
+	fakeLCJWTs(t, map[string]*auth.LCClaims{userJWT: {UID: testUID, IsUserToken: true}})
+	headers := map[string]string{"Authorization": "Bearer " + userJWT}
+
+	who := func(perms string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.HasSuffix(r.URL.Path, "/who") {
+				_, _ = w.Write([]byte(`{"orgs":[],"perms":[],"user_perms":{"` + testOID + `":` + perms + `}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{}`))
+		}
+	}
+	newServer := func(t *testing.T) *Server {
+		srv := newProtocolTestServer(t)
+		registerOrgScopedTool(t)
+		srv.config.Features.EnforceAIAgentOperate = true
+		srv.permissionCache = auth.NewPermissionCache(time.Minute, slog.Default())
+		t.Cleanup(srv.permissionCache.Close)
+		return srv
+	}
+
+	t.Run("read permissions without ai_agent.operate", func(t *testing.T) {
+		fakeAPI.Handle(t, who(`["org.get","sensor.list","sensor.get"]`))
+		resp := callOrgTool(t, newServer(t), headers, map[string]any{"filter": "x", "oid": testOID})
+		require.Equal(t, http.StatusOK, resp.Status)
+		_, isProtocolErr := resp.Body["error"]
+		require.False(t, isProtocolErr, "a refusal is a tool result, not a protocol error: %s", resp.Raw)
+		text, isErr := toolText(t, resp)
+		assert.True(t, isErr)
+		assert.Contains(t, text, "does not have the 'ai_agent.operate' permission in organization "+testOID)
+		assert.Contains(t, text, "in addition to the tool's own permission")
+		assert.Contains(t, text, "https://docs.limacharlie.io/8-reference/permissions/#ai_agentoperate-allow-agent-access-to-an-organization")
+	})
+
+	t.Run("with ai_agent.operate the tool runs", func(t *testing.T) {
+		fakeAPI.Handle(t, who(`["org.get","sensor.list","ai_agent.operate"]`))
+		resp := callOrgTool(t, newServer(t), headers, map[string]any{"filter": "x", "oid": testOID})
+		text, isErr := toolText(t, resp)
+		require.False(t, isErr, text)
+		assert.JSONEq(t, `{"oid":"`+testOID+`"}`, text)
 	})
 }
 

@@ -958,7 +958,7 @@ func wrapHandler(reg *ToolRegistration, isUIDMode bool) func(context.Context, mc
 			// mode. Skip the check for tools marked with SkipsAIAgentPermission, and
 			// for genuinely org-less contexts (the call fails downstream anyway).
 			if effectiveOID != "" && !reg.SkipsAIAgentPermissionCheck() {
-				if err := checkAIAgentPermission(ctx, effectiveOID); err != nil {
+				if err := CheckAIAgentPermission(ctx, effectiveOID); err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 			}
@@ -1046,9 +1046,28 @@ func (reg *ToolRegistration) Invoke(ctx context.Context, args map[string]interfa
 	return reg.Handler(ctx, args)
 }
 
-// checkAIAgentPermission verifies that the current credentials have the ai_agent.operate
+// aiAgentOperateDocsURL documents the ai_agent.operate permission and how to grant it.
+const aiAgentOperateDocsURL = "https://docs.limacharlie.io/8-reference/permissions/#ai_agentoperate-allow-agent-access-to-an-organization"
+
+// aiAgentOperateDenied is the refusal a caller sees when the organization has not
+// granted ai_agent.operate to the identity it authenticated as.
+//
+// It is read by the model on the other end of the MCP connection, and usually
+// relayed to a person who sees only that, so it states the cause and the fix in
+// full. The case it has to explain is a user who checks their permissions in the
+// organization, finds the tool's own permission (sensor.list, org.get) granted, and
+// cannot see why the call is refused.
+func aiAgentOperateDenied(oid string) error {
+	return fmt.Errorf("access denied: this LimaCharlie identity does not have the 'ai_agent.operate' permission in organization %s. "+
+		"Organization-scoped MCP tools need it in addition to the tool's own permission (for example sensor.list for listing sensors), "+
+		"so having the tool's own permission is not enough. "+
+		"An owner or administrator of the organization can grant 'ai_agent.operate' to this user or API key. See %s", oid, aiAgentOperateDocsURL)
+}
+
+// CheckAIAgentPermission verifies that the current credentials have the ai_agent.operate
 // permission for the specified organization. This ensures that API keys/JWTs are
-// explicitly authorized for AI agent operations.
+// explicitly authorized for AI agent operations. Every transport (HTTP, stdio and
+// indirect dispatch) runs this one check, so they refuse with the same message.
 //
 // Returns nil if:
 //   - Permission checking is disabled (no permission cache in context)
@@ -1056,7 +1075,7 @@ func (reg *ToolRegistration) Invoke(ctx context.Context, args map[string]interfa
 //   - The credential has the ai_agent.operate permission for the OID
 //
 // Returns an error if the permission check fails or permission is denied.
-func checkAIAgentPermission(ctx context.Context, oid string) error {
+func CheckAIAgentPermission(ctx context.Context, oid string) error {
 	// Check if permission enforcement is enabled
 	if !auth.IsPermissionEnforcementEnabled(ctx) {
 		return nil
@@ -1072,17 +1091,17 @@ func checkAIAgentPermission(ctx context.Context, oid string) error {
 	// Get organization to call WhoAmI
 	org, err := GetOrganization(ctx)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return fmt.Errorf("permission check failed: could not verify the 'ai_agent.operate' permission in organization %s: %w", oid, err)
 	}
 
 	// Check for ai_agent.operate permission
 	hasPermission, err := permCache.CheckPermission(ctx, org, oid, "ai_agent.operate")
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return fmt.Errorf("permission check failed: could not verify the 'ai_agent.operate' permission in organization %s: %w", oid, err)
 	}
 
 	if !hasPermission {
-		return fmt.Errorf("access denied: missing 'ai_agent.operate' permission for organization %s", oid)
+		return aiAgentOperateDenied(oid)
 	}
 
 	return nil
@@ -1112,7 +1131,7 @@ func RequireAIAgentAccessToOrg(ctx context.Context, oid string) error {
 	if err != nil {
 		return fmt.Errorf("cannot act on organization %s with this credential: %w", oid, err)
 	}
-	return checkAIAgentPermission(orgCtx, oid)
+	return CheckAIAgentPermission(orgCtx, oid)
 }
 
 // Helper functions for creating tool results
@@ -1306,7 +1325,7 @@ func CallTool(ctx context.Context, toolName string, args map[string]interface{})
 		// Skip the check for tools marked with SkipsAIAgentPermission, and for
 		// genuinely org-less contexts (the call fails downstream if it needs one).
 		if effectiveOID != "" && !reg.SkipsAIAgentPermissionCheck() {
-			if err := checkAIAgentPermission(ctx, effectiveOID); err != nil {
+			if err := CheckAIAgentPermission(ctx, effectiveOID); err != nil {
 				return ErrorResultf("%v", err), nil
 			}
 		}
