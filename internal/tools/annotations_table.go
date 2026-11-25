@@ -324,11 +324,18 @@ var toolAnnotations = map[string]Annotation{
 	"get_os_version":          read().Open(), // sensor.SimpleRequest(os_version) tasks the live endpoint for introspection only; no endpoint state change
 	"get_processes":           read().Open(), // sensor.SimpleRequest(os_processes) tasks the live endpoint for introspection only; no endpoint state change
 	// --- investigation engine ---
-	"investigate_authoring_kit":  read(),    // GET authoring-kit: static schema/guide plus the org's operator catalog and policy; nothing changes
-	"investigate_delete":         destroy(), // DELETE runs/{id}
-	"investigate_get":            read(),    // GET runs/{id}[/steps|/events|/case]; events long-poll is still a read
-	"investigate_list_templates": read(),    // GET templates
-	"investigate_operators":      read(),    // GET operators
+	"investigate_cancel":         destroy().Open(), // POST runs/{id}/cancel: ends a run, expires its open approvals; revert_leases reverts the caller's permitted leases (terminal, not undoable)
+	"investigate_compare":        write(),          // POST runs/{id}/compare or compare: offline replay of recorded facts, nothing stored; the gateway gates it with investigation.set (like test_plan), so it is kept out of read scope and the read-only profile
+	"investigate_coverage":       read(),           // GET templates/coverage: which template a trigger picks; nothing changes
+	"investigate_get_labels":     read(),           // GET runs/{id}/labels
+	"investigate_list_runs":      read(),           // GET runs
+	"investigate_stats":          read(),           // GET stats
+	"investigate_submit_label":   write().Idem(),   // POST runs/{id}/labels: same run + revision + content returns the same entry; a label never changes what the engine does
+	"investigate_authoring_kit":  read(),           // GET authoring-kit: static schema/guide plus the org's operator catalog and policy; nothing changes
+	"investigate_delete":         destroy(),        // DELETE runs/{id}
+	"investigate_get":            read(),           // GET runs/{id}[/steps|/events|/case]; events long-poll is still a read
+	"investigate_list_templates": read(),           // GET templates
+	"investigate_operators":      read(),           // GET operators
 	"investigate_get_pack":       read(),
 	"investigate_save_pack":      destroy().Idem(),
 	"investigate_delete_pack":    destroy().Idem(),
