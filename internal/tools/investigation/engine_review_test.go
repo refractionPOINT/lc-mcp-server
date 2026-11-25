@@ -25,8 +25,10 @@ func sideOf(outcome string) map[string]any {
 }
 
 func comparisonOf(base, variant string) map[string]any {
+	v := sideOf(variant)
+	v["ai_may_decide"] = "escalate"
 	return map[string]any{
-		"base": sideOf(base), "variant": sideOf(variant),
+		"base": sideOf(base), "variant": v,
 		"diff":         []any{map[string]any{"kind": "outcome", "path": "outcome", "base": base, "variant": variant}},
 		"not_recorded": []any{map[string]any{"fact": "extra", "op": "x.y", "reason": "never_fetched"}},
 		"clamped":      []any{},
@@ -49,7 +51,8 @@ func TestCompareOneRunSendsTheEditAndCompactsTheAnswer(t *testing.T) {
 	assert.NotContains(t, base, "usage", "the compact form drops usage")
 	assert.NotContains(t, base, "proof")
 	assert.Contains(t, base, "actions")
-	assert.Equal(t, "off", base["ai_may_decide"], "a policy difference between the sides stays visible")
+	assert.Equal(t, "off", base["ai_may_decide"])
+	assert.Equal(t, "escalate", body["variant"].(map[string]any)["ai_may_decide"], "a policy difference between the sides stays visible")
 	assert.Len(t, body["diff"], 1)
 	assert.Len(t, body["not_recorded"], 1, "what the replay could not reuse is kept")
 
@@ -108,6 +111,7 @@ func TestCompareRefusesABadSelectionBeforeAnyRequest(t *testing.T) {
 		"blank yaml":        {"run_id": "r1", "yaml": "  \n"},
 		"blank template":    {"run_id": "r1", "template": " "},
 		"blank id in list":  {"run_ids": []interface{}{"r1", " "}},
+		"empty list":        {"run_ids": []interface{}{}, "last_template": "t"},
 		"limit with run":    {"run_id": "r1", "limit": float64(5)},
 		"bad run id":        {"run_id": "../x"},
 		"bad id in list":    {"run_ids": []interface{}{"a/b"}},
@@ -314,25 +318,43 @@ func TestCompareHoldsTheCallLongerThanAnOrdinaryRead(t *testing.T) {
 	assert.True(t, res.IsError, "an ordinary read still times out at requestTimeout")
 }
 
-func TestLabelRevisionIsALosslessInt64(t *testing.T) {
+func TestLabelRevisionIsAWholeNumberThatSurvivesDecoding(t *testing.T) {
 	g := newGateway(t)
 	var raw string
 	g.on("POST runs/r1/labels", func(_ *http.Request, b []byte) (int, any) { raw = string(b); return 200, map[string]any{} })
-	for revision, want := range map[interface{}]string{
-		float64(7):            `"revision":7`,
-		"9223372036854775807": `"revision":9223372036854775807`,
-		" 12 ":                `"revision":12`,
-	} {
+	for revision, want := range map[float64]string{7: `"revision":7`, 9007199254740991: `"revision":9007199254740991`} {
 		res, _ := run(t, "investigate_submit_label", map[string]interface{}{"run_id": "r1", "assessment": "threat", "revision": revision})
 		require.False(t, res.IsError, text(res))
 		assert.Contains(t, raw, want)
 	}
 	before := len(g.calls())
-	for _, bad := range []interface{}{"0", "-3", "1.5", "abc", "9223372036854775808", float64(1 << 60), true} {
+	// 9007199254740993 decodes to 9007199254740992 before the handler runs: that value must never be sent.
+	for _, bad := range []interface{}{float64(0), float64(-3), 1.5, float64(1 << 53), float64(1 << 60), "12", true, nil} {
 		res, _ := run(t, "investigate_submit_label", map[string]interface{}{"run_id": "r1", "assessment": "threat", "revision": bad})
 		assert.True(t, res.IsError, "%v", bad)
 	}
 	assert.Len(t, g.calls(), before)
+	reg, _ := tools.GetTool("investigate_submit_label")
+	prop, _ := reg.Schema.InputSchema.Properties["revision"].(map[string]any)
+	assert.Equal(t, "number", prop["type"])
+	assert.EqualValues(t, 1, prop["minimum"])
+	assert.EqualValues(t, maxRevision, prop["maximum"], "the schema refuses what the handler refuses")
+}
+
+// What the tools publish to a client decides its scope and its confirmation prompts.
+func TestPublishedAnnotationsOfTheNewTools(t *testing.T) {
+	for _, n := range []string{"investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels"} {
+		a, ok := tools.AnnotationFor(n)
+		require.True(t, ok, n)
+		assert.True(t, a.ReadOnly, n)
+	}
+	compare, _ := tools.AnnotationFor("investigate_compare")
+	assert.False(t, compare.ReadOnly, "the gateway gates compare with investigation.set: it needs write scope")
+	cancel, _ := tools.AnnotationFor("investigate_cancel")
+	assert.True(t, cancel.Destructive)
+	assert.True(t, cancel.OpenWorld, "a lease revert acts on endpoints and mail")
+	reg, _ := tools.GetTool("investigate_compare")
+	assert.False(t, reg.Schema.Annotations.ReadOnlyHint != nil && *reg.Schema.Annotations.ReadOnlyHint)
 }
 
 func TestListTemplatesAsksForStoredAndValidation(t *testing.T) {
@@ -346,7 +368,9 @@ func TestListTemplatesAsksForStoredAndValidation(t *testing.T) {
 	assert.Equal(t, "GET templates?stored=true&validation=true", g.calls()[0])
 	_, body = run(t, "investigate_list_templates", map[string]interface{}{"stored": true, "status": "draft"})
 	assert.Equal(t, "GET templates?stored=true", g.calls()[1])
-	assert.Len(t, body["templates"], 1, "the status filter still applies to stored records")
+	assert.Empty(t, body["templates"], "a stored record with no status is neither draft nor active")
+	_, body = run(t, "investigate_list_templates", map[string]interface{}{"stored": true, "status": "active"})
+	assert.Len(t, body["templates"], 1)
 	res, _ := run(t, "investigate_list_templates", map[string]interface{}{"stored": "yes"})
 	assert.True(t, res.IsError)
 }

@@ -172,7 +172,7 @@ func init() {
 			"investigate_authoring_kit (sections=\"library\") and install a template by writing the record with the hive "+
 			"tools. Use this to see what already exists before drafting. By default it lists only the templates the engine has "+
 			"loaded: to pick a name that is free, use `stored: true`, which lists every record of the org, also one that does not load or is "+
-			"disabled (`loaded: false`, with `load_error`; the engine keeps running the last good copy of such a record). `validation: true` adds "+
+			"disabled (`loaded: false`, with `load_error`; `loaded: true` with `load_error` means the record as stored is broken and the engine keeps running its last good copy). `validation: true` adds "+
 			"to each template its validation summary (`valid`, `errors`, `warnings`, their codes, `uses_ai`, `used_by`) so you see which templates "+
 			"need fixing without validating them one by one; `validation: null` with `validation_incomplete: true` means it ran out of time: ask again. Requires investigation.get and insight.evt.get.",
 		[]mcp.ToolOption{
@@ -454,13 +454,22 @@ func handleListTemplates(ctx context.Context, args map[string]interface{}) (*mcp
 		if !ok {
 			continue
 		}
-		if status != "" && templateStatus(row) != status {
+		if status != "" && templateStatusOf(row, stored) != status {
 			continue
 		}
 		kept = append(kept, row)
 	}
 	out["templates"] = kept
 	return tools.SuccessResult(out), nil
+}
+
+// templateStatusOf is templateStatus for a loaded template; a stored record may carry no status (it did not load), and
+// then it matches neither draft nor active.
+func templateStatusOf(row map[string]interface{}, stored bool) string {
+	if stored && str(row["status"]) == "" {
+		return ""
+	}
+	return templateStatus(row)
 }
 
 // templateStatus is the status of a list_templates row: anything that is not "active" is a draft.

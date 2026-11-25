@@ -31,7 +31,7 @@ a person promoting the result.
 | `investigate_list_runs` | The runs behind a number, as compact rows: filters `template`, `state`, `outcome`, `sensor`, `detection_id`, `case_id`, `message_id`, `origin_run`, `needs_person`, `kind`, a time window (`since`, `until`), `sort` and paging (`limit`, `cursor`). `full` returns raw runs. Filtering by `outcome` also needs `investigation_policy.set` | `investigation.get`, `insight.evt.get` |
 | `investigate_coverage` | Which template a start with no named template runs for a trigger (`category`, `rule`, `severity`, `source`, `tags`), the other templates that apply, and `tie` rows where two active templates are equally specific. `as_active: <template>` previews making a draft active (`picked` vs `picked_today`) | same |
 | `investigate_get_labels` | The labels people put on a run (`benign`, `threat`, `disputed`, `unlabeled`) | same |
-| `investigate_submit_label` | Labels a run that has a recorded outcome (`assessment`, a positive int64 `revision`); only with independent evidence. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
+| `investigate_submit_label` | Labels a run that has a recorded outcome (`assessment`, a whole `revision` from 1 to 2^53-1, kept per caller and subject); only with independent evidence. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 | `investigate_cancel` | Cancels a run that is still going; `revert_leases` also reverts the leases the caller may revert. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 
 ## How a run ends
@@ -76,7 +76,8 @@ library, like operators; they are not templates.
 ## After the template is live
 
 A person promotes the draft; from then on the template meets real alerts, and the loop continues with what
-those runs show. Do not propose a change to a live template before steps 1 and 4.
+those runs show. Do not propose a change to a live template before steps 1 (or the run sampling below, when you may not read stats)
+and 4.
 
 `investigate_stats` and `investigate_list_runs` with an `outcome` filter also need `investigation_policy.set`
 (the engine answers 403 to a caller without it). Without it, skip step 1, list runs by `template`, `state` or
@@ -99,6 +100,9 @@ time, and read them with `investigate_get`.
      policy grant that is specific to the live template's name (`ai_may_decide`, shown on each side) can turn an AI
      decision into a recommendation with identical YAML. With `template:` a record that does not load is replayed from
      its last good copy (see `load_error` in `investigate_list_templates` with `stored: true`).
+   - Compare the edited `variant` with the no-edit `variant` of the same runs, not only with `base`: an edit can show
+     `changed: false` against `base` and still change the replay. A check the run called is replayed from the source
+     frozen at its start, so editing a stored check does not change the replay of its callers.
    - Read `summary.transitions`, then EVERY non-empty `diff`, not only the `changed` runs: `changed` tracks the
      outcome only, and a run can keep its verdict and gain a containment.
    - Check `summary.failed`, each run's `error` (`unavailable` with `retryable` means ask again for those runs) and

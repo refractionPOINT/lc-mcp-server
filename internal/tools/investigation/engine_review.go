@@ -21,11 +21,11 @@ import (
 // reviewLoop is said by every tool of this file, so an agent that has read any one of them knows where it is.
 const reviewLoop = "Tuning loop for a LIVE template (investigate_stats and investigate_list_runs with `outcome` also need " +
 	"investigation_policy.set: without it they answer 403, and you tune from investigate_list_runs by template, state or time, " +
-	"investigate_get and investigate_compare alone): investigate_stats (per template outcomes, which rule decided, what evidence was missing, " +
+	"investigate_get and investigate_compare alone, and that is enough): investigate_stats (per template outcomes, which rule decided, what evidence was missing, " +
 	"how many actions were suggested, approved, undone) -> investigate_list_runs (the runs behind a number) -> investigate_get " +
 	"(one run) -> edit the YAML -> investigate_compare (replay the edit against finished runs, nothing is run or written) -> " +
 	"investigate_test_plan on fresh alerts -> investigate_save_plan (a draft) for a person to promote. Never propose a change " +
-	"to a live template before you have read its stats and replayed the edit."
+	"to a live template before you have read how its runs ended (its stats, or a sample of its runs when you may not read stats) and replayed the edit."
 
 const maxCompareRuns = 50
 
@@ -55,12 +55,15 @@ func init() {
 			"fewer runs were found than asked for). Set `full: true` for the raw comparisons. HOW TO READ IT: `changed` tracks the outcome only; "+
 			"read EVERY non-empty `diff` (a run can keep its verdict and gain a containment), `summary.failed`, each `error` (`unavailable` with "+
 			"`retryable` means the call's time ran out or a dependency failed: read its message, ask again for those runs) and "+
-			"`selection.scan_limited` before saying what the replay covered. A fact the edit adds is not fetched: it is listed in "+
+			"`selection.scan_limited` before saying what the replay covered; a short result can also mean the history ran out, so count the rows, and a "+
+			"run still gathering after it decided answers `conflict`. A fact the edit adds is not fetched: it is listed in "+
 			"`not_recorded` and reads as unknown, so confirm an edit that adds steps with investigate_test_plan. The replay uses the org's CURRENT "+
 			"effective policy, not the policy the run had, and an inline `yaml` is judged under the template name `inline`, so a policy "+
 			"grant that is specific to the live template's name (`ai_may_decide`, shown on each side) can turn an AI decision into a "+
-			"recommendation with identical YAML: when base and variant differ in `ai_may_decide`, or the no-edit baseline already changes, the "+
-			"change is not your edit. A `template` that cannot load as stored is replayed from its last good copy: check "+
+			"recommendation with identical YAML: compare the edited `variant` with the no-edit `variant` of the same runs (not only with `base`, and "+
+			"an edit can show `changed: false` against `base` while it changes the replay), and treat a difference in `ai_may_decide` between "+
+			"the sides as a confounder. A check the run called is replayed from the source frozen when the run started, so editing a stored check "+
+			"does not change the replay of its callers. A `template` that cannot load as stored is replayed from its last good copy: check "+
 			"investigate_list_templates (stored: true) for a `load_error` first. Requires investigation.set and insight.evt.get (so it is not "+
 			"in the read-only profile). "+reviewLoop,
 		[]mcp.ToolOption{
@@ -139,8 +142,8 @@ func init() {
 		}, handleListRuns)
 
 	register("investigate_get_labels",
-		"Read the labels people (or independent integrations) put on a run. `outcomes` holds the explicit assessments (`benign`, `threat`, "+
-			"`disputed`, `unlabeled`, with who and when; at most 200, `outcomes_truncated` says more exist, and it is absent when the journal "+
+		"Read the labels people (or independent integrations) put on a run. `outcomes` holds the explicit assessments (entries with an `assessment`: `benign`, `threat`, "+
+			"`disputed`, `unlabeled`, with who and when; an entry without one is an audit record, ignore it; at most 200, `outcomes_truncated` says more exist, and it is absent when the journal "+
 			"could not be read, which is not the same as empty); `labels` holds the older feedback labels the run carries, and `all` only widens "+
 			"that second list. A label is a person's explicit statement of what the run should "+
 			"have concluded, and the one place the engine's verdict is checked against one: compare it with `verdict.outcome` from "+
@@ -155,12 +158,12 @@ func init() {
 			"do this when you have independent evidence (the analyst's closure of the case, a confirmed incident), never to agree with "+
 			"the engine's own verdict. The label is attributed to the authenticated caller, nothing in the engine reads it to decide, and "+
 			"it is the record a reviewer of the template sees. The run must have a recorded outcome. `revision` is a positive whole number per caller and run: 1 for a first label, "+
-			"a higher number to correct it (a number, or an exact decimal string above 2^53); sending the same revision with different content is refused (`conflict`). The engine's own "+
+			"a higher number to correct it (a whole number; a revision is kept per caller and per subject, so the same caller labeling a second run of the same message, detection or case with revision 1 can conflict with the first: use a higher revision, and a retry of the same run and content returns the same entry); sending the same revision with different content is refused (`conflict`). The engine's own "+
 			"execution keys cannot label. Requires investigation.set and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id.")),
 			mcp.WithString("assessment", mcp.Required(), mcp.Description("benign, threat, disputed or unlabeled.")),
-			mcp.WithNumber("revision", mcp.Required(), mcp.Description("Positive whole number: 1 for the first label of this caller on this run, higher to correct it. A value above 9007199254740991 must be sent as an exact decimal string.")),
+			mcp.WithNumber("revision", mcp.Required(), mcp.Min(1.0), mcp.Max(float64(maxRevision)), mcp.Description("Whole number from 1 to 9007199254740991: 1 for the first label of this caller on this subject, higher to correct it.")),
 		}, handleSubmitLabel)
 
 	register("investigate_cancel",
@@ -172,7 +175,7 @@ func init() {
 			"returned actions' states afterwards. Requires investigation.set and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id.")),
-			mcp.WithBoolean("revert_leases", mcp.Description("Also revert the run's active leases. Default false: they stay until they end.")),
+			mcp.WithBoolean("revert_leases", mcp.Description("Also revert the run's active leases and reopen a case the run closed as a false positive (the close revert needs mailsec.set). Default false: they stay until they end.")),
 		}, handleCancel)
 }
 
@@ -205,6 +208,9 @@ func handleCompare(ctx context.Context, args map[string]interface{}) (*mcp.CallT
 		}
 	}
 	if list, ok := args["run_ids"].([]interface{}); ok {
+		if len(list) == 0 {
+			return tools.ErrorResult("run_ids is empty: leave it out or list runs"), nil
+		}
 		for i, item := range list {
 			if s, ok := item.(string); ok && strings.TrimSpace(s) == "" {
 				return tools.ErrorResultf("run_ids[%d] is blank", i), nil
@@ -545,22 +551,15 @@ func handleCancel(ctx context.Context, args map[string]interface{}) (*mcp.CallTo
 	return tools.SuccessResult(out), nil
 }
 
-// parseRevision reads the label revision: a positive int64 given as a whole JSON number (exact up to 2^53) or as an exact
-// decimal string. The engine requires one and reads it as a lossless int64.
+// maxRevision is the largest revision that survives the JSON number decoding of an MCP client exactly (2^53 - 1).
+const maxRevision = 1<<53 - 1
+
+// parseRevision reads the label revision: a positive whole number up to 2^53-1. Beyond that a JSON number is rounded by
+// the decoder before this code sees it, so a different revision would be sent without an error.
 func parseRevision(v interface{}) (int64, error) {
-	const usage = "revision is required: a positive whole number (1 for a first label, higher to correct it)"
-	switch t := v.(type) {
-	case float64:
-		if t != math.Trunc(t) || t < 1 || t > 1<<53 {
-			return 0, errors.New(usage + "; above 9007199254740991 send an exact decimal string")
-		}
-		return int64(t), nil
-	case string:
-		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
-		if err != nil || n < 1 {
-			return 0, errors.New(usage)
-		}
-		return n, nil
+	f, ok := v.(float64)
+	if !ok || f != math.Trunc(f) || f < 1 || f > maxRevision {
+		return 0, errors.New("revision is required: a whole number from 1 (a first label) to 9007199254740991 (higher to correct it)")
 	}
-	return 0, errors.New(usage)
+	return int64(f), nil
 }
