@@ -170,11 +170,11 @@ func init() {
 		"List the plan templates of this org, which are its investigation_plan hive records: name, version, description, "+
 			"`applies_to` and `status` (draft or active). The default library is not listed here: get it with "+
 			"investigate_authoring_kit (sections=\"library\") and install a template by writing the record with the hive "+
-			"tools. Use this to see what already exists before drafting, and to pick a name that is free. By default it lists the "+
-			"templates the engine has loaded. `stored: true` lists every record of the org, also one that does not load "+
-			"(`loaded: false`, with `load_error`): use it to find a broken record. `validation: true` adds to each template its "+
-			"validation summary (`valid`, `errors`, `warnings`, their codes, `uses_ai`, `used_by`) so you see which templates "+
-			"need fixing without validating them one by one. Requires investigation.get and insight.evt.get.",
+			"tools. Use this to see what already exists before drafting. By default it lists only the templates the engine has "+
+			"loaded: to pick a name that is free, use `stored: true`, which lists every record of the org, also one that does not load or is "+
+			"disabled (`loaded: false`, with `load_error`; the engine keeps running the last good copy of such a record). `validation: true` adds "+
+			"to each template its validation summary (`valid`, `errors`, `warnings`, their codes, `uses_ai`, `used_by`) so you see which templates "+
+			"need fixing without validating them one by one; `validation: null` with `validation_incomplete: true` means it ran out of time: ask again. Requires investigation.get and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("status", mcp.Description("Keep only draft or active templates.")),
 			mcp.WithBoolean("stored", mcp.Description("List every stored record, loaded or not, instead of only the loaded templates. Default false.")),
@@ -304,8 +304,7 @@ func init() {
 var readOnlyTools = map[string]bool{
 	"investigate_operators": true, "investigate_authoring_kit": true, "investigate_validate_plan": true,
 	"investigate_get_pack": true, "investigate_list_templates": true, "investigate_get": true, "investigate_packs": true,
-	// compare replays recorded facts offline: nothing is run, fetched or written.
-	"investigate_compare": true, "investigate_coverage": true, "investigate_stats": true, "investigate_list_runs": true,
+	"investigate_coverage": true, "investigate_stats": true, "investigate_list_runs": true,
 	"investigate_get_labels": true,
 }
 

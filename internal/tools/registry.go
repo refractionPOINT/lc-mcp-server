@@ -750,7 +750,6 @@ var ProfileDefinitions = map[string][]string{
 		"investigate_validate_plan",
 		"investigate_list_templates",
 		"investigate_get",
-		"investigate_compare",
 		"investigate_coverage",
 		"investigate_stats",
 		"investigate_list_runs",

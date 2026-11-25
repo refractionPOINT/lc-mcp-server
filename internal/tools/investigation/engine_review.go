@@ -2,6 +2,8 @@ package investigation
 
 import (
 	"context"
+	"errors"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -17,7 +19,9 @@ import (
 // (compare). The loop they teach is the tail of the authoring loop.
 
 // reviewLoop is said by every tool of this file, so an agent that has read any one of them knows where it is.
-const reviewLoop = "Tuning loop for a LIVE template: investigate_stats (per template outcomes, which rule decided, what evidence was missing, " +
+const reviewLoop = "Tuning loop for a LIVE template (investigate_stats and investigate_list_runs with `outcome` also need " +
+	"investigation_policy.set: without it they answer 403, and you tune from investigate_list_runs by template, state or time, " +
+	"investigate_get and investigate_compare alone): investigate_stats (per template outcomes, which rule decided, what evidence was missing, " +
 	"how many actions were suggested, approved, undone) -> investigate_list_runs (the runs behind a number) -> investigate_get " +
 	"(one run) -> edit the YAML -> investigate_compare (replay the edit against finished runs, nothing is run or written) -> " +
 	"investigate_test_plan on fresh alerts -> investigate_save_plan (a draft) for a person to promote. Never propose a change " +
@@ -40,25 +44,33 @@ func init() {
 	register("investigate_compare",
 		"Replay an EDITED template against runs that already finished, offline: each run's recorded facts are re-evaluated "+
 			"under the edit, so no operator is called, nothing is gathered and nothing is written, and it costs nothing. Use it BEFORE "+
-			"proposing a change to a live template, to see which past runs would end differently (`changed`, the `diff` of outcome, "+
-			"deciding rule and actions, and the facts the edit needs that the run never fetched: `not_recorded`, which the replay "+
-			"treats as unknown, never as false). Give the edit as `yaml` (the template text) or `template` (a stored template, "+
-			"for example a draft) and exactly one selection of runs: `run_id` (one run), `run_ids` (up to 50) or `last_template` "+
-			"with `limit` (the newest finished runs of that template, up to 50). With neither yaml nor template the run's own "+
-			"template is replayed, which reproduces its outcome. Only runs whose execution is over can be compared. "+
-			"The answer holds `summary` (`requested`, `compared`, `failed`, `changed`, `unchanged`, `differs`, `transitions`: how many "+
-			"runs move from one outcome to another) and per run `changed` and a compact `comparison` (set `full: true` for the raw one). "+
-			"A run that cannot be compared carries an `error` and never fails the call: `unavailable` with `retryable` means the call's "+
-			"time ran out, ask again for those runs. A replay shows only what the recorded evidence supports: a fact the edit adds is not "+
-			"fetched, so confirm an edit that adds steps with investigate_test_plan. Requires investigation.set and insight.evt.get. "+reviewLoop,
+			"proposing a change to a live template, to see which past runs would end differently. Give the edit as `yaml` (the template "+
+			"text) or `template` (a stored template, for example a draft) and exactly one selection of runs: `run_id` (one run), `run_ids` "+
+			"(up to 50) or `last_template` with `limit` (the newest finished runs of that template, up to 50). With neither yaml nor template "+
+			"each run's own template is replayed: use that as the BASELINE before you attribute any change to your edit. Only runs whose "+
+			"execution is over can be compared. Answer shape: with `run_id` it is one comparison (`base`, `variant`, `diff`, "+
+			"`not_recorded`) and an engine refusal fails the call; with `run_ids` or `last_template` it is `results` (per run `run_id`, `changed`, "+
+			"a compact `comparison` or an `error` {code, message, retryable}), `summary` (`requested`, `compared`, `failed`, `changed`, "+
+			"`unchanged`, `differs`, `transitions`: how many runs move from one outcome to another) and `selection` (`scan_limited` true means "+
+			"fewer runs were found than asked for). Set `full: true` for the raw comparisons. HOW TO READ IT: `changed` tracks the outcome only; "+
+			"read EVERY non-empty `diff` (a run can keep its verdict and gain a containment), `summary.failed`, each `error` (`unavailable` with "+
+			"`retryable` means the call's time ran out or a dependency failed: read its message, ask again for those runs) and "+
+			"`selection.scan_limited` before saying what the replay covered. A fact the edit adds is not fetched: it is listed in "+
+			"`not_recorded` and reads as unknown, so confirm an edit that adds steps with investigate_test_plan. The replay uses the org's CURRENT "+
+			"effective policy, not the policy the run had, and an inline `yaml` is judged under the template name `inline`, so a policy "+
+			"grant that is specific to the live template's name (`ai_may_decide`, shown on each side) can turn an AI decision into a "+
+			"recommendation with identical YAML: when base and variant differ in `ai_may_decide`, or the no-edit baseline already changes, the "+
+			"change is not your edit. A `template` that cannot load as stored is replayed from its last good copy: check "+
+			"investigate_list_templates (stored: true) for a `load_error` first. Requires investigation.set and insight.evt.get (so it is not "+
+			"in the read-only profile). "+reviewLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("yaml", mcp.Description("The edited template source (YAML). Give this or `template`, or neither to replay each run's own template.")),
 			mcp.WithString("template", mcp.Description("Name of a stored template to replay (draft or active). Give this or `yaml`.")),
 			mcp.WithString("run_id", mcp.Description("Compare one finished run.")),
-			mcp.WithArray("run_ids", mcp.WithStringItems(), mcp.Description("Compare these finished runs (1..50, no repeats).")),
+			mcp.WithArray("run_ids", mcp.WithStringItems(), mcp.Description("Compare these finished runs (1..50, no repeats, none blank).")),
 			mcp.WithString("last_template", mcp.Description("Compare the newest finished runs of this template (use with `limit`).")),
 			mcp.WithNumber("limit", mcp.Description("With last_template: how many runs, 1..50. Default 20.")),
-			mcp.WithBoolean("full", mcp.Description("Return every comparison in full (large). Default false: base and variant are reduced to outcome, deciding rule and actions.")),
+			mcp.WithBoolean("full", mcp.Description("Return every comparison in full (large). Default false: base and variant are reduced to template, outcome, deciding rule, actions and `ai_may_decide`.")),
 		}, handleCompare)
 
 	register("investigate_coverage",
@@ -69,7 +81,7 @@ func init() {
 			"`category` (detect_cat), `rule`, `severity`, `source` (api, case or dr-rule) or `tags` it answers one row for that trigger: "+
 			"`picked`, `reason`, `candidates` (`template`, `keys`, `exact`). `as_active: <template>` previews making that template "+
 			"(a draft, or an active one) active: `picked` is who would run once it is, `picked_today` who runs now, so you see which "+
-			"alerts a new template takes over BEFORE a person promotes it. Read-only: starts nothing. Requires investigation.get and "+
+			"alerts a new template takes over BEFORE a person promotes it (it adds the template to the current active set: it does not model retiring the old one). The example rows are bounded and can miss overlapping triggers: check `truncated`, and to validate one routing decision ask for that concrete trigger instead of reading the examples as an audit. Read-only: starts nothing. Requires investigation.get and "+
 			"insight.evt.get. "+reviewLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("category", mcp.Description("The trigger's detection category (an `applies_to.detect_cat` value).")),
@@ -87,8 +99,9 @@ func init() {
 			"step, how many runs lacked that evidence and why: the usual cause of `couldnt_tell`) and `actions` (per template and action "+
 			"class: suggested, approved, denied, expired, auto_executed, withheld, failed, undone, held). Read it to find the template "+
 			"worth improving: many `couldnt_tell` with one dominant missing reason means a step or a rule to fix; a rule that decides most "+
-			"runs is the one to protect; actions that are often `undone` were wrong. These are counts over the most recent runs "+
-			"(`window.truncated` says more matched). Requires investigation.get and insight.evt.get. "+reviewLoop,
+			"runs is the one to protect; actions that are often `undone` deserve a look (an undo can be a person's preference, not an engine mistake: check the cause before tuning a rule). "+
+			"These are counts over the most recent runs (`window.truncated` says more matched). Requires investigation.get, insight.evt.get and "+
+			"investigation_policy.set. "+reviewLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("template", mcp.Description("Only this template's runs.")),
 			mcp.WithString("since", mcp.Description("Start of the window (RFC 3339, for example 2026-11-01T00:00:00Z).")),
@@ -104,11 +117,12 @@ func init() {
 			"(template or wave), `since`/`until` (RFC 3339). `sort` is -created (default), created, time_to_verdict or -time_to_verdict "+
 			"(the slowest first). Page with `cursor` from `next_cursor`; `limit` is 1..200, default 25. Use it to pull the runs behind a number "+
 			"of investigate_stats (for example outcome=couldnt_tell for one template) and read them with investigate_get, or to pick run ids "+
-			"for investigate_compare. `full: true` returns the raw runs (large). Requires investigation.get and insight.evt.get. "+reviewLoop,
+			"for investigate_compare. `full: true` returns the raw runs (large). Requires investigation.get and insight.evt.get; filtering by `outcome` "+
+			"also requires investigation_policy.set (403 without it: list by template, state or time instead). "+reviewLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("template", mcp.Description("Only runs of this template.")),
 			mcp.WithString("state", mcp.Description("Only runs in this state (running, completed, failed, budget_exhausted, cancelled, ...).")),
-			mcp.WithString("outcome", mcp.Description("Only runs with this outcome: "+runOutcomeList+".")),
+			mcp.WithString("outcome", mcp.Description("Only runs with this outcome: "+runOutcomeList+". Needs investigation_policy.set.")),
 			mcp.WithString("sensor", mcp.Description("Only runs about this sensor id (the alert was on it, or an action targets it).")),
 			mcp.WithString("detection_id", mcp.Description("Only runs started for this detection.")),
 			mcp.WithString("case_id", mcp.Description("Only runs that wrote or attached to this case, or that this case triggered.")),
@@ -125,33 +139,37 @@ func init() {
 		}, handleListRuns)
 
 	register("investigate_get_labels",
-		"Read the labels people (or independent integrations) put on a run: `benign`, `threat`, `disputed` or `unlabeled`, with who "+
-			"and when, plus the older feedback labels the run carries. A label is a person's explicit statement of what the run should "+
+		"Read the labels people (or independent integrations) put on a run. `outcomes` holds the explicit assessments (`benign`, `threat`, "+
+			"`disputed`, `unlabeled`, with who and when; at most 200, `outcomes_truncated` says more exist, and it is absent when the journal "+
+			"could not be read, which is not the same as empty); `labels` holds the older feedback labels the run carries, and `all` only widens "+
+			"that second list. A label is a person's explicit statement of what the run should "+
 			"have concluded, and the one place the engine's verdict is checked against one: compare it with `verdict.outcome` from "+
 			"investigate_get. The engine never decides from a label. Requires investigation.get and insight.evt.get. "+reviewLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id.")),
-			mcp.WithBoolean("all", mcp.Description("Also include labels that are no longer active. Default false.")),
+			mcp.WithBoolean("all", mcp.Description("Also include the older feedback labels that are no longer active (the `labels` list only; `outcomes` is not affected). Default false.")),
 		}, handleGetLabels)
 
 	register("investigate_submit_label",
 		"Label a run: your assessment of what it should have concluded, `benign`, `threat`, `disputed` or `unlabeled` (withdraw). Only "+
 			"do this when you have independent evidence (the analyst's closure of the case, a confirmed incident), never to agree with "+
 			"the engine's own verdict. The label is attributed to the authenticated caller, nothing in the engine reads it to decide, and "+
-			"it is the record a reviewer of the template sees. `revision` is a positive whole number per caller and run: 1 for a first label, "+
-			"a higher number to correct it; sending the same revision with different content is refused (`conflict`). The engine's own "+
+			"it is the record a reviewer of the template sees. The run must have a recorded outcome. `revision` is a positive whole number per caller and run: 1 for a first label, "+
+			"a higher number to correct it (a number, or an exact decimal string above 2^53); sending the same revision with different content is refused (`conflict`). The engine's own "+
 			"execution keys cannot label. Requires investigation.set and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id.")),
 			mcp.WithString("assessment", mcp.Required(), mcp.Description("benign, threat, disputed or unlabeled.")),
-			mcp.WithNumber("revision", mcp.Required(), mcp.Description("Positive whole number: 1 for the first label of this caller on this run, higher to correct it.")),
+			mcp.WithNumber("revision", mcp.Required(), mcp.Description("Positive whole number: 1 for the first label of this caller on this run, higher to correct it. A value above 9007199254740991 must be sent as an exact decimal string.")),
 		}, handleSubmitLabel)
 
 	register("investigate_cancel",
 		"Cancel a run that is still going (running, or decided with actions waiting): its open approvals expire and nothing more is "+
-			"gathered or executed. A run that is already over is left exactly as it ended. With `revert_leases: true` it also reverts the "+
-			"active leases (the containments) of the run that the caller holds the platform permission for; the others come back in "+
-			"`skipped_reverts` and stay active. Cancel is not undo of a case or a label. Requires investigation.set and insight.evt.get.",
+			"gathered or executed. A run that is already over keeps its state, verdict and usage. With `revert_leases: true` it also acts on "+
+			"the outside world, on a finished run too: it reverts the run's active leases (restoring a host's network, releasing a mail "+
+			"quarantine at the provider) and undoes a close of a false positive, for the action classes the caller holds the platform "+
+			"permission for; the others come back in `skipped_reverts` and stay active. Cancellation can succeed while a revert fails: read the "+
+			"returned actions' states afterwards. Requires investigation.set and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("run_id", mcp.Required(), mcp.Description("The run id.")),
 			mcp.WithBoolean("revert_leases", mcp.Description("Also revert the run's active leases. Default false: they stay until they end.")),
@@ -179,6 +197,21 @@ func handleCompare(ctx context.Context, args map[string]interface{}) (*mcp.CallT
 	if err != nil {
 		return fail(err)
 	}
+	// A value that was given but is blank must be refused, never read as "not given": it would turn a malformed request
+	// into a successful comparison of something else.
+	for name, v := range map[string]string{"yaml": src, "template": template, "run_id": runID, "last_template": last} {
+		if _, given := args[name]; given && args[name] != nil && strings.TrimSpace(v) == "" {
+			return tools.ErrorResultf("%s is blank: leave it out or give a value", name), nil
+		}
+	}
+	if list, ok := args["run_ids"].([]interface{}); ok {
+		for i, item := range list {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) == "" {
+				return tools.ErrorResultf("run_ids[%d] is blank", i), nil
+			}
+		}
+	}
+	template, runID, last = strings.TrimSpace(template), strings.TrimSpace(runID), strings.TrimSpace(last)
 	limit, limitGiven, err := optInt(args, "limit")
 	if err != nil {
 		return fail(err)
@@ -277,7 +310,7 @@ func compactComparison(c map[string]interface{}) map[string]interface{} {
 		switch k {
 		case "base", "variant":
 			if side, ok := v.(map[string]interface{}); ok {
-				out[k] = pick(side, "template", "outcome", "verdict", "decided", "decided_by", "actions")
+				out[k] = pick(side, "template", "outcome", "verdict", "decided", "decided_by", "actions", "ai_may_decide")
 				continue
 			}
 		}
@@ -416,7 +449,7 @@ func handleListRuns(ctx context.Context, args map[string]interface{}) (*mcp.Call
 
 // compactRun is one list row: enough to choose a run to read, never the run's steps or evidence.
 func compactRun(run map[string]interface{}) map[string]interface{} {
-	row := pick(run, "run_id", "kind", "state", "template", "template_version", "created", "case_id", "sensors", "message_id", "budget_exhausted", "title")
+	row := pick(run, "run_id", "kind", "state", "template", "template_version", "created", "case_id", "case_final", "opinion_hidden", "sensors", "message_id", "budget_exhausted", "title")
 	if verdict, ok := run["verdict"].(map[string]interface{}); ok {
 		v := pick(verdict, "outcome", "label", "decided")
 		if by, ok := verdict["decided_by"].(map[string]interface{}); ok {
@@ -426,7 +459,7 @@ func compactRun(run map[string]interface{}) map[string]interface{} {
 	}
 	if request, ok := run["request"].(map[string]interface{}); ok {
 		if trigger, ok := request["trigger"].(map[string]interface{}); ok {
-			row["trigger"] = pick(trigger, "source", "rule", "label", "detection_id", "case_id", "entity_id", "category")
+			row["trigger"] = pick(trigger, "source", "rule", "label", "detection_id", "case_id", "entity_id", "category", "severity", "tags")
 		}
 	}
 	if actions, ok := run["actions"].([]interface{}); ok {
@@ -478,12 +511,9 @@ func handleSubmitLabel(ctx context.Context, args map[string]interface{}) (*mcp.C
 	if !labelAssessments[assessment] {
 		return tools.ErrorResult("assessment must be benign, threat, disputed or unlabeled"), nil
 	}
-	revision, given, err := optInt(args, "revision")
+	revision, err := parseRevision(args["revision"])
 	if err != nil {
 		return fail(err)
-	}
-	if !given || revision < 1 {
-		return tools.ErrorResult("revision is required: a positive whole number (1 for a first label, higher to correct it)"), nil
 	}
 	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "runs/" + url.PathEscape(runID) + "/labels", body: map[string]interface{}{"assessment": assessment, "revision": revision}})
 	if err != nil {
@@ -513,4 +543,24 @@ func handleCancel(ctx context.Context, args map[string]interface{}) (*mcp.CallTo
 		return fail(err)
 	}
 	return tools.SuccessResult(out), nil
+}
+
+// parseRevision reads the label revision: a positive int64 given as a whole JSON number (exact up to 2^53) or as an exact
+// decimal string. The engine requires one and reads it as a lossless int64.
+func parseRevision(v interface{}) (int64, error) {
+	const usage = "revision is required: a positive whole number (1 for a first label, higher to correct it)"
+	switch t := v.(type) {
+	case float64:
+		if t != math.Trunc(t) || t < 1 || t > 1<<53 {
+			return 0, errors.New(usage + "; above 9007199254740991 send an exact decimal string")
+		}
+		return int64(t), nil
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		if err != nil || n < 1 {
+			return 0, errors.New(usage)
+		}
+		return n, nil
+	}
+	return 0, errors.New(usage)
 }

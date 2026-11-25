@@ -3,8 +3,10 @@ package investigation
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
 	"github.com/stretchr/testify/assert"
@@ -15,8 +17,8 @@ import (
 func sideOf(outcome string) map[string]any {
 	return map[string]any{
 		"template": map[string]any{"name": "t", "version": 2}, "outcome": outcome, "verdict": "false_positive", "decided": true,
-		"decided_by": map[string]any{"kind": "rule", "rule": "known_sender"},
-		"proof":      map[string]any{"rule": "known_sender"}, "unknowns": []any{}, "skipped": []any{},
+		"decided_by": map[string]any{"kind": "rule", "rule": "known_sender"}, "ai_may_decide": "off",
+		"proof": map[string]any{"rule": "known_sender"}, "unknowns": []any{}, "skipped": []any{},
 		"actions": []any{map[string]any{"class": "contain.email", "target": "m1"}},
 		"usage":   map[string]any{"steps": 10},
 	}
@@ -47,6 +49,7 @@ func TestCompareOneRunSendsTheEditAndCompactsTheAnswer(t *testing.T) {
 	assert.NotContains(t, base, "usage", "the compact form drops usage")
 	assert.NotContains(t, base, "proof")
 	assert.Contains(t, base, "actions")
+	assert.Equal(t, "off", base["ai_may_decide"], "a policy difference between the sides stays visible")
 	assert.Len(t, body["diff"], 1)
 	assert.Len(t, body["not_recorded"], 1, "what the replay could not reuse is kept")
 
@@ -100,6 +103,11 @@ func TestCompareRefusesABadSelectionBeforeAnyRequest(t *testing.T) {
 		"repeated run":      {"run_ids": []interface{}{"r1", "r1"}},
 		"limit too large":   {"last_template": "t", "limit": float64(51)},
 		"limit zero":        {"last_template": "t", "limit": float64(0)},
+		"blank last":        {"last_template": "  "},
+		"blank run id":      {"run_id": " ", "yaml": validPlan},
+		"blank yaml":        {"run_id": "r1", "yaml": "  \n"},
+		"blank template":    {"run_id": "r1", "template": " "},
+		"blank id in list":  {"run_ids": []interface{}{"r1", " "}},
 		"limit with run":    {"run_id": "r1", "limit": float64(5)},
 		"bad run id":        {"run_id": "../x"},
 		"bad id in list":    {"run_ids": []interface{}{"a/b"}},
@@ -155,13 +163,14 @@ func TestListRunsFiltersPagesAndCompacts(t *testing.T) {
 	g.reply("GET runs", 200, map[string]any{"next_cursor": "c2", "runs": []any{
 		map[string]any{
 			"run_id": "r1", "state": "completed", "template": "phish", "template_version": 3, "created": "2026-11-20T10:00:00Z",
-			"verdict":   map[string]any{"outcome": "closed_by_rule", "label": "false_positive", "decided": true, "decided_by": map[string]any{"kind": "rule", "rule": "known_sender", "say": "long sentence"}, "missing": []any{"x"}},
-			"request":   map[string]any{"trigger": map[string]any{"source": "dr-rule", "label": "Invoice from acme", "detection_id": "d1", "tags": []any{"x"}}, "inputs": map[string]any{"big": "value"}},
-			"actions":   []any{map[string]any{"class": "contain.email"}, map[string]any{"class": "tag"}},
-			"usage":     map[string]any{"time_to_verdict_ms": 1200, "steps": 9},
-			"sensors":   []any{"s1"},
-			"policy":    map[string]any{"applied": "lots"},
-			"case_id":   "c1",
+			"verdict":    map[string]any{"outcome": "closed_by_rule", "label": "false_positive", "decided": true, "decided_by": map[string]any{"kind": "rule", "rule": "known_sender", "say": "long sentence"}, "missing": []any{"x"}},
+			"request":    map[string]any{"trigger": map[string]any{"source": "dr-rule", "label": "Invoice from acme", "detection_id": "d1", "severity": "high", "tags": []any{"x"}, "category": "phish", "priority": 7}, "inputs": map[string]any{"big": "value"}},
+			"actions":    []any{map[string]any{"class": "contain.email"}, map[string]any{"class": "tag"}},
+			"usage":      map[string]any{"time_to_verdict_ms": 1200, "steps": 9},
+			"sensors":    []any{"s1"},
+			"policy":     map[string]any{"applied": "lots"},
+			"case_id":    "c1",
+			"case_final": true, "opinion_hidden": true,
 			"coalesced": 2,
 		},
 	}})
@@ -172,17 +181,24 @@ func TestListRunsFiltersPagesAndCompacts(t *testing.T) {
 	})
 	require.False(t, res.IsError, text(res))
 	assert.Equal(t, "c2", body["next_cursor"])
-	_, query, _ := strings.Cut(g.calls()[0], "?")
-	for _, want := range []string{"template=phish", "state=completed", "outcome=couldnt_tell", "sid=s1", "detection_id=d1", "case_id=c1",
-		"message_id=m1", "origin_run=r0", "needs_person=false", "kind=template", "sort=-time_to_verdict", "limit=10", "cursor=c1"} {
-		assert.Contains(t, query, want)
-	}
+	_, rawQuery, _ := strings.Cut(g.calls()[0], "?")
+	query, err := url.ParseQuery(rawQuery)
+	require.NoError(t, err)
+	assert.Equal(t, url.Values{
+		"template": {"phish"}, "state": {"completed"}, "outcome": {"couldnt_tell"}, "sid": {"s1"}, "detection_id": {"d1"}, "case_id": {"c1"},
+		"message_id": {"m1"}, "origin_run": {"r0"}, "needs_person": {"false"}, "kind": {"template"}, "since": {"2026-11-01T00:00:00Z"},
+		"until": {"2026-11-25T00:00:00Z"}, "sort": {"-time_to_verdict"}, "limit": {"10"}, "cursor": {"c1"},
+	}, query)
 	row := body["runs"].([]any)[0].(map[string]any)
 	assert.Equal(t, "r1", row["run_id"])
 	assert.EqualValues(t, 2, row["actions"], "actions are counted, not listed")
 	assert.EqualValues(t, 1200, row["time_to_verdict_ms"])
 	assert.Equal(t, "Invoice from acme", row["trigger"].(map[string]any)["label"])
-	assert.NotContains(t, row["trigger"], "tags")
+	assert.Equal(t, "high", row["trigger"].(map[string]any)["severity"], "a trigger keeps what coverage needs to reproduce it")
+	assert.Equal(t, []any{"x"}, row["trigger"].(map[string]any)["tags"])
+	assert.NotContains(t, row["trigger"], "priority")
+	assert.Equal(t, true, row["case_final"])
+	assert.Equal(t, true, row["opinion_hidden"], "a blind run is not shown as one with no verdict")
 	assert.Equal(t, map[string]any{"kind": "rule", "rule": "known_sender"}, row["verdict"].(map[string]any)["decided_by"])
 	assert.NotContains(t, row["verdict"], "missing")
 	for _, dropped := range []string{"request", "usage", "policy", "coalesced"} {
@@ -257,20 +273,66 @@ func TestCancelSendsOnlyWhatWasAsked(t *testing.T) {
 	g.on("POST runs/r1/cancel", func(_ *http.Request, b []byte) (int, any) {
 		sent = nil
 		_ = json.Unmarshal(b, &sent)
-		return 200, map[string]any{"run_id": "r1", "state": "cancelled", "skipped_reverts": []any{map[string]any{"action_id": "a1", "class": "contain.network"}}}
+		if sent["revert_leases"] == true {
+			return 200, map[string]any{"run_id": "r1", "state": "cancelled", "skipped_reverts": []any{map[string]any{"action_id": "a1", "class": "contain.network"}}}
+		}
+		return 200, map[string]any{"run_id": "r1", "state": "cancelled"}
 	})
 	res, body := run(t, "investigate_cancel", map[string]interface{}{"run_id": "r1"})
 	require.False(t, res.IsError, text(res))
 	assert.Empty(t, sent, "leases stay unless asked")
-	assert.Len(t, body["skipped_reverts"], 1)
-	_, _ = run(t, "investigate_cancel", map[string]interface{}{"run_id": "r1", "revert_leases": true})
+	assert.NotContains(t, body, "skipped_reverts")
+	_, body = run(t, "investigate_cancel", map[string]interface{}{"run_id": "r1", "revert_leases": true})
 	assert.Equal(t, map[string]any{"revert_leases": true}, sent)
+	assert.Len(t, body["skipped_reverts"], 1, "what could not be reverted reaches the caller")
 
 	for _, args := range []map[string]interface{}{{"run_id": "../x"}, {"run_id": "r1", "revert_leases": "yes"}, {}} {
 		res, _ := run(t, "investigate_cancel", args)
 		assert.True(t, res.IsError)
 	}
 	assert.Len(t, g.calls(), 2)
+}
+
+func TestCompareHoldsTheCallLongerThanAnOrdinaryRead(t *testing.T) {
+	g := newGateway(t)
+	slow := func(answer any) func(*http.Request, []byte) (int, any) {
+		return func(*http.Request, []byte) (int, any) { time.Sleep(300 * time.Millisecond); return 200, answer }
+	}
+	g.on("POST runs/r1/compare", slow(comparisonOf("closed_by_rule", "closed_by_rule")))
+	g.on("POST compare", slow(map[string]any{"results": []any{}, "summary": map[string]any{}}))
+	g.on("GET stats", slow(map[string]any{}))
+
+	origTimeout, origCompare := requestTimeout, compareTimeout
+	t.Cleanup(func() { requestTimeout, compareTimeout = origTimeout, origCompare })
+	requestTimeout, compareTimeout = 100*time.Millisecond, 3*time.Second
+
+	res, _ := run(t, "investigate_compare", map[string]interface{}{"run_id": "r1"})
+	assert.False(t, res.IsError, "one-run compare outlives the ordinary timeout: %s", text(res))
+	res, _ = run(t, "investigate_compare", map[string]interface{}{"run_ids": []interface{}{"r1", "r2"}})
+	assert.False(t, res.IsError, "batch compare outlives the ordinary timeout: %s", text(res))
+	res, _ = run(t, "investigate_stats", nil)
+	assert.True(t, res.IsError, "an ordinary read still times out at requestTimeout")
+}
+
+func TestLabelRevisionIsALosslessInt64(t *testing.T) {
+	g := newGateway(t)
+	var raw string
+	g.on("POST runs/r1/labels", func(_ *http.Request, b []byte) (int, any) { raw = string(b); return 200, map[string]any{} })
+	for revision, want := range map[interface{}]string{
+		float64(7):            `"revision":7`,
+		"9223372036854775807": `"revision":9223372036854775807`,
+		" 12 ":                `"revision":12`,
+	} {
+		res, _ := run(t, "investigate_submit_label", map[string]interface{}{"run_id": "r1", "assessment": "threat", "revision": revision})
+		require.False(t, res.IsError, text(res))
+		assert.Contains(t, raw, want)
+	}
+	before := len(g.calls())
+	for _, bad := range []interface{}{"0", "-3", "1.5", "abc", "9223372036854775808", float64(1 << 60), true} {
+		res, _ := run(t, "investigate_submit_label", map[string]interface{}{"run_id": "r1", "assessment": "threat", "revision": bad})
+		assert.True(t, res.IsError, "%v", bad)
+	}
+	assert.Len(t, g.calls(), before)
 }
 
 func TestListTemplatesAsksForStoredAndValidation(t *testing.T) {

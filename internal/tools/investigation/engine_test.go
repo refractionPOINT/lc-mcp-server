@@ -257,10 +257,10 @@ func TestToolsAreInTheEngineProfiles(t *testing.T) {
 		assert.True(t, a.ReadOnly, n)
 	}
 	assert.True(t, readOnly["investigate_packs"], "the packs list changes nothing")
-	for _, n := range []string{"investigate_compare", "investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels"} {
+	for _, n := range []string{"investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels"} {
 		assert.True(t, readOnly[n], "%s changes nothing and belongs in the read-only profile", n)
 	}
-	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_delete", "investigate_wave", "investigate_submit_label", "investigate_cancel"} {
+	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_delete", "investigate_wave", "investigate_submit_label", "investigate_cancel", "investigate_compare"} {
 		assert.False(t, readOnly[n], "%s must not be in the read-only profile", n)
 	}
 }
