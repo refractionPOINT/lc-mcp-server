@@ -33,7 +33,10 @@ const authoringLoop = "Template model: a template has `gather` (steps that read 
 	"(5) investigate_test_plan on real past alerts, then read which rule decided each one, where it disagreed with the analysts, " +
 	"what the AI recommended on the rest and what stayed unknown, and refine (back to 3); (6) investigate_save_plan, " +
 	"which always saves a DRAFT. A person promotes a draft to active in the console and decides in the org's policy " +
-	"(`ai_may_decide`) whether the AI may decide for the template; no tool can."
+	"(`ai_may_decide`) whether the AI may decide for the template; no tool can. Once a template is LIVE the loop continues: " +
+	"read investigate_stats and investigate_list_runs for how it performs, replay your edit with investigate_compare against the finished " +
+	"runs it would have changed, and only then propose the change (investigate_save_plan as a draft); investigate_coverage shows which " +
+	"alerts a template picks, and which a new one would take over (`as_active`)."
 
 // waveLoop is the loop a novel investigation follows with waves and fact packs. investigate_wave and
 // investigate_packs both teach it.
@@ -167,9 +170,15 @@ func init() {
 		"List the plan templates of this org, which are its investigation_plan hive records: name, version, description, "+
 			"`applies_to` and `status` (draft or active). The default library is not listed here: get it with "+
 			"investigate_authoring_kit (sections=\"library\") and install a template by writing the record with the hive "+
-			"tools. Use this to see what already exists before drafting, and to pick a name that is free. Requires investigation.get and insight.evt.get.",
+			"tools. Use this to see what already exists before drafting, and to pick a name that is free. By default it lists the "+
+			"templates the engine has loaded. `stored: true` lists every record of the org, also one that does not load "+
+			"(`loaded: false`, with `load_error`): use it to find a broken record. `validation: true` adds to each template its "+
+			"validation summary (`valid`, `errors`, `warnings`, their codes, `uses_ai`, `used_by`) so you see which templates "+
+			"need fixing without validating them one by one. Requires investigation.get and insight.evt.get.",
 		[]mcp.ToolOption{
 			mcp.WithString("status", mcp.Description("Keep only draft or active templates.")),
+			mcp.WithBoolean("stored", mcp.Description("List every stored record, loaded or not, instead of only the loaded templates. Default false.")),
+			mcp.WithBoolean("validation", mcp.Description("Add each template's validation summary. Default false.")),
 		}, handleListTemplates)
 
 	register("investigate_start",
@@ -295,6 +304,9 @@ func init() {
 var readOnlyTools = map[string]bool{
 	"investigate_operators": true, "investigate_authoring_kit": true, "investigate_validate_plan": true,
 	"investigate_get_pack": true, "investigate_list_templates": true, "investigate_get": true, "investigate_packs": true,
+	// compare replays recorded facts offline: nothing is run, fetched or written.
+	"investigate_compare": true, "investigate_coverage": true, "investigate_stats": true, "investigate_list_runs": true,
+	"investigate_get_labels": true,
 }
 
 // register declares an Investigation Engine tool. Every tool of this package is declared through here, which is
@@ -417,7 +429,22 @@ func handleListTemplates(ctx context.Context, args map[string]interface{}) (*mcp
 	if status != "" && status != "draft" && status != "active" {
 		return tools.ErrorResult("status must be draft or active"), nil
 	}
-	out, err := call(ctx, engineCall{method: http.MethodGet, suffix: "templates"})
+	stored, err := optBool(args, "stored")
+	if err != nil {
+		return fail(err)
+	}
+	validation, err := optBool(args, "validation")
+	if err != nil {
+		return fail(err)
+	}
+	query := url.Values{}
+	if validation {
+		query.Set("validation", "true")
+	}
+	if stored {
+		query.Set("stored", "true")
+	}
+	out, err := call(ctx, engineCall{method: http.MethodGet, suffix: "templates", query: query})
 	if err != nil {
 		return fail(err)
 	}

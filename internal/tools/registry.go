@@ -733,6 +733,13 @@ var ProfileDefinitions = map[string][]string{
 		"investigate_wave",
 		"investigate_packs",
 		"investigate_get_pack",
+		"investigate_compare",
+		"investigate_coverage",
+		"investigate_stats",
+		"investigate_list_runs",
+		"investigate_get_labels",
+		"investigate_submit_label",
+		"investigate_cancel",
 	},
 	"investigation_engine_readonly": {
 		// Investigation Engine reads: the authoring kit, operators, fact packs, validation, templates and runs.
@@ -743,6 +750,11 @@ var ProfileDefinitions = map[string][]string{
 		"investigate_validate_plan",
 		"investigate_list_templates",
 		"investigate_get",
+		"investigate_compare",
+		"investigate_coverage",
+		"investigate_stats",
+		"investigate_list_runs",
+		"investigate_get_labels",
 	},
 }
 

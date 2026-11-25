@@ -21,11 +21,18 @@ a person promoting the result.
 | `investigate_validate_plan` | Type-checks a template: structure, operators, references, expressions, budgets | `investigation.get` |
 | `investigate_test_plan` | Dry run on real past alerts (detections, cases, or the newest alerts of a category). Waits and polls, returns per alert which rule decided or what the AI recommended, how each agrees with the analyst, what was missing, and costs. Nothing is written | `investigation.set`, `insight.evt.get` |
 | `investigate_save_plan` | Saves the template to the `investigation_plan` hive, **always as a draft** | `investigation_plan.get/set`, `investigation.get`, `insight.evt.get` |
-| `investigate_list_templates` | The org's templates (its `investigation_plan` records): name, status (draft/active) | `investigation.get`, `insight.evt.get` |
+| `investigate_list_templates` | The org's templates (its `investigation_plan` records): name, status (draft/active). `stored: true` also lists records that do not load (with `load_error`); `validation: true` adds each template's validation summary | `investigation.get`, `insight.evt.get` |
 | `investigate_start`, `investigate_get` | Start a run, read its outcome, steps (with each step's narrative), events or case | `investigation.set` / `.get`, `insight.evt.get` |
 | `investigate_delete` | Delete a run by `run_id` (destructive); not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 | `investigate_wave` | Run a batch of questions (operators or fact packs) in parallel and get compact typed answers, stopping as soon as a `stop_when` expression is true. Also a way to see what an operator returns before writing a plan around it | `investigation.set`, `insight.evt.get` |
 | `investigate_packs` | The fact packs (named bundles of questions: host context, process tree, hash spread, the org's machines and owners, ...) as a compact index that is enough to write the waves: parameters with types, exports with type, reference form and a short meaning. `name` returns one pack in full | `investigation.get`, `insight.evt.get` |
+| `investigate_compare` | Replays an edited template (`yaml`, or a stored `template`) against one finished run, a list of run ids (up to 50) or the newest finished runs of a template (`last_template`, `limit`), offline: recorded facts only, no operator call, nothing written. Returns per run whether the outcome `changed`, the `diff` (outcome, deciding rule, actions), what the edit needs that the run never fetched (`not_recorded`) and a `summary` with the outcome `transitions`. Read-only profile too | `investigation.set`, `insight.evt.get` |
+| `investigate_stats` | How templates perform over a window: per template outcomes and states, median time to verdict and AI spend (`by_template`), which rule decided how many runs (`deciding_rules`), which evidence was missing and why (`missing_reasons`) and the action counters (suggested, approved, undone, ...). `template`, `since`, `until` | `investigation.get`, `insight.evt.get` |
+| `investigate_list_runs` | The runs behind a number, as compact rows: filters `template`, `state`, `outcome`, `sensor`, `detection_id`, `case_id`, `message_id`, `origin_run`, `needs_person`, `kind`, a time window (`since`, `until`), `sort` and paging (`limit`, `cursor`). `full` returns raw runs | same |
+| `investigate_coverage` | Which template a start with no named template runs for a trigger (`category`, `rule`, `severity`, `source`, `tags`), the other templates that apply, and `tie` rows where two active templates are equally specific. `as_active: <template>` previews making a draft active (`picked` vs `picked_today`) | same |
+| `investigate_get_labels` | The labels people put on a run (`benign`, `threat`, `disputed`, `unlabeled`) | same |
+| `investigate_submit_label` | Labels a run (`assessment`, a positive `revision`); only with independent evidence. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
+| `investigate_cancel` | Cancels a run that is still going; `revert_leases` also reverts the leases the caller may revert. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 
 ## How a run ends
 
@@ -65,6 +72,30 @@ library, like operators; they are not templates.
    decided each alert and where a rule disagreed with the analyst, what the AI recommended on the rest, and what
    stayed unknown; refine, test again.
 6. `investigate_save_plan` with a `test_summary` of what was tested.
+
+## After the template is live
+
+A person promotes the draft; from then on the template meets real alerts, and the loop continues with what
+those runs show. Do not propose a change to a live template before steps 1 and 3.
+
+1. `investigate_stats` (optionally for one `template` and a window): outcomes, which rule decided the runs, what
+   evidence was missing and why, how many actions were suggested, approved or undone. Many `couldnt_tell` with one
+   dominant missing reason points at a step or a rule to fix; a rule that decides most runs is the one to protect;
+   an action that is often undone was wrong.
+2. `investigate_list_runs` for the runs behind a number (for example `template` + `outcome: couldnt_tell`, or
+   `needs_person: true`), then `investigate_get` on a few, and `investigate_get_labels` to see what people said.
+3. Edit the YAML.
+4. `investigate_compare` the edit against the finished runs it concerns (`last_template` + `limit`, or the run ids
+   from step 2). It replays recorded facts only, so it is free and instant. Read `summary.transitions` (which
+   outcomes move to which), then the `diff` of each changed run. A fact the edit adds is not fetched (it shows in
+   `not_recorded` and reads as unknown), so confirm an edit that adds steps with `investigate_test_plan` on fresh alerts.
+5. `investigate_coverage` when `applies_to` changes: `as_active` shows which alerts a draft would take over from
+   which template, and the `tie` rows where two active templates are equally specific.
+6. `investigate_save_plan` (a draft, with a `test_summary` that quotes the compare), for a person to promote.
+
+`investigate_compare` and the other reads are in both profiles. `investigate_submit_label` and `investigate_cancel`
+change something and are only in the full profile. There is no tool for the org's switches (pause, circuit
+breaker, settings): a person sets those in the console.
 
 ## Investigating a novel case without a template
 
