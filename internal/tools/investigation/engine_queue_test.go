@@ -56,25 +56,30 @@ func TestFlushQueueSendsExactlyOneScope(t *testing.T) {
 	}
 }
 
-// A flush discards queued work: anything but exactly one well formed scope is refused before any call.
+// A flush discards queued work: anything but exactly one well formed scope is refused before any call, and for the
+// right reason.
 func TestFlushQueueRefusesAnythingButOneScopeBeforeAnyCall(t *testing.T) {
 	g := newGateway(t)
-	for name, args := range map[string]map[string]interface{}{
-		"nothing":         {},
-		"only a note":     {"note": "x"},
-		"two scopes":      {"rule": "r", "template": "t"},
-		"rule and all":    {"rule": "r", "all": true},
-		"all false":       {"all": false},
-		"all false+rule":  {"rule": "r", "all": false},
-		"all as a string": {"all": "true"},
-		"empty rule":      {"rule": ""},
-		"blank template":  {"template": "  "},
-		"rule as number":  {"rule": float64(1)},
-		"note as number":  {"rule": "r", "note": float64(5)},
-		"null scopes":     {"rule": nil, "all": nil},
+	for name, tc := range map[string]struct {
+		args   map[string]interface{}
+		reason string
+	}{
+		"nothing":         {map[string]interface{}{}, "exactly one of"},
+		"only a note":     {map[string]interface{}{"note": "x"}, "exactly one of"},
+		"two scopes":      {map[string]interface{}{"rule": "r", "template": "t"}, "exactly one of"},
+		"rule and all":    {map[string]interface{}{"rule": "r", "all": true}, "exactly one of"},
+		"all false":       {map[string]interface{}{"all": false}, "all must be true"},
+		"all false+rule":  {map[string]interface{}{"rule": "r", "all": false}, "all must be true"},
+		"all as a string": {map[string]interface{}{"all": "true"}, "all must be a boolean"},
+		"empty rule":      {map[string]interface{}{"rule": ""}, "rule must not be empty"},
+		"blank template":  {map[string]interface{}{"template": "  "}, "template must not be empty"},
+		"rule as number":  {map[string]interface{}{"rule": float64(1)}, "rule must be a string"},
+		"note as number":  {map[string]interface{}{"rule": "r", "note": float64(5)}, "note must be a string"},
+		"null scopes":     {map[string]interface{}{"rule": nil, "all": nil}, "exactly one of"},
 	} {
-		res, _ := run(t, "investigate_flush_queue", args)
-		assert.True(t, res.IsError, name)
+		res, _ := run(t, "investigate_flush_queue", tc.args)
+		require.True(t, res.IsError, name)
+		assert.Contains(t, text(res), tc.reason, name)
 	}
 	assert.Empty(t, g.calls())
 }
@@ -123,4 +128,24 @@ func TestQueueToolsPublishTheirClass(t *testing.T) {
 	for _, p := range []string{"rule", "template", "all", "note"} {
 		assert.Contains(t, reg.Schema.InputSchema.Properties, p)
 	}
+}
+
+// A flush that got no answer may have been recorded by the engine: the agent is told to look before it flushes again.
+func TestAFlushWithNoAnswerTellsTheAgentToCheckBeforeFlushingAgain(t *testing.T) {
+	g := newGateway(t)
+	g.on("POST queue/flush", func(*http.Request, []byte) (int, any) { panic(http.ErrAbortHandler) })
+	res, _ := run(t, "investigate_flush_queue", map[string]interface{}{"all": true})
+	require.True(t, res.IsError)
+	assert.Contains(t, text(res), "may have been applied")
+	assert.Contains(t, text(res), "investigate_queue")
+	assert.Equal(t, []string{"POST queue/flush"}, g.calls(), "and the flush was not repeated")
+}
+
+func TestOnlyTheNotImplementedAnswerIsRewritten(t *testing.T) {
+	g := newGateway(t)
+	g.reply("GET queue", 501, map[string]any{"error": "queue disabled by the operator", "error_code": "feature_disabled"})
+	res, _ := run(t, "investigate_queue", nil)
+	require.True(t, res.IsError)
+	assert.Contains(t, text(res), "HTTP 501: queue disabled by the operator")
+	assert.NotContains(t, text(res), queueNotAvailable)
 }

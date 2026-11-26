@@ -3,6 +3,7 @@ package investigation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -38,7 +39,7 @@ func init() {
 			"investigations are not touched, and a start that arrives after the flush began queues normally. THIS CANNOT BE UNDONE: a "+
 			"flushed start is never run later. Call investigate_queue first and flush only what the caller asked for, by the narrowest scope "+
 			"that does it (a rule or a template before `all`). Answers `flush_id`, `flushed` (how many so far) and `done`; a large flush "+
-			"finishes in the engine (`done: false`): read `flushes` of investigate_queue for its progress. The call is sent once and never retried. "+
+			"finishes in the engine (`done: false`): read `flushes` of investigate_queue for its progress. The call is sent once and never retried; if it fails without an answer (a dropped connection, a timeout) the flush may still have been applied: read `flushes` of investigate_queue before flushing again. "+
 			"Requires investigation.set and insight.evt.get. "+queueLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("rule", mcp.Description("Flush the queued starts of this detection rule.")),
@@ -51,7 +52,7 @@ func init() {
 // queueError says plainly that an engine which does not serve the queue yet does not, and keeps its coded fields.
 func queueError(err error) error {
 	var engine *engineError
-	if errors.As(err, &engine) && engine.Status == http.StatusNotImplemented {
+	if errors.As(err, &engine) && engine.Status == http.StatusNotImplemented && engine.Fields["error_code"] == "not_implemented" {
 		return &engineError{Status: engine.Status, Message: queueNotAvailable, Fields: engine.Fields}
 	}
 	return err
@@ -110,6 +111,12 @@ func handleFlushQueue(ctx context.Context, args map[string]interface{}) (*mcp.Ca
 	}
 	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "queue/flush", body: body})
 	if err != nil {
+		var engine *engineError
+		if !errors.As(err, &engine) {
+			// No answer from the gateway (a dropped connection, a timeout): the request may have reached the engine and the
+			// flush and its cutoff may already be recorded.
+			err = fmt.Errorf("%w; the flush may have been applied: read `flushes` of investigate_queue before flushing again (a second flush has a later cutoff and also cancels starts that arrived after the first)", err)
+		}
 		return fail(queueError(err))
 	}
 	return tools.SuccessResult(out), nil

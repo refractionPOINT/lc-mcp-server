@@ -117,7 +117,7 @@ time, and read them with `investigate_get`.
    miss overlapping triggers: to validate one routing decision, ask for that concrete trigger.
 6. `investigate_save_plan` (a draft, with a `test_summary` that quotes the compare), for a person to promote.
 
-The stats, runs, coverage, label and queue reads are in both profiles. `investigate_compare`, `investigate_submit_label` and
+The stats, runs, coverage, label and queue reads are in both profiles. `investigate_compare`, `investigate_submit_label`,
 `investigate_cancel` and `investigate_flush_queue` are only in the full profile. `investigate_cancel` with `revert_leases` acts on the outside world
 (it restores a host's network or a quarantined message, and undoes a close of a false positive, on a finished run too) for
 the classes the caller may revert; read the returned actions' states, because a cancel can succeed while a revert fails.
