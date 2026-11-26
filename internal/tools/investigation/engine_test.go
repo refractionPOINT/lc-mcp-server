@@ -233,7 +233,7 @@ var allTools = []string{
 	"investigate_operators", "investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan",
 	"investigate_save_plan", "investigate_list_templates", "investigate_start", "investigate_get", "investigate_delete", "investigate_wave", "investigate_packs",
 	"investigate_compare", "investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels",
-	"investigate_submit_label", "investigate_cancel",
+	"investigate_submit_label", "investigate_cancel", "investigate_queue", "investigate_flush_queue",
 }
 
 func TestToolsAreInTheEngineProfiles(t *testing.T) {
@@ -257,10 +257,10 @@ func TestToolsAreInTheEngineProfiles(t *testing.T) {
 		assert.True(t, a.ReadOnly, n)
 	}
 	assert.True(t, readOnly["investigate_packs"], "the packs list changes nothing")
-	for _, n := range []string{"investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels"} {
+	for _, n := range []string{"investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels", "investigate_queue"} {
 		assert.True(t, readOnly[n], "%s changes nothing and belongs in the read-only profile", n)
 	}
-	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_delete", "investigate_wave", "investigate_submit_label", "investigate_cancel", "investigate_compare"} {
+	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_delete", "investigate_wave", "investigate_submit_label", "investigate_cancel", "investigate_compare", "investigate_flush_queue"} {
 		assert.False(t, readOnly[n], "%s must not be in the read-only profile", n)
 	}
 }
@@ -1555,6 +1555,8 @@ func TestEveryGatewayToolPassesTheErrorFieldsThrough(t *testing.T) {
 		{"investigate_get_labels", "GET runs/r1/labels", map[string]interface{}{"run_id": "r1"}},
 		{"investigate_submit_label", "POST runs/r1/labels", map[string]interface{}{"run_id": "r1", "assessment": "benign", "revision": float64(1)}},
 		{"investigate_cancel", "POST runs/r1/cancel", map[string]interface{}{"run_id": "r1"}},
+		{"investigate_queue", "GET queue", nil},
+		{"investigate_flush_queue", "POST queue/flush", map[string]interface{}{"all": true}},
 	}
 	for _, c := range cases {
 		t.Run(c.tool, func(t *testing.T) {

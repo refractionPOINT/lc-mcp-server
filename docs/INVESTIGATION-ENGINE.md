@@ -33,6 +33,8 @@ a person promoting the result.
 | `investigate_get_labels` | The labels people put on a run (`benign`, `threat`, `disputed`, `unlabeled`) | same |
 | `investigate_submit_label` | Labels a run that has a recorded outcome (`assessment`, a whole `revision` from 1 to 2^53-1, kept per caller and subject); only with independent evidence. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 | `investigate_cancel` | Cancels a run that is still going; `revert_leases` also reverts the leases the caller may revert. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
+| `investigate_queue` | The org's run queue: how many starts wait (`queued`), are being claimed and run against `max_parallel_runs`, the oldest wait, the queued count by urgency, by rule and by template, the hour's counters against `limits.runs_per_hour` and the recent flushes with their progress. Totals are exact, breakdowns complete. Also in the read-only profile | `investigation.get`, `insight.evt.get` |
+| `investigate_flush_queue` | Cancels the queued, not yet running starts of one `rule`, one `template` or `all: true` (exactly one), with an optional `note`: each becomes a terminal `flushed` run (who, when, note). Running investigations are not touched. **Cannot be undone.** Sent once, never retried; answers `flush_id`, `flushed`, `done`. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 
 ## How a run ends
 
@@ -115,11 +117,22 @@ time, and read them with `investigate_get`.
    miss overlapping triggers: to validate one routing decision, ask for that concrete trigger.
 6. `investigate_save_plan` (a draft, with a `test_summary` that quotes the compare), for a person to promote.
 
-The stats, runs, coverage and label reads are in both profiles. `investigate_compare`, `investigate_submit_label` and
-`investigate_cancel` are only in the full profile. `investigate_cancel` with `revert_leases` acts on the outside world
+The stats, runs, coverage, label and queue reads are in both profiles. `investigate_compare`, `investigate_submit_label`,
+`investigate_cancel` and `investigate_flush_queue` are only in the full profile. `investigate_cancel` with `revert_leases` acts on the outside world
 (it restores a host's network or a quarantined message, and undoes a close of a false positive, on a finished run too) for
 the classes the caller may revert; read the returned actions' states, because a cancel can succeed while a revert fails.
 There is no tool for the org's switches (pause, circuit breaker, settings): a person sets those in the console.
+
+### The run queue
+
+An org runs at most `limits.max_parallel_runs` investigations at once (settings, 1..2000, default 100). A start above that
+is never refused: it waits as a run in state `queued` and starts when a slot frees. An optional `limits.runs_per_hour`
+caps the starts of an hour: a start above it is recorded as a terminal `capped` run. `investigate_queue` shows what
+waits and why; `investigate_list_runs` takes `state` `queued`, `flushed` or `capped`. `investigate_flush_queue` cancels
+queued starts by rule, by template or all of them. An agent should use the narrowest scope that does the job
+and flush only what the person asked for: a flushed start is never run later. A start that arrives after the flush began
+queues normally. Where the engine of the org's region does not serve the queue yet, both tools answer "The run queue is
+not available on this deployment yet." (HTTP 501, `error_code` `not_implemented`).
 
 ## Investigating a novel case without a template
 
