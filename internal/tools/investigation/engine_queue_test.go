@@ -3,6 +3,7 @@ package investigation
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/refractionpoint/lc-mcp-go/internal/tools"
@@ -148,4 +149,28 @@ func TestOnlyTheNotImplementedAnswerIsRewritten(t *testing.T) {
 	require.True(t, res.IsError)
 	assert.Contains(t, text(res), "HTTP 501: queue disabled by the operator")
 	assert.NotContains(t, text(res), queueNotAvailable)
+}
+
+func TestAFlushRefusedByTheEngineOrNotServedDoesNotClaimItMayHaveBeenApplied(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		body   map[string]any
+		may    bool
+	}{
+		"a gateway timeout":       {504, map[string]any{"error": "timeout"}, true},
+		"a bad gateway":           {502, map[string]any{"error": "bad gateway"}, true},
+		"an engine failure":       {500, map[string]any{"error": "boom", "error_code": "internal"}, true},
+		"a refusal":               {403, map[string]any{"error": "forbidden", "error_code": "forbidden"}, false},
+		"a bad request":           {400, map[string]any{"error": "bad", "error_code": "bad_request"}, false},
+		"the queue is not served": {501, map[string]any{"error": "no", "error_code": "not_implemented"}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newGateway(t)
+			g.reply("POST queue/flush", tc.status, tc.body)
+			res, _ := run(t, "investigate_flush_queue", map[string]interface{}{"rule": "r"})
+			require.True(t, res.IsError)
+			assert.Equal(t, tc.may, strings.Contains(text(res), "may have been applied"), text(res))
+			assert.Equal(t, []string{"POST queue/flush"}, g.calls(), "never repeated")
+		})
+	}
 }

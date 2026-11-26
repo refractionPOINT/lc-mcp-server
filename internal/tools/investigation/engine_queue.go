@@ -111,13 +111,25 @@ func handleFlushQueue(ctx context.Context, args map[string]interface{}) (*mcp.Ca
 	}
 	out, err := call(ctx, engineCall{method: http.MethodPost, suffix: "queue/flush", body: body})
 	if err != nil {
-		var engine *engineError
-		if !errors.As(err, &engine) {
-			// No answer from the gateway (a dropped connection, a timeout): the request may have reached the engine and the
-			// flush and its cutoff may already be recorded.
+		if flushMayHaveBeenApplied(err) {
 			err = fmt.Errorf("%w; the flush may have been applied: read `flushes` of investigate_queue before flushing again (a second flush has a later cutoff and also cancels starts that arrived after the first)", err)
 		}
 		return fail(queueError(err))
 	}
 	return tools.SuccessResult(out), nil
+}
+
+// flushMayHaveBeenApplied says whether a failed flush call may have reached the engine: no answer at all (a dropped
+// connection, a timeout), or a server-side failure of the gateway or the engine (502, 503, 504 behind a proxy are how a
+// timeout usually shows up). A refusal the engine gave (4xx) and the "queue not served yet" 501 applied nothing.
+// Errors that occur before anything is sent are over-reported, which is the safe side.
+func flushMayHaveBeenApplied(err error) bool {
+	var engine *engineError
+	if !errors.As(err, &engine) {
+		return true
+	}
+	if engine.Status == http.StatusNotImplemented && engine.Fields["error_code"] == "not_implemented" {
+		return false
+	}
+	return engine.Status >= 500
 }
