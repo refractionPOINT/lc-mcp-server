@@ -305,7 +305,7 @@ var readOnlyTools = map[string]bool{
 	"investigate_operators": true, "investigate_authoring_kit": true, "investigate_validate_plan": true,
 	"investigate_get_pack": true, "investigate_list_templates": true, "investigate_get": true, "investigate_packs": true,
 	"investigate_coverage": true, "investigate_stats": true, "investigate_list_runs": true,
-	"investigate_get_labels": true,
+	"investigate_get_labels": true, "investigate_queue": true,
 }
 
 // register declares an Investigation Engine tool. Every tool of this package is declared through here, which is
