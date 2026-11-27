@@ -742,6 +742,7 @@ var ProfileDefinitions = map[string][]string{
 		"investigate_cancel",
 		"investigate_queue",
 		"investigate_flush_queue",
+		"investigate_answer",
 	},
 	"investigation_engine_readonly": {
 		// Investigation Engine reads: the authoring kit, operators, fact packs, validation, templates and runs.

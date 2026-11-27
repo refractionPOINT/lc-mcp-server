@@ -26,8 +26,10 @@ func init() {
 		"Read the org's investigation run queue: how many starts wait (`queued`), are being claimed (`claimed`) and run (`running`) against "+
 			"`max_parallel_runs`, how long the oldest has waited (`oldest_enqueued_at`, `oldest_wait_ms`), the queued count by urgency "+
 			"(`by_band`), by detection rule (`by_rule`) and by template (`by_template`, each row with its `oldest_enqueued_at`), the hour's "+
-			"counters (`hour`: `started`, `runs_per_hour`, `flushed`, `capped`, `resets_at`) and the recent flushes with their progress "+
-			"(`flushes`). The totals are exact and the breakdowns are complete. Use it to see why runs are slow to start and which rule "+
+			"counters (`hour`: `started`, `runs_per_hour`, `flushed`, `capped`, `start_failed`, `resets_at`) and the recent flushes with their "+
+			"progress (`flushes`). Every field is always there: with nothing waiting `oldest_enqueued_at` is null, an org with no hourly cap "+
+			"has `hour.runs_per_hour` null, and a start no detection rule made (a person's) is a `by_rule` row with no `rule` key. "+
+			"The totals are exact and the breakdowns are complete. Use it to see why runs are slow to start and which rule "+
 			"or template is filling the queue before you suggest a flush (investigate_flush_queue) or a change of the limits. "+
 			"A queued run is also readable with investigate_list_runs (`state`: queued, flushed, capped). Requires investigation.get and insight.evt.get. "+queueLoop,
 		nil, handleQueue)
@@ -38,8 +40,10 @@ func init() {
 			"terminal `flushed` run that records who flushed it, when and your `note`, and its alert is left not investigated. Running "+
 			"investigations are not touched, and a start that arrives after the flush began queues normally. THIS CANNOT BE UNDONE: a "+
 			"flushed start is never run later. Call investigate_queue first and flush only what the caller asked for, by the narrowest scope "+
-			"that does it (a rule or a template before `all`). Answers `flush_id`, `flushed` (how many so far) and `done`; a large flush "+
-			"finishes in the engine (`done: false`): read `flushes` of investigate_queue for its progress. The call is sent once and never retried; if it fails without an answer (a dropped connection, a timeout) the flush may still have been applied: read `flushes` of investigate_queue before flushing again. "+
+			"that does it (a rule or a template before `all`). Answers `flush_id`, `flushed` (how many so far) and `done` (plus `scope`, `by`, `actor`, `note`, `at`, `cutoff`, `done_at`); a large flush "+
+			"finishes in the engine (`done: false`): read `flushes` of investigate_queue for its progress. `replayed: true` means an identical "+
+			"flush made in the last minute answered this call: THIS call flushed nothing, `flushed` is that earlier flush's count, and starts queued "+
+			"since still wait: never tell the caller you flushed N. The call is sent once and never retried; if it fails without an answer (a dropped connection, a timeout) the flush may still have been applied: read `flushes` of investigate_queue before flushing again. "+
 			"Requires investigation.set and insight.evt.get. "+queueLoop,
 		[]mcp.ToolOption{
 			mcp.WithString("rule", mcp.Description("Flush the queued starts of this detection rule.")),
