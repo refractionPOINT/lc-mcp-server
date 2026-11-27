@@ -233,7 +233,7 @@ var allTools = []string{
 	"investigate_operators", "investigate_authoring_kit", "investigate_validate_plan", "investigate_test_plan",
 	"investigate_save_plan", "investigate_list_templates", "investigate_start", "investigate_get", "investigate_delete", "investigate_wave", "investigate_packs",
 	"investigate_compare", "investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels",
-	"investigate_submit_label", "investigate_cancel", "investigate_queue", "investigate_flush_queue",
+	"investigate_submit_label", "investigate_cancel", "investigate_queue", "investigate_flush_queue", "investigate_answer",
 }
 
 func TestToolsAreInTheEngineProfiles(t *testing.T) {
@@ -260,7 +260,7 @@ func TestToolsAreInTheEngineProfiles(t *testing.T) {
 	for _, n := range []string{"investigate_coverage", "investigate_stats", "investigate_list_runs", "investigate_get_labels", "investigate_queue"} {
 		assert.True(t, readOnly[n], "%s changes nothing and belongs in the read-only profile", n)
 	}
-	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_delete", "investigate_wave", "investigate_submit_label", "investigate_cancel", "investigate_compare", "investigate_flush_queue"} {
+	for _, n := range []string{"investigate_save_plan", "investigate_test_plan", "investigate_start", "investigate_delete", "investigate_wave", "investigate_submit_label", "investigate_cancel", "investigate_compare", "investigate_flush_queue", "investigate_answer"} {
 		assert.False(t, readOnly[n], "%s must not be in the read-only profile", n)
 	}
 }

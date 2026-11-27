@@ -131,7 +131,7 @@ type engineError struct {
 }
 
 // relayedErrorFields are the members of an error body that are passed through to the caller, next to the message.
-var relayedErrorFields = []string{"error_code", "reason_code", "path", "policy_hive", "history_from", "errors", "warnings"}
+var relayedErrorFields = []string{"error_code", "reason_code", "path", "policy_hive", "history_from", "errors", "warnings", "fields"}
 
 func newEngineError(status int, raw []byte) *engineError {
 	e := &engineError{Status: status, Message: errorMessage(raw), Fields: map[string]interface{}{}}

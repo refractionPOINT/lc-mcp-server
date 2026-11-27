@@ -210,6 +210,7 @@ func init() {
 			mcp.WithString("case", mcp.Description("create, none or attach:<case id>. Default per the org's policy.")),
 			mcp.WithString("idempotency_key", mcp.Description("Starting twice with the same key returns the same run.")),
 			mcp.WithNumber("wait_seconds", mcp.Description("Wait up to this many seconds (0..60) for the run to finish before answering.")),
+			mcp.WithString("parent_run", mcp.Description("Only when YOU are an AI session the Investigation Engine started: the run that started you (LC_IE_RUN_ID). Default: $LC_IE_RUN_ID when this server runs inside the session. A run with a parent_run asks no AI agent itself, so an agent cannot start a chain of agents.")),
 		}, handleStart)
 
 	register("investigate_get",
@@ -534,6 +535,22 @@ func handleStart(ctx context.Context, args map[string]interface{}) (*mcp.CallToo
 	body := map[string]interface{}{"trigger": trigger}
 	if t := arg("template"); t != "" {
 		body["plan"] = map[string]interface{}{"template": t}
+	}
+	// A start made from inside an AI session the engine started names the run that started it: the engine then asks
+	// no further agent for the new run (the loop guard). The argument is for a server that does not run inside the
+	// session (HTTP); inside it (stdio) the session's environment says it.
+	parent, err := optString(args, "parent_run")
+	if err != nil {
+		return fail(err)
+	}
+	if parent = strings.TrimSpace(parent); parent == "" {
+		parent = sessionRunID(ctx)
+	}
+	if parent != "" {
+		if !validID(parent) {
+			return tools.ErrorResult("parent_run must be a run id: letters, digits and . _ : - (at most 128 characters)"), nil
+		}
+		body["parent_run"] = parent
 	}
 	for _, k := range []string{"urgency", "mode", "case", "idempotency_key"} {
 		if v := arg(k); v != "" {
