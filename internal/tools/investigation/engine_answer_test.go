@@ -292,6 +292,27 @@ func TestAnswerScrubsATokenThatJSONEncodingWouldEscape(t *testing.T) {
 	assert.NotContains(t, out, strings.Trim(string(encoded), `"`))
 }
 
+func TestAnswerScrubsAnOddTokenFromAnyRefusalAndRefusesItInsideAnAnswer(t *testing.T) {
+	odd := `tok"<odd>&\0123456789`
+	for _, status := range []int{500, 502, 400} {
+		setSessionEnv(t)
+		t.Setenv(envAnswerToken, odd)
+		answering(t, status, map[string]any{"error": "boom " + odd, "path": odd, "errors": []any{map[string]any{"message": odd}}})
+		res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer}, true)
+		require.True(t, res.IsError)
+		encoded, _ := json.Marshal(odd)
+		assert.NotContains(t, text(res), odd)
+		assert.NotContains(t, text(res), strings.Trim(string(encoded), `"`))
+	}
+	setSessionEnv(t)
+	t.Setenv(envAnswerToken, odd)
+	g := answering(t, 200, map[string]any{"state": "answered"})
+	res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": map[string]interface{}{"rationale": []interface{}{"x " + odd}}}, true)
+	assert.True(t, res.IsError)
+	assert.Contains(t, text(res), "contains the answer token")
+	assert.Empty(t, g.calls())
+}
+
 func TestAnswerAKeyWithoutAKeyIDIsNotToldItLacksThePermission(t *testing.T) {
 	setSessionEnv(t)
 	answering(t, 403, map[string]any{"error": "this API key has no key id, so it cannot own investigation runs"})

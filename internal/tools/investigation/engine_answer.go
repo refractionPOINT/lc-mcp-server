@@ -2,7 +2,6 @@ package investigation
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -110,9 +109,7 @@ func handleAnswer(ctx context.Context, args map[string]interface{}) (*mcp.CallTo
 	if len(token) < minTokenLength {
 		return tools.ErrorResult("token is too short to be an answer token: give the value of $" + envAnswerToken + " unchanged"), nil
 	}
-	if encoded, mErr := json.Marshal(answer); mErr != nil {
-		return tools.ErrorResult("answer must be a JSON object"), nil
-	} else if strings.Contains(string(encoded), token) {
+	if containsString(answer, token) {
 		// The answer is stored with the run and read by everyone who reads the run: the token never belongs in it.
 		return tools.ErrorResult("the answer contains the answer token: remove it. The token is a secret and never part of an answer"), nil
 	}
@@ -152,21 +149,23 @@ func answerError(err error, token string) error {
 	if !errors.As(err, &engine) {
 		return err
 	}
+	// Scrubbed before the fields are JSON-encoded, for every refusal: an encoded token (escaped quotes, angle brackets)
+	// would not match afterwards.
+	fields := map[string]interface{}{}
+	for k, v := range engine.Fields {
+		fields[k] = scrubValue(v, token)
+	}
+	message := scrub(engine.Message, token)
 	code, _ := engine.Fields["error_code"].(string)
 	meaning, ok := answerMeanings[code]
 	if !ok {
 		if engine.Status == http.StatusForbidden && code == "" {
 			meaning = "The API refused the answer (403): see the message. Usually the caller lacks investigation.get; an API key also needs a key id."
 		} else {
-			return err
+			return &engineError{Status: engine.Status, Message: message, Fields: fields}
 		}
 	}
-	// Scrubbed before the fields are JSON-encoded: an encoded token (escaped quotes, angle brackets) would not match.
-	fields := map[string]interface{}{}
-	for k, v := range engine.Fields {
-		fields[k] = scrubValue(v, token)
-	}
-	return &engineError{Status: engine.Status, Message: scrub(engine.Message, token) + " " + meaning, Fields: fields}
+	return &engineError{Status: engine.Status, Message: message + " " + meaning, Fields: fields}
 }
 
 // failScrubbed is fail with the token removed from the text.
@@ -181,6 +180,27 @@ func failScrubbed(err error, token string) (*mcp.CallToolResult, error) {
 		}
 	}
 	return res, e
+}
+
+// containsString reports whether any string of a decoded JSON value (a key or a value) holds s.
+func containsString(v interface{}, s string) bool {
+	switch x := v.(type) {
+	case string:
+		return strings.Contains(x, s)
+	case map[string]interface{}:
+		for k, e := range x {
+			if strings.Contains(k, s) || containsString(e, s) {
+				return true
+			}
+		}
+	case []interface{}:
+		for _, e := range x {
+			if containsString(e, s) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // scrubValue removes the token from every string of a decoded JSON value.
