@@ -62,6 +62,7 @@ func TestAnswerSendsTheTokenAndTheAnswerOnceAndNeverEchoesTheToken(t *testing.T)
 	assert.Equal(t, "answered", body["state"])
 	assert.Equal(t, map[string]any{"token": answerToken, "answer": map[string]any{"verdict": "benign", "rationale": "the installer is signed"}}, g.body)
 	assert.Len(t, g.calls(), 1, "an answer is sent once")
+	assert.NotContains(t, g.calls()[0], answerToken, "the token is in the body only, never the URL")
 	assert.NotContains(t, text(res), answerToken)
 }
 
@@ -84,10 +85,10 @@ func TestAnswerArgumentsOverrideTheEnvironment(t *testing.T) {
 		_ = json.Unmarshal(b, &sent)
 		return 200, map[string]any{"state": "answered"}
 	})
-	res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer, "run_id": "r2", "request_id": "rq2", "token": "arg-token"}, true)
+	res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer, "run_id": "r2", "request_id": "rq2", "token": "arg-token-0123456789"}, true)
 	require.False(t, res.IsError, text(res))
-	assert.Equal(t, "arg-token", sent["token"])
-	assert.NotContains(t, text(res), "arg-token")
+	assert.Equal(t, "arg-token-0123456789", sent["token"])
+	assert.NotContains(t, text(res), "arg-token-0123456789")
 }
 
 func TestAnswerNeedsEveryValueBeforeAnyCall(t *testing.T) {
@@ -142,14 +143,19 @@ func TestAnswerRefusalsSayWhatTheyMeanAndNeverShowTheToken(t *testing.T) {
 		t.Run(tc.code, func(t *testing.T) {
 			setSessionEnv(t)
 			// A gateway that echoes the token in its message must still not get it into the result.
-			answering(t, tc.status, map[string]any{"error": "refused " + answerToken, "error_code": tc.code, "http_status": tc.status,
-				"fields": map[string]any{"verdict": "required"}})
+			reply := map[string]any{"error": "refused " + answerToken, "error_code": tc.code, "http_status": tc.status}
+			if tc.code == "invalid_answer" {
+				reply["fields"] = map[string]any{"verdict": "required"}
+			}
+			answering(t, tc.status, reply)
 			res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer}, true)
 			require.True(t, res.IsError)
 			out := text(res)
 			assert.Contains(t, out, tc.meaning)
 			assert.Contains(t, out, `"error_code":"`+tc.code+`"`)
-			assert.Contains(t, out, `"fields":{"verdict":"required"}`, "an agent fixes the named fields")
+			if tc.code == "invalid_answer" {
+				assert.Contains(t, out, `"fields":{"verdict":"required"}`, "an agent fixes the named fields")
+			}
 			assert.NotContains(t, out, answerToken)
 		})
 	}
@@ -258,4 +264,39 @@ func TestQueueAndFlushPassTheEnginesRealAnswersThroughWhole(t *testing.T) {
 	reg, _ := tools.GetTool("investigate_flush_queue")
 	assert.Contains(t, reg.Description, "replayed: true")
 	assert.Contains(t, reg.Description, "THIS call flushed nothing")
+}
+
+func TestAnswerRefusesATokenThatCannotBeTheEnginesAndAnAnswerThatHoldsIt(t *testing.T) {
+	setSessionEnv(t)
+	g := answering(t, 200, map[string]any{"state": "answered"})
+	res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer, "token": "a"}, true)
+	assert.True(t, res.IsError)
+	assert.Contains(t, text(res), "too short")
+	res, _ = runIn(t, "investigate_answer", map[string]interface{}{"answer": map[string]interface{}{"verdict": "benign", "rationale": "token is " + answerToken}}, true)
+	assert.True(t, res.IsError)
+	assert.Contains(t, text(res), "contains the answer token")
+	assert.NotContains(t, text(res), answerToken)
+	assert.Empty(t, g.calls(), "nothing is sent")
+}
+
+func TestAnswerScrubsATokenThatJSONEncodingWouldEscape(t *testing.T) {
+	setSessionEnv(t)
+	odd := `tok"<odd>&\0123456789`
+	t.Setenv(envAnswerToken, odd)
+	answering(t, 409, map[string]any{"error": "x", "error_code": "already_answered", "path": odd})
+	res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer}, true)
+	require.True(t, res.IsError)
+	out := text(res)
+	encoded, _ := json.Marshal(odd)
+	assert.NotContains(t, out, odd)
+	assert.NotContains(t, out, strings.Trim(string(encoded), `"`))
+}
+
+func TestAnswerAKeyWithoutAKeyIDIsNotToldItLacksThePermission(t *testing.T) {
+	setSessionEnv(t)
+	answering(t, 403, map[string]any{"error": "this API key has no key id, so it cannot own investigation runs"})
+	res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer}, true)
+	require.True(t, res.IsError)
+	assert.Contains(t, text(res), "key id")
+	assert.Contains(t, text(res), "see the message")
 }

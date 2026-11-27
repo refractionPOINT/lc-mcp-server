@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -21,6 +22,10 @@ const (
 	envAnswerToken = "LC_IE_ANSWER_TOKEN"
 )
 
+// minTokenLength refuses a token that cannot be the engine's (a 256-bit secret): scrubbing a short or common string
+// would rewrite the result the agent reads.
+const minTokenLength = 16
+
 // redacted replaces the answer token wherever it would otherwise be shown.
 const redacted = "[redacted]"
 
@@ -28,7 +33,7 @@ const redacted = "[redacted]"
 
 // answerMeanings say what each refusal of an answer means, by the engine's error_code. An agent acts on the code.
 var answerMeanings = map[string]string{
-	"invalid_answer":   "The answer does not match what the step asked for (400). Nothing was recorded: fix the fields named in `fields` and call investigate_answer again before the deadline.",
+	"invalid_answer":   "The answer does not match what the step asked for (400). Nothing was recorded: fix the fields the message names (also in `fields` when the API relays them) and call investigate_answer again before the deadline.",
 	"forbidden":        "The answer token does not match this request (403). Use the token of the session the engine started for this run and request.",
 	"not_found":        "There is no such request on this run (404). Check run_id and request_id.",
 	"already_answered": "This request already has an answer (409); a second answer is never taken. Do not retry.",
@@ -45,8 +50,8 @@ func init() {
 			"the session's environment (LC_IE_RUN_ID, LC_IE_REQUEST_ID, LC_IE_ANSWER_TOKEN) when this server runs inside the session "+
 			"(stdio); a server that does not run inside it needs all three as arguments. The token is a one-time secret: never put it in "+
 			"an answer, a note, a case or a message; this tool never repeats it. A valid answer is taken once. Refusals carry "+
-			"`error_code`: `invalid_answer` (400, `fields` says each field and why; nothing was recorded, fix and call again before "+
-			"the deadline), `forbidden` (403, wrong token), `not_found` (404), `already_answered`, `deadline_passed` or `not_waiting` "+
+			"`error_code`: `invalid_answer` (400, the message names each field and why, and `fields` does when the API relays it; nothing was "+
+			"recorded, fix and call again before the deadline), `forbidden` (403, wrong token), `not_found` (404), `already_answered`, `deadline_passed` or `not_waiting` "+
 			"(409, too late: do not retry), `not_implemented` (501). The call is sent once. Requires investigation.get.",
 		[]mcp.ToolOption{
 			mcp.WithObject("answer", mcp.Required(), mcp.Description("The answer: the step's declared fields and a short rationale.")),
@@ -102,6 +107,15 @@ func handleAnswer(ctx context.Context, args map[string]interface{}) (*mcp.CallTo
 				map[string]string{"run_id": envRunID, "request_id": envRequestID, "token": envAnswerToken}[name] + ")"), nil
 		}
 	}
+	if len(token) < minTokenLength {
+		return tools.ErrorResult("token is too short to be an answer token: give the value of $" + envAnswerToken + " unchanged"), nil
+	}
+	if encoded, mErr := json.Marshal(answer); mErr != nil {
+		return tools.ErrorResult("answer must be a JSON object"), nil
+	} else if strings.Contains(string(encoded), token) {
+		// The answer is stored with the run and read by everyone who reads the run: the token never belongs in it.
+		return tools.ErrorResult("the answer contains the answer token: remove it. The token is a secret and never part of an answer"), nil
+	}
 	runID, requestID := values["run_id"], values["request_id"]
 	if !validID(runID) || !validID(requestID) {
 		return tools.ErrorResult("run_id and request_id must be ids: letters, digits and . _ : - (at most 128 characters)"), nil
@@ -112,7 +126,7 @@ func handleAnswer(ctx context.Context, args map[string]interface{}) (*mcp.CallTo
 		body:   map[string]interface{}{"token": token, "answer": answer},
 	})
 	if err != nil {
-		return failScrubbed(answerError(err), token)
+		return failScrubbed(answerError(err, token), token)
 	}
 	// The answer to a valid call has no token in it; scrub anyway, so a future field can never leak it.
 	return tools.SuccessResult(scrubValue(out, token).(map[string]interface{})), nil
@@ -133,7 +147,7 @@ func validID(s string) bool {
 }
 
 // answerError adds what the engine's code means to an engine refusal.
-func answerError(err error) error {
+func answerError(err error, token string) error {
 	var engine *engineError
 	if !errors.As(err, &engine) {
 		return err
@@ -142,16 +156,17 @@ func answerError(err error) error {
 	meaning, ok := answerMeanings[code]
 	if !ok {
 		if engine.Status == http.StatusForbidden && code == "" {
-			meaning = "The API refused the answer (403): the caller needs the investigation.get permission."
+			meaning = "The API refused the answer (403): see the message. Usually the caller lacks investigation.get; an API key also needs a key id."
 		} else {
 			return err
 		}
 	}
+	// Scrubbed before the fields are JSON-encoded: an encoded token (escaped quotes, angle brackets) would not match.
 	fields := map[string]interface{}{}
 	for k, v := range engine.Fields {
-		fields[k] = v
+		fields[k] = scrubValue(v, token)
 	}
-	return &engineError{Status: engine.Status, Message: engine.Message + " " + meaning, Fields: fields}
+	return &engineError{Status: engine.Status, Message: scrub(engine.Message, token) + " " + meaning, Fields: fields}
 }
 
 // failScrubbed is fail with the token removed from the text.

@@ -210,7 +210,7 @@ func init() {
 			mcp.WithString("case", mcp.Description("create, none or attach:<case id>. Default per the org's policy.")),
 			mcp.WithString("idempotency_key", mcp.Description("Starting twice with the same key returns the same run.")),
 			mcp.WithNumber("wait_seconds", mcp.Description("Wait up to this many seconds (0..60) for the run to finish before answering.")),
-			mcp.WithString("parent_run", mcp.Description("Only when YOU are an AI session the Investigation Engine started: the run that started you (LC_IE_RUN_ID). Default: $LC_IE_RUN_ID when this server runs inside the session. A run with a parent_run asks no AI agent itself, so an agent cannot start a chain of agents.")),
+			mcp.WithString("parent_run", mcp.Description("Only when YOU are an AI session the Investigation Engine started: the run that started you (LC_IE_RUN_ID). ALWAYS pass it, or the run you start may ask an AI agent again. Default: $LC_IE_RUN_ID when this server runs inside the session. A run with a parent_run asks no AI agent itself, so a chain of agents cannot form.")),
 		}, handleStart)
 
 	register("investigate_get",

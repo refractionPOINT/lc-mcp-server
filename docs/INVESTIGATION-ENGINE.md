@@ -35,7 +35,7 @@ a person promoting the result.
 | `investigate_cancel` | Cancels a run that is still going; `revert_leases` also reverts the leases the caller may revert. Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
 | `investigate_queue` | The org's run queue: how many starts wait (`queued`), are being claimed and run against `max_parallel_runs`, the oldest wait, the queued count by urgency, by rule and by template, the hour's counters against `limits.runs_per_hour` and the recent flushes with their progress. Totals are exact, breakdowns complete. Also in the read-only profile | `investigation.get`, `insight.evt.get` |
 | `investigate_flush_queue` | Cancels the queued, not yet running starts of one `rule`, one `template` or `all: true` (exactly one), with an optional `note`: each becomes a terminal `flushed` run (who, when, note). Running investigations are not touched. **Cannot be undone.** Sent once, never retried; answers `flush_id`, `flushed`, `done` (and `scope`, `by`, `actor`, `note`, `at`, `cutoff`, `done_at`; `replayed: true` means an identical flush made in the last minute answered this call, which flushed nothing itself). Not offered in the read-only profile | `investigation.set`, `insight.evt.get` |
-| `investigate_answer` | Answers the `ai_agent` step of a run that started THIS AI session (`answer`: the step's declared fields and a `rationale`). `run_id`, `request_id` and `token` default from `LC_IE_RUN_ID`, `LC_IE_REQUEST_ID`, `LC_IE_ANSWER_TOKEN` when the server runs inside the session (stdio); a server that does not needs them as arguments. The token is a one-time secret: never repeated in a result, error or log. A valid answer is taken once; refusals carry `error_code` (`invalid_answer` with `fields`, `forbidden`, `not_found`, `already_answered`, `deadline_passed`, `not_waiting`). Sent once. Not offered in the read-only profile | `investigation.get` |
+| `investigate_answer` | Answers the `ai_agent` step of a run that started THIS AI session (`answer`: the step's declared fields and a `rationale`). `run_id`, `request_id` and `token` default from `LC_IE_RUN_ID`, `LC_IE_REQUEST_ID`, `LC_IE_ANSWER_TOKEN` when the server runs inside the session (stdio); a server that does not needs them as arguments. The token is a one-time secret: never repeated in a result, error or log. A valid answer is taken once; refusals carry `error_code` (`invalid_answer`, with `fields` where the API relays them, `forbidden`, `not_found`, `already_answered`, `deadline_passed`, `not_waiting`). Sent once. Not offered in the read-only profile | `investigation.get` |
 
 ## How a run ends
 
@@ -144,11 +144,11 @@ A template's `ai_agent` step (and a hand-off) starts one of the org's AI agents 
 The session gets `LC_IE_RUN_ID`, `LC_IE_REQUEST_ID` and `LC_IE_ANSWER_TOKEN` in its environment and answers with
 `investigate_answer`. Where this server runs inside the session (stdio) the three default from that environment; the shared
 HTTP server never reads its own environment for a caller, so there they are arguments. The token never appears in a result,
-an error or a log. An answer that does not match the step's `returns` is refused with `invalid_answer` and `fields`
-(nothing is recorded: fix it and call again before the deadline); a second answer, one after the deadline or one for a run that
+an error or a log, and an answer that contains it is refused before any call. An answer that does not match the step's `returns` is refused with `invalid_answer` (the message names each field and why, `fields` does too when the API relays it;
+nothing is recorded: fix it and call again before the deadline); a second answer, one after the deadline or one for a run that
 no longer waits is refused with 409 (`already_answered`, `deadline_passed`, `not_waiting`) and must not be retried.
 `investigate_start` called from such a session sends `parent_run` (the `parent_run` argument, or `LC_IE_RUN_ID` inside the
-session) so the engine asks no further agent for the new run: an agent cannot start a chain of agents.
+session) so the engine asks no further agent for the new run. An agent must pass it (the shared HTTP server cannot know it): a start that names no `parent_run` may ask an agent again.
 
 ## Investigating a novel case without a template
 
