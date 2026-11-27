@@ -313,6 +313,20 @@ func TestAnswerScrubsAnOddTokenFromAnyRefusalAndRefusesItInsideAnAnswer(t *testi
 	assert.Empty(t, g.calls())
 }
 
+func TestAnswerScrubsAnEscapedTokenInARawJSONErrorBody(t *testing.T) {
+	setSessionEnv(t)
+	odd := `tok"<odd>&\0123456789`
+	t.Setenv(envAnswerToken, odd)
+	// An error body with no "error" member becomes the message as raw JSON text: the token is already escaped in it.
+	answering(t, 502, map[string]any{"message": "upstream said " + odd})
+	res, _ := runIn(t, "investigate_answer", map[string]interface{}{"answer": testAnswer}, true)
+	require.True(t, res.IsError)
+	encoded, _ := json.Marshal(odd)
+	assert.NotContains(t, text(res), odd)
+	assert.NotContains(t, text(res), strings.Trim(string(encoded), `"`))
+	assert.NotContains(t, text(res), `tok\"`)
+}
+
 func TestAnswerAKeyWithoutAKeyIDIsNotToldItLacksThePermission(t *testing.T) {
 	setSessionEnv(t)
 	answering(t, 403, map[string]any{"error": "this API key has no key id, so it cannot own investigation runs"})

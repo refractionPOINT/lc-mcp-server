@@ -2,6 +2,7 @@ package investigation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -77,7 +78,14 @@ func scrub(s, token string) string {
 	if token == "" {
 		return s
 	}
-	return strings.ReplaceAll(s, token, redacted)
+	s = strings.ReplaceAll(s, token, redacted)
+	// A JSON body used as a message carries the token in its escaped form (quotes, angle brackets, backslashes).
+	if encoded, err := json.Marshal(token); err == nil {
+		if inner := strings.Trim(string(encoded), `"`); inner != token {
+			s = strings.ReplaceAll(s, inner, redacted)
+		}
+	}
+	return s
 }
 
 func handleAnswer(ctx context.Context, args map[string]interface{}) (*mcp.CallToolResult, error) {
